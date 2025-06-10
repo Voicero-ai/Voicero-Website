@@ -1,0 +1,6 @@
+{
+  "snapshot": "snapshot-20250523-4463bb51-156f-4ce4-966c-5d1b860c003d",
+  "install": "npm install && npx prisma generate",
+  "start": "npm run dev",
+  "terminals": []
+}

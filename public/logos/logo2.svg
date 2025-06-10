@@ -1,0 +1,5 @@
+<svg width="150" height="50" viewBox="0 0 150 50" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="150" height="50" rx="8" fill="#F3F4F6"/>
+  <circle cx="30" cy="25" r="12" fill="#6366F1"/>
+  <text x="75" y="32" font-family="Arial" font-size="16" font-weight="bold" fill="#4B5563" text-anchor="middle">DataSphere</text>
+</svg> 

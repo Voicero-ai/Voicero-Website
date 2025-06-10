@@ -1,0 +1,9 @@
+# *
+User-agent: *
+Allow: /
+
+# Host
+Host: https://www.voicero.ai
+
+# Sitemaps
+Sitemap: https://www.voicero.ai/sitemap.xml

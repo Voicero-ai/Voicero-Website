@@ -1,0 +1,71 @@
+{
+  "functions": {
+    "app/api/shopify/vectorize/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/wordpress/vectorize/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/shopify/sync/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/wordpress/sync/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/shopify/train/product/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/shopify/train/post/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/shopify/train/page/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/shopify/train/discount/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/shopify/train/collection/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/shopify/train/general/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/wordpress/train/general/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/wordpress/train/page/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/wordpress/train/post/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/wordpress/train/product/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/websites/delete-website/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/websites/delete-vectors/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/wordpress/chat/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/shopify/chat/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/aiHistory/route.ts": {
+      "maxDuration": 300
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/send-follow-up",
+      "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/reset-queries",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}
