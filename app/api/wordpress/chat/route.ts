@@ -1580,7 +1580,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check query limits based on plan
-    const queryLimit = 1000; // Starter plan limit is 1000 queries
+    const queryLimit = website.queryLimit || 1000; // Use website's queryLimit if defined, otherwise default to 1000
     if (website.monthlyQueries >= queryLimit && website.plan !== "Enterprise") {
       // Before returning an error, try to auto-upgrade to Enterprise plan if approaching limit
       if (website.stripeSubscriptionId) {
@@ -1711,18 +1711,182 @@ export async function POST(request: NextRequest) {
       // Track usage in Stripe for Enterprise plan
       try {
         const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-        // Get user ID for customer mapping
-        const user = await prisma.user.findFirst({
-          where: { id: website.userId },
-          select: { stripeCustomerId: true },
+
+        // Log website details for debugging
+        console.log("WEBSITE DETAILS:", {
+          id: website.id,
+          plan: website.plan,
+          hasUserId: !!website.userId,
+          userId: website.userId?.substring(0, 8) || "undefined",
+          stripeSubscriptionId: !!website.stripeSubscriptionId,
         });
 
-        if (user?.stripeCustomerId) {
+        // Handle case where userId is missing but we have a subscription ID
+        if (!website.userId && website.stripeSubscriptionId) {
+          console.log(
+            "Website missing userId but has subscription, attempting to recover"
+          );
+
+          // Try to find the subscription and get customer ID
+          try {
+            const subscription = await stripe.subscriptions.retrieve(
+              website.stripeSubscriptionId
+            );
+            if (subscription?.customer) {
+              const customerId =
+                typeof subscription.customer === "string"
+                  ? subscription.customer
+                  : subscription.customer.id;
+
+              console.log(
+                "Found Stripe customer from subscription:",
+                customerId.substring(0, 8)
+              );
+
+              // Try to find a user with this stripeCustomerId
+              const userWithStripeId = await prisma.user.findFirst({
+                where: { stripeCustomerId: customerId },
+                select: { id: true },
+              });
+
+              if (userWithStripeId) {
+                // Update the website with the found userId
+                await prisma.website.update({
+                  where: { id: website.id },
+                  data: { userId: userWithStripeId.id },
+                });
+
+                // Update our local website object
+                website.userId = userWithStripeId.id;
+                console.log(
+                  "Updated website with recovered userId:",
+                  userWithStripeId.id.substring(0, 8)
+                );
+              } else {
+                // Direct billing using customer ID without user association
+                const meterEvent = await stripe.billing.meterEvents.create({
+                  event_name: "api_requests",
+                  payload: {
+                    stripe_customer_id: customerId,
+                    value: "1",
+                  },
+                  timestamp: Math.floor(Date.now() / 1000),
+                });
+
+                console.log(
+                  "Directly billed using Stripe customer ID without user association"
+                );
+                return; // Skip the regular user lookup flow
+              }
+            }
+          } catch (subscriptionError) {
+            console.error("Error retrieving subscription:", subscriptionError);
+          }
+        }
+
+        // Get user ID for customer mapping with email for potential cross-site lookup
+        const user = website.userId
+          ? await prisma.user.findFirst({
+              where: { id: website.userId },
+              select: { id: true, stripeCustomerId: true, email: true },
+            })
+          : null;
+
+        let stripeCustomerId = user?.stripeCustomerId;
+
+        // If user exists but doesn't have a stripeCustomerId, try to find it
+        if (user && !stripeCustomerId && user.email) {
+          console.log("User missing stripeCustomerId, attempting recovery");
+
+          // First try: Look up the Stripe customer by email
+          const stripeCustomers = await stripe.customers.list({
+            email: user.email,
+            limit: 1,
+          });
+
+          if (stripeCustomers.data.length > 0) {
+            // Found a matching Stripe customer, update the user record
+            stripeCustomerId = stripeCustomers.data[0].id;
+            await prisma.user.update({
+              where: { id: user.id },
+              data: { stripeCustomerId },
+            });
+
+            console.log(
+              "Updated user with stripeCustomerId from Stripe lookup:",
+              stripeCustomerId
+            );
+          } else {
+            // Second try: Look for other websites by this user that might have billing set up
+            const otherWebsiteWithUser = await prisma.website.findFirst({
+              where: {
+                userId: user.id,
+                NOT: { id: website.id },
+              },
+              include: {
+                user: {
+                  select: { stripeCustomerId: true },
+                },
+              },
+            });
+
+            if (otherWebsiteWithUser?.user?.stripeCustomerId) {
+              stripeCustomerId = otherWebsiteWithUser.user.stripeCustomerId;
+              await prisma.user.update({
+                where: { id: user.id },
+                data: { stripeCustomerId },
+              });
+
+              console.log(
+                "Updated user with stripeCustomerId from other website:",
+                stripeCustomerId
+              );
+            }
+          }
+        }
+
+        // As a last resort, check if we can bill directly from the subscription
+        if (!stripeCustomerId && website.stripeSubscriptionId) {
+          try {
+            console.log("Attempting to bill via subscription as last resort");
+            const subscription = await stripe.subscriptions.retrieve(
+              website.stripeSubscriptionId
+            );
+
+            if (subscription?.customer) {
+              stripeCustomerId =
+                typeof subscription.customer === "string"
+                  ? subscription.customer
+                  : subscription.customer.id;
+
+              console.log(
+                "Found customer ID from subscription:",
+                stripeCustomerId.substring(0, 5) + "..."
+              );
+            }
+          } catch (subError) {
+            console.error(
+              "Error retrieving subscription for billing:",
+              subError
+            );
+          }
+        }
+
+        console.log("STRIPE USER LOOKUP:", {
+          foundUser: !!user,
+          hasStripeCustomerId: !!stripeCustomerId,
+          recoveredStripeId: !user?.stripeCustomerId && !!stripeCustomerId,
+          stripeCustomerId: stripeCustomerId
+            ? stripeCustomerId.substring(0, 5) + "..."
+            : undefined,
+        });
+
+        if (stripeCustomerId) {
           // Create billing meter event with customer_id instead of subscription_item
           const meterEvent = await stripe.billing.meterEvents.create({
             event_name: "api_requests", // EXACTLY the meter name configured in your Stripe Dashboard
             payload: {
-              stripe_customer_id: user.stripeCustomerId,
+              stripe_customer_id: stripeCustomerId,
               value: "1", // Quantity of usage to record
             },
             timestamp: Math.floor(Date.now() / 1000), // Unix timestamp in seconds
@@ -1730,6 +1894,8 @@ export async function POST(request: NextRequest) {
           });
 
           console.log("Successfully recorded meter event:", meterEvent);
+        } else {
+          console.log("No Stripe customer ID found for usage billing");
         }
       } catch (error) {
         console.error("Failed to record Enterprise usage:", error);
