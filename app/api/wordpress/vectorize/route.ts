@@ -423,7 +423,9 @@ function sanitizeMetadata(obj: Record<string, any>): Record<string, any> {
 }
 
 async function createEmbedding(text: string) {
-  const [embedding] = await embeddings.embedDocuments([text]);
+  // Make sure text is not empty/null - provide a default value if needed
+  const safeText = text || "empty content";
+  const [embedding] = await embeddings.embedDocuments([safeText]);
   return embedding;
 }
 
@@ -532,6 +534,12 @@ async function generateContentDescription(
       `Generating metadata for page: ${url}, minimal content: ${isMinimalContent}, type: ${type}`
     );
 
+    // Make sure input fields are valid - replace null/undefined with empty strings
+    const safeTitle = title || "";
+    const safeUrl = url || "";
+    const safeType = type || "page";
+    const safeContent = cleanedContentText || "Empty content";
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -562,10 +570,10 @@ async function generateContentDescription(
           role: "user",
           content: `Generate metadata for:
           
-          Title: ${title}
-          URL: ${url}
-          Type: ${type}
-          Available content: ${cleanedContentText || "None"}
+          Title: ${safeTitle}
+          URL: ${safeUrl}
+          Type: ${safeType}
+          Available content: ${safeContent}
           
           Please return ONLY a valid JSON object with the requested fields.`,
         },
@@ -577,25 +585,77 @@ async function generateContentDescription(
 
     const responseContent = completion.choices[0].message.content;
     if (responseContent) {
-      const result = JSON.parse(responseContent);
-      // Add a flag indicating if this was for minimal content
-      result.isMinimalContent = isMinimalContent;
-      return result;
+      try {
+        const result = JSON.parse(responseContent);
+        // Add a flag indicating if this was for minimal content
+        result.isMinimalContent = isMinimalContent;
+        return result;
+      } catch (jsonError) {
+        console.error("Error parsing AI response as JSON:", jsonError);
+        // Return a default structured response
+        return {
+          classification: {
+            main_category: safeType,
+            sub_categories: [safeType],
+            product_types: [],
+            search_intents: [safeType],
+          },
+          keywords: {
+            commercial_terms: [],
+            product_terms: [],
+            attribute_terms: [],
+          },
+          queries: [`${safeTitle} ${safeType}`],
+          isMinimalContent: isMinimalContent,
+        };
+      }
     }
     return null;
   } catch (error) {
     console.error("Error generating metadata:", error);
-    return null;
+    // Return a fallback structure rather than null
+    return {
+      classification: {
+        main_category: type || "page",
+        sub_categories: [type || "page"],
+        product_types: [],
+        search_intents: [type || "page"],
+      },
+      keywords: {
+        commercial_terms: [],
+        product_terms: [],
+        attribute_terms: [],
+      },
+      queries: [`${title || ""} ${type || "page"}`],
+      isMinimalContent: true,
+    };
   }
 }
 
 // Add this function to sanitize metadata and ensure no null values for Pinecone
 function sanitizeAndStringifyArray(arr: any[]): string {
   if (!arr || !Array.isArray(arr)) return JSON.stringify([]);
-  // Filter out any null or undefined values, then stringify
-  return JSON.stringify(
-    arr.filter((item) => item !== null && item !== undefined)
-  );
+
+  try {
+    // Filter out any null or undefined values, then stringify
+    return JSON.stringify(
+      arr.filter((item) => item !== null && item !== undefined)
+    );
+  } catch (error) {
+    console.error("Error stringifying array:", error);
+    return JSON.stringify([]);
+  }
+}
+
+// Create a safe stringify function to handle null/undefined data
+function safeStringify(data: any): string {
+  if (!data) return JSON.stringify({});
+  try {
+    return JSON.stringify(data);
+  } catch (error) {
+    console.error("Error stringifying data:", error);
+    return JSON.stringify({});
+  }
 }
 
 async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
@@ -1015,11 +1075,13 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
         }
 
         // Use the original content from the database - don't replace it
-        let contentToStore = cleanedContent;
+        let contentToStore = cleanedContent || ""; // Make sure it's not null
 
         // Generate both dense and sparse vectors
         const embedding = await createEmbedding(contentToStore);
-        const sparseVectors = await generateSparseVectors(enhancedText);
+        const sparseVectors = await generateSparseVectors(
+          enhancedText || "empty"
+        );
 
         console.log(`📊 Upserting page ${page.wpId} with hybrid vectors:`, {
           embeddingLength: embedding.length,

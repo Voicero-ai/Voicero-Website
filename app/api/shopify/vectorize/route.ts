@@ -152,7 +152,9 @@ interface VectorizeStats {
 }
 
 async function createEmbedding(text: string) {
-  const [embedding] = await embeddings.embedDocuments([text]);
+  // Make sure text is not empty/null - provide a default value if needed
+  const safeText = text || "empty content";
+  const [embedding] = await embeddings.embedDocuments([safeText]);
   return embedding;
 }
 
@@ -506,6 +508,17 @@ async function generateSparseVectors(
   }
 }
 
+// Create a safe stringify function to handle null/undefined data
+function safeStringify(data: any): string {
+  if (!data) return JSON.stringify({});
+  try {
+    return JSON.stringify(data);
+  } catch (error) {
+    console.error("Error stringifying data:", error);
+    return JSON.stringify({});
+  }
+}
+
 async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
   const stats: VectorizeStats = {
     added: 0,
@@ -845,7 +858,7 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
           scrapedIds,
         });
 
-        const embedding = await createEmbedding(JSON.stringify(productData));
+        const embedding = await createEmbedding(safeStringify(productData));
         console.log("🔤 Generated embedding length:", embedding.length);
 
         console.log("⬆️ Upserting to Pinecone...", {
@@ -925,7 +938,7 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
           .join(" ");
         const sparseVectors = await generateSparseVectors(reviewText);
 
-        const embedding = await createEmbedding(JSON.stringify(reviewData));
+        const embedding = await createEmbedding(safeStringify(reviewData));
 
         await index.namespace(websiteId).upsert([
           {
@@ -1086,7 +1099,7 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
           scrapedIds,
         });
 
-        const embedding = await createEmbedding(JSON.stringify(pageData));
+        const embedding = await createEmbedding(safeStringify(pageData));
 
         await index.namespace(websiteId).upsert([
           {
@@ -1279,7 +1292,7 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
           commentAuthors: (post.comments || []).map((c: any) => c.author || ""),
         });
 
-        const embedding = await createEmbedding(JSON.stringify(postData));
+        const embedding = await createEmbedding(safeStringify(postData));
 
         await index.namespace(websiteId).upsert([
           {
@@ -1479,7 +1492,7 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
           scrapedIds,
         });
 
-        const embedding = await createEmbedding(JSON.stringify(collectionData));
+        const embedding = await createEmbedding(safeStringify(collectionData));
 
         await index.namespace(websiteId).upsert([
           {
@@ -1640,7 +1653,7 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
           status: discount.status || "",
         });
 
-        const embedding = await createEmbedding(JSON.stringify(discountData));
+        const embedding = await createEmbedding(safeStringify(discountData));
 
         await index.namespace(websiteId).upsert([
           {
