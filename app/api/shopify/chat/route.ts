@@ -2236,9 +2236,57 @@ export async function POST(request: NextRequest) {
     const messageHasExchangeOrder =
       message.toLowerCase().includes("exchange") &&
       message.toLowerCase().includes("order");
+    const messageHasRefundRequest =
+      message.toLowerCase().includes("refund") &&
+      (message.toLowerCase().includes("order") ||
+        message.toLowerCase().includes("item"));
     const messageHasGenerateImage =
       message.toLowerCase().includes("generate") &&
       message.toLowerCase().includes("image");
+
+    // Convert return, exchange, and refund to contact actions
+    if (
+      messageHasReturnOrder ||
+      messageHasExchangeOrder ||
+      messageHasRefundRequest
+    ) {
+      let actionType = "return";
+      if (messageHasExchangeOrder) {
+        actionType = "exchange";
+      } else if (messageHasRefundRequest) {
+        actionType = "refund";
+      }
+
+      const response = {
+        action: "contact",
+        answer: `I'll connect you with our customer service team who can help process your ${actionType} request. Could you provide your order number and any relevant details?`,
+        category: "discovery",
+        pageId: "chat",
+        pageTitle: "Chat",
+        question: message,
+        scrollText: "",
+        subcategory: "content_overview",
+        type: type,
+        url: website.url,
+        action_context: {
+          contact_help_form: true,
+          message: `User is requesting to ${actionType} an order.`,
+        },
+      };
+
+      return cors(
+        request,
+        NextResponse.json({
+          response,
+          threadId: threadId || crypto.randomUUID(),
+          context: {
+            mainContent: null,
+            relevantQAs: [],
+          },
+          success: true,
+        })
+      );
+    }
 
     // Check auto-allow permissions and return early if needed
     if (messageHasCancelOrder && !website.allowAutoCancel) {
@@ -3192,9 +3240,6 @@ export async function POST(request: NextRequest) {
       temperature: 0.7,
     });
 
-
-
-
     // Extract OpenAI's response (different format than Anthropic)
     let aiResponse = "";
     let parsedResponse = {
@@ -3374,789 +3419,57 @@ export async function POST(request: NextRequest) {
 
     // Format response
     const formattedResponse: FormattedResponse = {
-      action: (parsedResponse.action as any) || "none",
-      answer:
-        parsedResponse.answer ||
-        "I couldn't generate a response. Please try again.",
+      action: "none",
+      answer: aiResponse,
       category: "discovery",
-      pageId: topMainResults[0]?.id || "unknown",
-      pageTitle: topMainResults[0]?.metadata?.title || "Unknown",
+      pageId: "chat",
+      pageTitle: "Chat",
       question: message,
       scrollText: "",
       subcategory: "content_overview",
       type: type,
-      url: parsedResponse.url || "",
-      action_context: parsedResponse.action_context || {},
+      url: website.url,
     };
 
-    // Additional checks for formattedResponse to handle any remaining cases
-    if (formattedResponse.action === "scroll" && !website.allowAutoScroll) {
-      formattedResponse.action = "none";
-    }
-
-    if (
-      formattedResponse.action === "highlight_text" &&
-      !website.allowAutoHighlight
-    ) {
-      formattedResponse.action = "none";
-    }
-
-    if (formattedResponse.action === "redirect" && !website.allowAutoRedirect) {
-      formattedResponse.action = "none";
-    }
-
-    if (formattedResponse.action === "click" && !website.allowAutoClick) {
-      formattedResponse.action = "none";
-    }
-
-    if (
-      formattedResponse.action === "fill_form" &&
-      !website.allowAutoFillForm
-    ) {
-      formattedResponse.action = "none";
-    }
-
-    // Format URL correctly if this is a redirect action
-    if (formattedResponse.action === "redirect" && formattedResponse.url) {
-      // First check if this is a request for a standard product/collection page
-      const isProductCollection =
-        formattedResponse.url.startsWith("/collections/") ||
-        formattedResponse.url.startsWith("/products/");
-
-      // Special handling for standard e-commerce pages
-      if (isProductCollection) {
-        // Skip validation for collection/product URLs from classification
-        if (
-          classification?.action_intent === "redirect" &&
-          classification?.content_targets?.url &&
-          (classification.content_targets.url.startsWith("/collections/") ||
-            classification.content_targets.url.startsWith("/products/"))
-        ) {
-          console.log(
-            "Using collection/product URL from classification without validation"
-          );
-          formattedResponse.url = classification.content_targets.url;
-          formattedResponse.answer = `Here are our products. Let me know if you're looking for something specific.`;
-        } else {
-          // For other product/collection URLs, use formatting but skip validation
-          const formattedUrl = formatRedirectUrl(
-            formattedResponse.url,
-            classification,
-            message,
-            {
-              mainContent: context.mainContent,
-              relevantQAs: context.relevantQAs,
-              pageData: pageData,
-            },
-            false // Skip validation
-          );
-
-          formattedResponse.url = formattedUrl;
+    // If aiResponse is a JSON string, parse it and update the response
+    if (typeof aiResponse === "string" && aiResponse.trim().startsWith("{")) {
+      try {
+        const parsedResponse = JSON.parse(aiResponse);
+        if (parsedResponse && typeof parsedResponse === "object") {
+          formattedResponse.action = parsedResponse.action || "none";
+          formattedResponse.answer = parsedResponse.answer || aiResponse;
+          formattedResponse.action_context =
+            parsedResponse.action_context || {};
         }
-      } else {
-        // Regular validation for non-product pages
-        const formattedUrl = formatRedirectUrl(
-          formattedResponse.url,
-          classification,
-          message,
-          {
-            mainContent: context.mainContent,
-            relevantQAs: context.relevantQAs,
-            pageData: pageData,
-          }
-        );
-
-        // If the formatted URL is empty (meaning URL verification failed), check if this is a products navigation
-        if (!formattedUrl) {
-          // Check if this is a request to see products or collections
-          const isProductRequest =
-            message.toLowerCase().includes("product") ||
-            message.toLowerCase().includes("collection") ||
-            message.toLowerCase().includes("shop") ||
-            message.toLowerCase().includes("catalog");
-
-          // If user asked for products but URL validation failed, try to find a valid collection
-          if (
-            isProductRequest &&
-            context.mainContent &&
-            context.mainContent.length > 0
-          ) {
-            // Look for a valid collection in the context
-            const availableCollection = context.mainContent.find(
-              (item) => item.type === "collection" && item.handle
-            );
-
-            if (availableCollection) {
-              console.log(
-                `Using available collection '${availableCollection.handle}' as fallback for product navigation`
-              );
-              formattedResponse.action = "redirect";
-              formattedResponse.url = `/collections/${availableCollection.handle}`;
-              formattedResponse.answer = `Here are our ${
-                availableCollection.title || "products"
-              }. Let me know if you're looking for something specific.`;
-            } else {
-              formattedResponse.action = "none";
-              formattedResponse.url = "";
-              formattedResponse.answer =
-                "I couldn't find the page you're looking for. It doesn't appear to exist in our store. Is there something specific you're interested in?";
-            }
-          } else {
-            formattedResponse.action = "none";
-            formattedResponse.url = "";
-            formattedResponse.answer =
-              "I couldn't find the page you're looking for. It doesn't appear to exist in our store. Is there something specific you're interested in?";
-          }
-        } else {
-          formattedResponse.url = formattedUrl;
-        }
+      } catch (e) {
+        // If parsing fails, keep the original answer
+        console.log("Response is not valid JSON, using as-is");
       }
     }
 
-    // Also check for URL in action_context
-    if (formattedResponse.action_context?.url) {
-      // Check if this is a collection/product URL from classification
-      if (
-        classification?.action_intent === "redirect" &&
-        formattedResponse.action_context.url &&
-        (formattedResponse.action_context.url
-          .toString()
-          .startsWith("/collections/") ||
-          formattedResponse.action_context.url
-            .toString()
-            .startsWith("/products/"))
-      ) {
-        console.log(
-          "Using collection/product URL from action_context without validation"
-        );
-        formattedResponse.action = "redirect";
-        formattedResponse.url = formattedResponse.action_context.url.toString();
-        delete formattedResponse.action_context.url;
-      } else {
-        const formattedContextUrl = formatRedirectUrl(
-          formattedResponse.action_context.url,
-          classification,
-          message,
-          {
-            mainContent: context.mainContent,
-            relevantQAs: context.relevantQAs,
-            pageData: pageData,
-          }
-        );
-
-        // If the URL verification failed, remove it from action_context
-        if (!formattedContextUrl) {
-          delete formattedResponse.action_context.url;
-
-          // If this was supposed to be a redirect but URL is invalid, change to 'none'
-          if (formattedResponse.action === "redirect") {
-            formattedResponse.action = "none";
-            formattedResponse.answer =
-              "I couldn't find the page you're looking for. It doesn't appear to exist in our store. Is there something specific you're interested in?";
-          }
-        } else {
-          formattedResponse.action_context.url = formattedContextUrl;
-        }
-      }
-    }
-
-    // ADDITIONAL FIX: Double-check the formatted response to ensure order actions are preserved
+    // Convert return, exchange, and refund to contact actions
     if (
-      formattedResponse.action === "redirect" &&
-      (formattedResponse.url?.includes("/account/orders") ||
-        formattedResponse.action_context?.url?.includes("/account/orders"))
+      classification?.action_intent === "return_order" ||
+      classification?.action_intent === "exchange_order" ||
+      (message.toLowerCase().includes("return") &&
+        message.toLowerCase().includes("order")) ||
+      (message.toLowerCase().includes("exchange") &&
+        message.toLowerCase().includes("order"))
     ) {
-      // Check for refund keywords and use contact action
-      if (message.toLowerCase().includes("refund")) {
-        formattedResponse.action = "contact";
-
-        // Set up contact action context
-        if (!formattedResponse.action_context) {
-          formattedResponse.action_context = {};
-        }
-
-        // Extract order info if available
-        const orderIdMatch = message.match(
-          /order\s*(?:id|number)?[:\s#]*(\w+[-\w]*)/i
-        );
-        const emailMatch = message.match(
-          /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i
-        );
-
-        let orderInfo = "";
-        if (orderIdMatch && orderIdMatch[1]) {
-          orderInfo += `Order ID: ${orderIdMatch[1]}. `;
-        }
-        if (emailMatch && emailMatch[1]) {
-          orderInfo += `Email: ${emailMatch[1]}.`;
-        }
-
-        formattedResponse.action_context = {
-          contact_help_form: true,
-          message: `User requests refund for order. ${orderInfo}`.trim(),
-        };
-      } else if (
-        classification?.action_intent === "cancel_order" ||
-        (message.toLowerCase().includes("cancel") &&
-          message.toLowerCase().includes("order"))
-      ) {
-        formattedResponse.action = "cancel_order";
-      } else if (
+      const actionType =
         classification?.action_intent === "return_order" ||
         (message.toLowerCase().includes("return") &&
           message.toLowerCase().includes("order"))
-      ) {
-        formattedResponse.action = "return_order";
-      } else if (
-        classification?.action_intent === "exchange_order" ||
-        (message.toLowerCase().includes("exchange") &&
-          message.toLowerCase().includes("order"))
-      ) {
-        formattedResponse.action = "exchange_order";
-      } else {
-        formattedResponse.action = "get_orders";
-      }
+          ? "return"
+          : "exchange";
 
-      // Handle order action context, but not for refunds which use contact action
-      if (formattedResponse.action !== "contact") {
-        // Ensure action_context is initialized
-        if (!formattedResponse.action_context) {
-          formattedResponse.action_context = {};
-        }
-
-        // Extract order ID and email if present in the message
-        const orderIdMatch = message.match(
-          /order\s*(?:id|number)?[:\s#]*(\w+[-\w]*)/i
-        );
-        const emailMatch = message.match(
-          /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i
-        );
-
-        if (orderIdMatch && orderIdMatch[1]) {
-          formattedResponse.action_context.order_id = orderIdMatch[1];
-        }
-
-        if (emailMatch && emailMatch[1]) {
-          formattedResponse.action_context.order_email = emailMatch[1];
-        }
-
-        if (formattedResponse.url) {
-          formattedResponse.action_context.ordersUrl = formattedResponse.url;
-          formattedResponse.url = "";
-        } else if (formattedResponse.action_context?.url) {
-          formattedResponse.action_context.ordersUrl =
-            formattedResponse.action_context.url;
-          delete formattedResponse.action_context.url;
-        }
-      }
+      formattedResponse.action = "contact";
+      formattedResponse.answer = `I'll connect you with our customer service team who can help process your ${actionType} request. Could you provide your order number and any relevant details?`;
+      formattedResponse.action_context = {
+        contact_help_form: true,
+        message: `User is requesting to ${actionType} an order.`,
+      };
     }
-
-    // Clean highlight text and exact_text in action_context for scroll and highlight actions
-    if (
-      formattedResponse.action === "scroll" ||
-      formattedResponse.action === "highlight_text"
-    ) {
-      // Clean scrollText field
-      formattedResponse.scrollText = cleanHighlightText(
-        formattedResponse.scrollText,
-        formattedResponse.action_context?.exact_text !== undefined
-      );
-
-      // Clean exact_text in action_context if present
-      if (formattedResponse.action_context?.exact_text) {
-        formattedResponse.action_context.exact_text = cleanHighlightText(
-          formattedResponse.action_context.exact_text,
-          formattedResponse.action_context?.exact_text !== undefined
-        );
-      }
-
-      // Clean highlight_text in action_context if present
-      if (formattedResponse.action_context?.highlight_text) {
-        formattedResponse.action_context.highlight_text = cleanHighlightText(
-          formattedResponse.action_context.highlight_text,
-          formattedResponse.action_context?.highlight_text !== undefined
-        );
-      }
-    }
-
-    // CRITICAL FIX: ENSURE ORDER ACTION CONTINUITY
-    // This must come after all other formatting but before saving to database
-    if (
-      enhancedPreviousContext?.previousAction &&
-      [
-        "cancel_order",
-        "return_order",
-        "exchange_order",
-        "get_orders",
-        "track_order",
-      ].includes(enhancedPreviousContext.previousAction)
-    ) {
-      // Only maintain order action continuity if the classification agrees or is ambiguous
-      // If classification has determined a clear different intent (like redirect/navigation), respect it
-      if (
-        !classification || // No classification
-        classification?.action_intent === "none" || // Ambiguous case
-        classification?.action_intent ===
-          enhancedPreviousContext.previousAction || // Same action
-        (classification?.action_intent &&
-          [
-            "cancel_order",
-            "return_order",
-            "exchange_order",
-            "get_orders",
-            "track_order",
-          ].includes(classification.action_intent)) || // Any order action
-        classification?.context_dependency === "high" || // High context dependency
-        // For simple responses like "yes", "order number", or "email@example.com", preserve the previous action
-        /^\s*(yes|yeah|ok|okay|sure)\s*$/i.test(message) ||
-        /^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+$/.test(
-          message.trim()
-        ) ||
-        /^#?\d{4,}$/.test(message.trim())
-      ) {
-        // IMPORTANT: Preserve all existing order-related data from previous context
-        if (!formattedResponse.action_context) {
-          formattedResponse.action_context = {};
-        }
-
-        // Preserve order ID and email information from previous context
-        if (enhancedPreviousContext.answer?.action_context) {
-          const prevContext = enhancedPreviousContext.answer.action_context;
-
-          // Preserve order ID (could be in order_id or order_number field)
-          if (
-            prevContext.order_id &&
-            !formattedResponse.action_context.order_id
-          ) {
-            formattedResponse.action_context.order_id = prevContext.order_id;
-          }
-          if (
-            prevContext.order_number &&
-            !formattedResponse.action_context.order_id &&
-            !formattedResponse.action_context.order_number
-          ) {
-            formattedResponse.action_context.order_number =
-              prevContext.order_number;
-          }
-
-          // Preserve email (could be in order_email or email field)
-          if (
-            prevContext.order_email &&
-            !formattedResponse.action_context.order_email
-          ) {
-            formattedResponse.action_context.order_email =
-              prevContext.order_email;
-          }
-          if (
-            prevContext.email &&
-            !formattedResponse.action_context.order_email &&
-            !formattedResponse.action_context.email
-          ) {
-            formattedResponse.action_context.email = prevContext.email;
-          }
-
-          // Preserve return reason information
-          if (
-            prevContext.returnReason &&
-            !formattedResponse.action_context.returnReason
-          ) {
-            formattedResponse.action_context.returnReason =
-              prevContext.returnReason;
-          }
-          if (
-            prevContext.returnReasonNote &&
-            !formattedResponse.action_context.returnReasonNote
-          ) {
-            formattedResponse.action_context.returnReasonNote =
-              prevContext.returnReasonNote;
-          }
-        }
-
-        // Check current intent in message
-        if (message.toLowerCase().includes("return")) {
-          // Check if return action is allowed
-          if (!website.allowAutoReturn) {
-            return handleDisabledAction(
-              request,
-              website,
-              message,
-              type,
-              threadId,
-              "process returns",
-              "return_order"
-            );
-          }
-          formattedResponse.action = "return_order";
-          // Return-specific handling
-        } else if (message.toLowerCase().includes("cancel")) {
-          // Check if cancel action is allowed
-          if (!website.allowAutoCancel) {
-            return handleDisabledAction(
-              request,
-              website,
-              message,
-              type,
-              threadId,
-              "cancel orders",
-              "cancel_order"
-            );
-          }
-          formattedResponse.action = "cancel_order";
-          // Cancel-specific handling
-        } else if (message.toLowerCase().includes("exchange")) {
-          // Check if exchange action is allowed
-          if (!website.allowAutoExchange) {
-            return handleDisabledAction(
-              request,
-              website,
-              message,
-              type,
-              threadId,
-              "process exchanges",
-              "exchange_order"
-            );
-          }
-          formattedResponse.action = "exchange_order";
-          // Exchange-specific handling
-        } else if (message.toLowerCase().includes("track")) {
-          formattedResponse.action = "track_order";
-        } else if (
-          isOrderRelatedQuery(message) ||
-          /^\s*(yes|yeah|ok|okay|sure)\s*$/i.test(message) ||
-          /^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+$/.test(
-            message.trim()
-          ) ||
-          /^#?\d{4,}$/.test(message.trim())
-        ) {
-          // Preserve previous action if still order-related or if just a simple confirmation/email/order number
-          const previousAction = enhancedPreviousContext.previousAction as
-            | "cancel_order"
-            | "return_order"
-            | "exchange_order"
-            | "get_orders"
-            | "track_order";
-
-          // Check if the preserved action is allowed
-          if (
-            (previousAction === "cancel_order" && !website.allowAutoCancel) ||
-            (previousAction === "return_order" && !website.allowAutoReturn) ||
-            (previousAction === "exchange_order" && !website.allowAutoExchange)
-          ) {
-            const actionType =
-              previousAction === "cancel_order"
-                ? "cancel orders"
-                : previousAction === "return_order"
-                ? "process returns"
-                : "process exchanges";
-
-            return handleDisabledAction(
-              request,
-              website,
-              message,
-              type,
-              threadId,
-              actionType,
-              previousAction
-            );
-          }
-
-          formattedResponse.action = previousAction;
-
-          // Check for new information in the current message
-
-          // Extract email if present
-          const emailMatch = message.match(
-            /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i
-          );
-          if (emailMatch && emailMatch[1]) {
-            formattedResponse.action_context.order_email = emailMatch[1];
-          }
-
-          // Extract order number if present
-          const orderIdMatch = message.match(/\b(\d{4,})\b/i);
-          if (orderIdMatch && orderIdMatch[1]) {
-            formattedResponse.action_context.order_id = orderIdMatch[1];
-          }
-        }
-        // Otherwise, don't preserve (use the action determined by classification)
-      }
-    }
-
-    // Do the same for return_order - respect classification action_intent for navigation
-    if (enhancedPreviousContext?.previousAction === "return_order") {
-      // Check if return action is allowed
-      if (!website.allowAutoReturn) {
-        return handleDisabledAction(
-          request,
-          website,
-          message,
-          type,
-          threadId,
-          "process returns",
-          "return_order"
-        );
-      }
-
-      // If classification has determined a clear navigation intent, respect it
-      if (
-        classification?.action_intent === "redirect" ||
-        (formattedResponse.action === "redirect" && formattedResponse.url)
-      ) {
-        console.log(
-          "Classification determined navigation intent - not preserving return_order action"
-        );
-      } else {
-        console.log("PRESERVING return_order action from previous context");
-        formattedResponse.action = "return_order";
-
-        const orderIdMatch = message.match(/\b(\d{4,})\b/i);
-        const emailMatch = message.match(
-          /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i
-        );
-
-        // Extract return reason from message if present
-        let returnReason = null;
-        let returnReasonNote = null;
-
-        // Look for known reason keywords in the message
-        if (
-          message.toLowerCase().includes("color") ||
-          message.toLowerCase().includes("colour")
-        ) {
-          returnReason = "COLOR";
-        } else if (
-          message.toLowerCase().includes("damaged") ||
-          message.toLowerCase().includes("defective") ||
-          message.toLowerCase().includes("broken")
-        ) {
-          returnReason = "DEFECTIVE";
-        } else if (
-          message.toLowerCase().includes("not as described") ||
-          message.toLowerCase().includes("description") ||
-          message.toLowerCase().includes("different than shown")
-        ) {
-          returnReason = "NOT_AS_DESCRIBED";
-        } else if (
-          message.toLowerCase().includes("too large") ||
-          message.toLowerCase().includes("too big")
-        ) {
-          returnReason = "SIZE_TOO_LARGE";
-        } else if (message.toLowerCase().includes("too small")) {
-          returnReason = "SIZE_TOO_SMALL";
-        } else if (
-          message.toLowerCase().includes("style") ||
-          message.toLowerCase().includes("look")
-        ) {
-          returnReason = "STYLE";
-        } else if (
-          message.toLowerCase().includes("don't want") ||
-          message.toLowerCase().includes("changed my mind") ||
-          message.toLowerCase().includes("no longer need") ||
-          message.toLowerCase().includes("unwanted")
-        ) {
-          returnReason = "UNWANTED";
-        } else if (
-          message.toLowerCase().includes("wrong item") ||
-          message.toLowerCase().includes("wrong product")
-        ) {
-          returnReason = "WRONG_ITEM";
-        } else if (message.toLowerCase().includes("reason:")) {
-          // If there's a specific reason format like "reason: something"
-          const reasonMatch = message.match(/reason:\s*(.+?)(?:\.|$)/i);
-          if (reasonMatch && reasonMatch[1]) {
-            returnReasonNote = reasonMatch[1].trim();
-            returnReason = "OTHER";
-          }
-        }
-
-        if (!formattedResponse.action_context) {
-          formattedResponse.action_context = {};
-        }
-
-        // IMPORTANT: Preserve existing values from previous context before adding new ones
-        // Get previously stored email and order data if available
-        const previousEmail =
-          enhancedPreviousContext.answer?.action_context?.order_email ||
-          enhancedPreviousContext.answer?.action_context?.email ||
-          formattedResponse.action_context.order_email ||
-          formattedResponse.action_context.email;
-
-        const previousOrderId =
-          enhancedPreviousContext.answer?.action_context?.order_id ||
-          enhancedPreviousContext.answer?.action_context?.order_number ||
-          formattedResponse.action_context.order_id ||
-          formattedResponse.action_context.order_number;
-
-        // Add order id to action context (from new message or previous context)
-        if (orderIdMatch && orderIdMatch[1]) {
-          formattedResponse.action_context.order_id = orderIdMatch[1];
-        } else if (previousOrderId) {
-          formattedResponse.action_context.order_id = previousOrderId;
-        }
-
-        // Add email to action context (from new message or previous context)
-        if (emailMatch && emailMatch[1]) {
-          formattedResponse.action_context.order_email = emailMatch[1];
-        } else if (previousEmail) {
-          formattedResponse.action_context.order_email = previousEmail;
-        }
-
-        // Add return reason to action_context if found
-        if (returnReason) {
-          formattedResponse.action_context.returnReason = returnReason;
-        } else if (
-          enhancedPreviousContext.answer?.action_context?.returnReason
-        ) {
-          // Preserve previous return reason if present
-          formattedResponse.action_context.returnReason =
-            enhancedPreviousContext.answer.action_context.returnReason;
-        }
-
-        // Add return reason note to action_context if provided
-        if (returnReasonNote) {
-          formattedResponse.action_context.returnReasonNote = returnReasonNote;
-        } else if (
-          enhancedPreviousContext.answer?.action_context?.returnReasonNote
-        ) {
-          // Preserve previous return reason note if present
-          formattedResponse.action_context.returnReasonNote =
-            enhancedPreviousContext.answer.action_context.returnReasonNote;
-        }
-
-        // Also update the answer text to match the return_order action
-        const orderId =
-          formattedResponse.action_context.order_id ||
-          formattedResponse.action_context.order_number;
-        const email = formattedResponse.action_context.order_email;
-        const reason = formattedResponse.action_context.returnReason;
-
-        // Build response with available details
-        if (orderId || email) {
-          let details = "";
-          if (orderId) details += `#${orderId}`;
-          if (orderId && email) details += " with ";
-          if (email) details += `email ${email}`;
-
-          if (reason) {
-            formattedResponse.answer = `I'll process your return request for order ${details} with reason: ${reason.replace(
-              /_/g,
-              " "
-            )}. Your return will be initiated shortly. Is there anything specific about the return process you'd like to know?`;
-          } else {
-            formattedResponse.answer = `I'll process your return request for order ${details}. Could you please tell me the reason for your return? Choose from: COLOR, DEFECTIVE, NOT AS DESCRIBED, TOO LARGE, TOO SMALL, STYLE, UNWANTED, WRONG ITEM, or OTHER with details.`;
-          }
-        } else if (reason) {
-          formattedResponse.answer = `I'll process your return request with reason: ${reason.replace(
-            /_/g,
-            " "
-          )}. Could you please provide your order number and email address so I can complete the return?`;
-        } else {
-          formattedResponse.answer = `I'll help process your return request. Could you please provide your order number, email address, and the reason for your return? Common reasons include: wrong size, damaged item, not as described, etc.`;
-        }
-      }
-    }
-
-    // Do the same for exchange_order
-    if (enhancedPreviousContext?.previousAction === "exchange_order") {
-      // Check if exchange action is allowed
-      if (!website.allowAutoExchange) {
-        return handleDisabledAction(
-          request,
-          website,
-          message,
-          type,
-          threadId,
-          "process exchanges",
-          "exchange_order"
-        );
-      }
-
-      // If classification has determined a clear navigation intent, respect it
-      if (
-        classification?.action_intent === "redirect" ||
-        (formattedResponse.action === "redirect" && formattedResponse.url)
-      ) {
-        console.log(
-          "Classification determined navigation intent - not preserving exchange_order action"
-        );
-      } else {
-        console.log("PRESERVING exchange_order action from previous context");
-        formattedResponse.action = "exchange_order";
-
-        const orderIdMatch = message.match(/\b(\d{4,})\b/i);
-        const emailMatch = message.match(
-          /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i
-        );
-
-        if (!formattedResponse.action_context) {
-          formattedResponse.action_context = {};
-        }
-
-        if (orderIdMatch && orderIdMatch[1]) {
-          formattedResponse.action_context.order_id = orderIdMatch[1];
-        }
-
-        if (emailMatch && emailMatch[1]) {
-          formattedResponse.action_context.order_email = emailMatch[1];
-        }
-
-        // Also update the answer text to match the exchange_order action
-        const orderId =
-          orderIdMatch?.[1] ||
-          formattedResponse.action_context?.order_id ||
-          formattedResponse.action_context?.order_number;
-        const email =
-          emailMatch?.[1] ||
-          formattedResponse.action_context?.order_email ||
-          formattedResponse.action_context?.email;
-
-        if (orderId || email) {
-          let details = "";
-          if (orderId) details += `#${orderId}`;
-          if (orderId && email) details += " with ";
-          if (email) details += `email ${email}`;
-
-          formattedResponse.answer = `I'll process your exchange request for order ${details}. Your exchange will be initiated shortly. Is there something specific about the exchange you'd like to know?`;
-        } else {
-          formattedResponse.answer = `I'll process your exchange request. Your exchange will be initiated shortly. Is there something specific about the exchange you'd like to know?`;
-        }
-      }
-    }
-
-    // Save messages to database
-    try {
-      // Create user message first
-      await prisma.aiMessage.create({
-        data: {
-          threadId: aiThread.id,
-          role: "user",
-          content: message,
-          type: type,
-        },
-      });
-
-      // Then create assistant message
-      await prisma.aiMessage.create({
-        data: {
-          threadId: aiThread.id,
-          role: "assistant",
-          content: aiResponse,
-          type: "text", // Assistant response is always text
-        },
-      });
-
-      // Update thread's last message timestamp
-      await prisma.aiThread.update({
-        where: { id: aiThread.id },
-        data: { lastMessageAt: new Date() },
-      });
-    } catch (dbError) {
-      console.error("Error saving messages to database:", dbError);
-      // Continue even if database operations fail
-    }
-
-    // Return success response
-    console.log("Formatted Response:", formattedResponse);
 
     // Check if the action is a disabled image generation type
     if (
@@ -4230,6 +3543,41 @@ export async function POST(request: NextRequest) {
         };
       }
     }
+
+    // Save messages to database
+    try {
+      // Create user message first
+      await prisma.aiMessage.create({
+        data: {
+          threadId: aiThread.id,
+          role: "user",
+          content: message,
+          type: type,
+        },
+      });
+
+      // Then create assistant message
+      await prisma.aiMessage.create({
+        data: {
+          threadId: aiThread.id,
+          role: "assistant",
+          content: aiResponse,
+          type: "text", // Assistant response is always text
+        },
+      });
+
+      // Update thread's last message timestamp
+      await prisma.aiThread.update({
+        where: { id: aiThread.id },
+        data: { lastMessageAt: new Date() },
+      });
+    } catch (dbError) {
+      console.error("Error saving messages to database:", dbError);
+      // Continue even if database operations fail
+    }
+
+    // Return success response
+    console.log("Formatted Response:", formattedResponse);
 
     return cors(
       request,
