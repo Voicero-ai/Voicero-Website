@@ -6,6 +6,7 @@ import { Client } from "@opensearch-project/opensearch";
 import { cors } from "../../../../../lib/cors";
 import { RecordSparseValues } from "@pinecone-database/pinecone";
 import OpenAI from "openai";
+import { createChatCompletionWithRetry } from "../../../../../lib/openai-utils";
 export const dynamic = "force-dynamic";
 
 const prisma = new PrismaClient();
@@ -485,7 +486,7 @@ async function generateQAs(
   systemMessage: string
 ) {
   try {
-    const completion = await openai.chat.completions.create({
+    const completion = await createChatCompletionWithRetry(openai, {
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: systemMessage },

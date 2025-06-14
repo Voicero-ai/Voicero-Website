@@ -10,6 +10,7 @@ import { cors } from "../../../../../lib/cors";
 import { RecordSparseValues } from "@pinecone-database/pinecone";
 import OpenAI from "openai";
 import crypto from "crypto";
+import { createChatCompletionWithRetry } from "../../../../../lib/openai-utils";
 export const dynamic = "force-dynamic";
 
 // System message for the AI - Edit this to modify AI behavior
@@ -895,14 +896,14 @@ async function generateQAs(product: any, vectorId: string) {
   }
 }
 
-// Update the generateQAsForPrompt function to ensure proper structure
+// Update the generateQAsForPrompt function to use the utility
 async function generateQAsForPrompt(
   productData: any,
   vectorId: string,
   prompt: string
 ) {
   try {
-    const completion = await openai.chat.completions.create({
+    const completion = await createChatCompletionWithRetry(openai, {
       model: "gpt-4o-mini",
       messages: [
         {

@@ -250,6 +250,29 @@ export async function DELETE(request: Request) {
       // Final transaction: Delete the website itself
       await prisma.$transaction(
         async (tx) => {
+          // First update customers to remove default address references
+          await tx.shopifyCustomer.updateMany({
+            where: { websiteId: id },
+            data: { defaultAddressId: null },
+          });
+          console.log("Removed default address references from customers");
+
+          // Now delete addresses
+          await tx.shopifyCustomerAddress.deleteMany({
+            where: {
+              customer: {
+                websiteId: id,
+              },
+            },
+          });
+          console.log("Deleted Shopify customer addresses");
+
+          // Delete Shopify customers
+          await tx.shopifyCustomer.deleteMany({
+            where: { websiteId: id },
+          });
+          console.log("Deleted Shopify customers");
+
           await tx.website.delete({
             where: { id },
           });

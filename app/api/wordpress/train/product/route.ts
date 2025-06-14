@@ -9,6 +9,7 @@ import { RecordSparseValues } from "@pinecone-database/pinecone";
 import OpenAI from "openai";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client"; // Import Prisma namespace
+import { createChatCompletionWithRetry } from "../../../../../lib/openai-utils";
 export const dynamic = "force-dynamic";
 
 // System message for the AI - Edit this to modify AI behavior
@@ -855,10 +856,10 @@ async function generateQAs(
   }
 }
 
-// Update the generateQAsForPrompt function (mostly unchanged, relies on prompt content)
+// Update the generateQAsForPrompt function
 async function generateQAsForPrompt(
   productData: any,
-  productId: number, // Accepts internal ID, but not directly used in prompt generation itself
+  productId: number,
   prompt: string
 ) {
   try {
@@ -889,21 +890,21 @@ async function generateQAsForPrompt(
       (productData.wpId || 0).toString()
     );
 
-    const completion = await openai.chat.completions.create({
+    const completion = await createChatCompletionWithRetry(openai, {
       model: "gpt-4o-mini",
       messages: [
         {
           role: "system",
-          content: SYSTEM_MESSAGE, // Ensure SYSTEM_MESSAGE is updated for WordPress context if needed
+          content: SYSTEM_MESSAGE,
         },
         {
           role: "user",
-          content: finalPrompt, // Use the processed prompt
+          content: finalPrompt,
         },
       ],
       response_format: { type: "json_object" },
       temperature: 0.7,
-      max_tokens: 4000, // Adjust if needed for potentially longer WP descriptions
+      max_tokens: 4000,
     });
 
     const content = completion.choices[0].message.content;
@@ -931,15 +932,14 @@ async function generateQAsForPrompt(
 
     // Map prompt fields to QA structure, ensure product data consistency
     return parsedContent.qas.map((qa: any) => ({
-      id: qa.id || `temp-${crypto.randomBytes(4).toString("hex")}`, // Generate temp id if missing
-      questionType: qa.type || "text", // Use 'type' from prompt definition
+      id: qa.id || `temp-${crypto.randomBytes(4).toString("hex")}`,
+      questionType: qa.type || "text",
       question: qa.question || "",
       answer: qa.answer || "",
-      webAction: qa.action || null, // Use 'action' from prompt definition
-      url: qa.url || null, // Use 'url' from prompt definition
-      category: qa.category || "general", // Assign category from prompt
-      subcategory: qa.subcategory || "general", // Assign subcategory from prompt
-      // Add consistent product stub from the source productData
+      webAction: qa.action || null,
+      url: qa.url || null,
+      category: qa.category || "general",
+      subcategory: qa.subcategory || "general",
       product: {
         name: productData.name || "",
         description:
@@ -950,7 +950,6 @@ async function generateQAsForPrompt(
     }));
   } catch (error) {
     console.error("Error generating QAs for prompt (WordPress):", error);
-    // Return empty array on error to allow other prompts to proceed
     return [];
   }
 }

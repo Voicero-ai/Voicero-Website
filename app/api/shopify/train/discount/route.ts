@@ -7,6 +7,7 @@ import { cors } from "../../../../../lib/cors";
 import { RecordSparseValues } from "@pinecone-database/pinecone";
 import OpenAI from "openai";
 import crypto from "crypto";
+import { createChatCompletionWithRetry } from "../../../../../lib/openai-utils";
 export const dynamic = "force-dynamic";
 
 const prisma = new PrismaClient();
@@ -548,15 +549,15 @@ async function generateQAs(discount: any, vectorId: string) {
   }
 }
 
-// Update the generateQAsForPrompt function to ensure proper structure
+// Helper function to generate QAs for a specific prompt
 async function generateQAsForPrompt(
   discountData: any,
   vectorId: string,
   prompt: string,
-  subcategory: string
+  subcategory?: string
 ) {
   try {
-    const completion = await openai.chat.completions.create({
+    const completion = await createChatCompletionWithRetry(openai, {
       model: "gpt-4o-mini",
       messages: [
         {
@@ -586,24 +587,19 @@ async function generateQAsForPrompt(
       throw new Error("Invalid QA format received from OpenAI");
     }
 
-    // Filter QAs by subcategory and convert null values
-    return parsedContent.qas
-      .filter((qa: any) => qa.subcategory === subcategory)
-      .map((qa: any) => ({
-        ...qa,
-        webAction: qa.webAction || null,
-        url: qa.url || null,
-        questionType: qa.questionType || "text",
-        discount: {
-          title: discountData.title || "",
-          code: discountData.code || "",
-          type: discountData.type || "",
-          value: discountData.value || "",
-          startsAt: discountData.startsAt || "",
-          endsAt: discountData.endsAt || "",
-          status: discountData.status || "",
-        },
-      }));
+    // Filter by subcategory if provided
+    const filteredQAs = subcategory
+      ? parsedContent.qas.filter((qa: any) => qa.subcategory === subcategory)
+      : parsedContent.qas;
+
+    // Convert null values to empty strings and ensure category and subcategory are set
+    return filteredQAs.map((qa: any) => ({
+      ...qa,
+      action: qa.action || "",
+      url: qa.url || "",
+      category: "discount",
+      subcategory: qa.subcategory || subcategory || "general",
+    }));
   } catch (error) {
     console.error("Error generating QAs for prompt:", error);
     return [];

@@ -7,6 +7,7 @@ import { cors } from "../../../../../lib/cors";
 import { RecordSparseValues } from "@pinecone-database/pinecone";
 import OpenAI from "openai";
 import crypto from "crypto";
+import { createChatCompletionWithRetry } from "../../../../../lib/openai-utils";
 export const dynamic = "force-dynamic";
 
 const pinecone = new Pinecone({
@@ -681,7 +682,7 @@ async function generateQAsForPrompt(
   prompt: string
 ) {
   try {
-    const completion = await openai.chat.completions.create({
+    const completion = await createChatCompletionWithRetry(openai, {
       model: "gpt-4o-mini",
       messages: [
         {

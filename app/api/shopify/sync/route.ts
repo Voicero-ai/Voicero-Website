@@ -274,6 +274,25 @@ async function constructShopifyUrl(
     normalizedUrl = normalizedUrl.slice(0, -1);
   }
 
+  // Check if this is a policy page
+  const policyHandles = [
+    "privacy-policy",
+    "refund-policy",
+    "shipping-policy",
+    "terms-of-service",
+    "contact-information",
+  ];
+
+  // If it's a page and the handle matches a policy page, use the policies path
+  if (
+    type === "pages" &&
+    policyHandles.some((policyHandle) =>
+      handle.toLowerCase().includes(policyHandle)
+    )
+  ) {
+    return `${normalizedUrl}/policies/${handle}`;
+  }
+
   // Construct full URL based on entity type
   return `${normalizedUrl}/${type}/${handle}`;
 }

@@ -8,6 +8,7 @@ import { RecordSparseValues } from "@pinecone-database/pinecone";
 import OpenAI from "openai";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client"; // Import Prisma namespace
+import { createChatCompletionWithRetry } from "../../../../../lib/openai-utils";
 export const dynamic = "force-dynamic";
 
 // Define the type based on the query including relations
@@ -743,7 +744,7 @@ async function generateQAsForPrompt(
   prompt: string
 ) {
   try {
-    const completion = await openai.chat.completions.create({
+    const completion = await createChatCompletionWithRetry(openai, {
       model: "gpt-4o-mini",
       messages: [
         {
@@ -794,8 +795,8 @@ async function generateQAsForPrompt(
       webAction: qa.action || null,
       url: qa.url || null,
       scrollText: qa.scrollText || null,
-      category: qa.category || getCategoryFromPrompt(prompt),
-      subcategory: qa.subcategory || getSubcategoryFromPrompt(prompt),
+      category: qa.category || "general",
+      subcategory: qa.subcategory || "general",
     }));
   } catch (error) {
     console.error("Error generating QAs for prompt (WordPress Post):", error);
