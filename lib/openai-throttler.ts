@@ -7,8 +7,10 @@ const limiter = new Bottleneck({
   reservoir: 200_000, // tokens available per minute
   reservoirRefreshAmount: 200_000, // reset each interval
   reservoirRefreshInterval: 60_000, // 60 000 ms = 1 min
-  maxConcurrent: 2, // limit concurrency
+  maxConcurrent: 10, // increased from 2 to handle larger job weights
   minTime: 200, // at least 200 ms between calls (~5 calls/sec)
+  trackDoneStatus: true, // track job completion status
+  highWater: 10000, // maximum number of jobs that can be queued
 });
 
 // Helper function to estimate token count

@@ -283,14 +283,15 @@ async function constructShopifyUrl(
     "contact-information",
   ];
 
-  // If it's a page and the handle matches a policy page, use the policies path
-  if (
-    type === "pages" &&
-    policyHandles.some((policyHandle) =>
-      handle.toLowerCase().includes(policyHandle)
-    )
-  ) {
-    return `${normalizedUrl}/policies/${handle}`;
+  // If it's a page, check if it's a policy page
+  if (type === "pages") {
+    // Normalize the handle for comparison (convert underscores to hyphens and lowercase)
+    const normalizedHandle = handle.toLowerCase().replace(/_/g, "-");
+
+    // Check if the normalized handle matches any policy handle
+    if (policyHandles.includes(normalizedHandle)) {
+      return `${normalizedUrl}/policies/${handle}`;
+    }
   }
 
   // Construct full URL based on entity type
