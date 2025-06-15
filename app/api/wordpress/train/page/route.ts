@@ -5,6 +5,7 @@ import { OpenAIEmbeddings } from "@langchain/openai";
 import { Client } from "@opensearch-project/opensearch";
 import { cors } from "../../../../../lib/cors";
 import { RecordSparseValues } from "@pinecone-database/pinecone";
+import { v4 as uuidv4 } from "uuid"; // For generating unique IDs
 import OpenAI from "openai";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client"; // Import Prisma namespace
@@ -1033,6 +1034,18 @@ export async function POST(request: NextRequest) {
         where: { id: pageRecordId },
         data: { isTraining: false, trained: false }, // Mark as not trained if no vectors
       });
+
+      return cors(
+        request,
+        NextResponse.json({
+          success: true,
+          message: "WordPress page processed but no vectors were generated",
+          count: 0,
+          wpPageId: id,
+          processedQAs: 0,
+          totalQAsGenerated: 0,
+        })
+      );
     }
 
     return cors(
