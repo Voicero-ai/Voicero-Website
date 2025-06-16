@@ -274,6 +274,50 @@ async function constructShopifyUrl(
     normalizedUrl = normalizedUrl.slice(0, -1);
   }
 
+  // Special handling for policy pages
+  if (
+    type === "pages" &&
+    (handle.includes("privacy") ||
+      handle.includes("terms") ||
+      handle.includes("refund") ||
+      handle.includes("shipping") ||
+      handle.includes("policy") ||
+      handle.includes("policies") ||
+      handle.includes("legal") ||
+      handle.includes("return"))
+  ) {
+    // Replace underscores with hyphens for policy pages
+    const normalizedHandle = handle.replace(/_/g, "-");
+
+    // For privacy_policy or terms_of_service or similar standard policy pages
+    if (
+      normalizedHandle === "privacy-policy" ||
+      normalizedHandle === "terms-of-service" ||
+      normalizedHandle === "refund-policy" ||
+      normalizedHandle === "shipping-policy"
+    ) {
+      return `${normalizedUrl}/policies/${normalizedHandle}`;
+    }
+
+    // For other policy-like pages that might be in either location
+    // First try the policies path
+    const policiesUrl = `${normalizedUrl}/policies/${normalizedHandle}`;
+    try {
+      const response = await fetch(policiesUrl, { method: "HEAD" });
+      if (response.ok) {
+        console.log(`Policy page found at ${policiesUrl}`);
+        return policiesUrl;
+      }
+    } catch (error) {
+      console.log(
+        `Error checking ${policiesUrl}: ${error}, falling back to regular pages path`
+      );
+    }
+
+    // Use /policies/ path as a fallback for policy pages
+    return `${normalizedUrl}/policies/${normalizedHandle}`;
+  }
+
   // Construct full URL based on entity type
   return `${normalizedUrl}/${type}/${handle}`;
 }
