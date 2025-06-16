@@ -185,17 +185,28 @@ async function syncToDatabase(
 
           // Check if content is empty or starts with "["
           if (pageContent === "" || pageContent.startsWith("[")) {
+            // Handle policy pages by replacing underscores with hyphens in URLs
+            let fetchUrl = page.link;
+            if (
+              page.link &&
+              (page.title.toLowerCase().includes("policy") ||
+                page.link.toLowerCase().includes("policy"))
+            ) {
+              fetchUrl = page.link.replace(/_/g, "-");
+              console.log(`Fixed policy URL: ${page.link} -> ${fetchUrl}`);
+            }
+
             console.log(
-              `Fetching content from URL for page: ${page.title} (${page.link})`
+              `Fetching content from URL for page: ${page.title} (${fetchUrl})`
             );
             try {
-              if (page.link) {
+              if (fetchUrl) {
                 // Create a custom HTTPS agent that ignores SSL certificate errors
                 const httpsAgent = new https.Agent({
                   rejectUnauthorized: false,
                 });
 
-                const response = await nodeFetch(page.link, {
+                const response = await nodeFetch(fetchUrl, {
                   agent: httpsAgent,
                 });
 
