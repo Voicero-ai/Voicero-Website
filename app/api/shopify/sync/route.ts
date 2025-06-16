@@ -284,7 +284,9 @@ async function constructShopifyUrl(
       handle.includes("policy") ||
       handle.includes("policies") ||
       handle.includes("legal") ||
-      handle.includes("return"))
+      handle.includes("return") ||
+      handle.includes("contact_information") ||
+      handle === "contact_information")
   ) {
     // Replace underscores with hyphens for policy pages
     const normalizedHandle = handle.replace(/_/g, "-");
@@ -294,7 +296,8 @@ async function constructShopifyUrl(
       normalizedHandle === "privacy-policy" ||
       normalizedHandle === "terms-of-service" ||
       normalizedHandle === "refund-policy" ||
-      normalizedHandle === "shipping-policy"
+      normalizedHandle === "shipping-policy" ||
+      normalizedHandle === "contact-information"
     ) {
       return `${normalizedUrl}/policies/${normalizedHandle}`;
     }
