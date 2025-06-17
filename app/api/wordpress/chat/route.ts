@@ -3170,15 +3170,29 @@ export async function POST(request: NextRequest) {
         (message.toLowerCase().includes("return") &&
           message.toLowerCase().includes("order"))
       ) {
-        formattedResponse.action = "contact";
+        formattedResponse.action = "return_order";
         if (!formattedResponse.action_context) {
           formattedResponse.action_context = {};
         }
-        formattedResponse.action_context.contact_help_form = true;
-        formattedResponse.action_context.message =
-          "User is requesting to return an order.";
+
+        // Extract order ID and email if present in the message
+        const orderIdMatch = message.match(
+          /order\s*(?:id|number)?[:\s#]*(\w+[-\w]*)/i
+        );
+        const emailMatch = message.match(
+          /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i
+        );
+
+        if (orderIdMatch && orderIdMatch[1]) {
+          formattedResponse.action_context.order_id = orderIdMatch[1];
+        }
+
+        if (emailMatch && emailMatch[1]) {
+          formattedResponse.action_context.order_email = emailMatch[1];
+        }
+
         formattedResponse.answer =
-          "I'll connect you with our customer service team who can help process your return request. Could you provide your order number and the reason for your return?";
+          "I'll help you process your return request. Could you provide your order number and the reason for your return?";
       } else if (
         classification?.action_intent === "exchange_order" ||
         (message.toLowerCase().includes("exchange") &&
@@ -3491,7 +3505,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Handle return order continuity by converting it to a contact form
+    // Preserve return_order action continuity
     if (enhancedPreviousContext?.previousAction === "return_order") {
       // Extract any available order information
       const orderIdMatch = message.match(/\b(\d{4,})\b/i);
@@ -3499,31 +3513,29 @@ export async function POST(request: NextRequest) {
         /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/i
       );
 
-      formattedResponse.action = "contact";
+      // Keep the return_order action
+      formattedResponse.action = "return_order";
       if (!formattedResponse.action_context) {
         formattedResponse.action_context = {};
       }
 
-      formattedResponse.action_context.contact_help_form = true;
-
-      // Include any available order information in the message
-      let orderInfo = "";
+      // Include any available order information
       if (orderIdMatch && orderIdMatch[1]) {
-        orderInfo += `Order ID: ${orderIdMatch[1]}. `;
+        formattedResponse.action_context.order_id = orderIdMatch[1];
       } else if (enhancedPreviousContext.answer?.action_context?.order_id) {
-        orderInfo += `Order ID: ${enhancedPreviousContext.answer.action_context.order_id}. `;
+        formattedResponse.action_context.order_id =
+          enhancedPreviousContext.answer.action_context.order_id;
       }
 
       if (emailMatch && emailMatch[1]) {
-        orderInfo += `Email: ${emailMatch[1]}.`;
+        formattedResponse.action_context.order_email = emailMatch[1];
       } else if (enhancedPreviousContext.answer?.action_context?.order_email) {
-        orderInfo += `Email: ${enhancedPreviousContext.answer.action_context.order_email}.`;
+        formattedResponse.action_context.order_email =
+          enhancedPreviousContext.answer.action_context.order_email;
       }
 
-      formattedResponse.action_context.message =
-        `User is requesting to return an order. ${orderInfo}`.trim();
       formattedResponse.answer =
-        "I'll connect you with our customer service team who can help process your return request. Could you provide your order number and the reason for your return?";
+        "I'll help you process your return request. Please provide any additional details about the items you'd like to return.";
     }
 
     // Handle exchange order continuity by converting it to a contact form
@@ -3708,20 +3720,9 @@ export async function POST(request: NextRequest) {
       formattedResponse.action_context = {};
     }
 
-    // Convert return/exchange actions to contact form
-    if (
-      formattedResponse.action === "return_order" ||
-      formattedResponse.action === "exchange_order"
-    ) {
-      const actionTypeMap = {
-        return_order: "return",
-        exchange_order: "exchange",
-      };
-
-      const originalAction =
-        formattedResponse.action as keyof typeof actionTypeMap;
-
-      // Look for return/exchange policy pages
+    // Only convert exchange_order actions to contact form, preserve return_order
+    if (formattedResponse.action === "exchange_order") {
+      // Look for exchange policy pages
       let policyUrl = null;
       const policyType = "return-policy";
       const secondaryPolicyType = "refund-policy";
@@ -3751,16 +3752,26 @@ export async function POST(request: NextRequest) {
       if (policyUrl) {
         formattedResponse.action = "redirect";
         formattedResponse.url = policyUrl;
-        formattedResponse.answer = `I can show you our policy regarding returns and exchanges. Would you like me to connect you with customer service after you review the policy?`;
+        formattedResponse.answer = `I can show you our policy regarding exchanges. Would you like me to connect you with customer service after you review the policy?`;
         formattedResponse.action_context = {};
       } else {
         formattedResponse.action = "contact";
-        formattedResponse.answer = `I'll connect you with our customer service team who can help with your ${actionTypeMap[originalAction]} request. Could you provide your order number and any relevant details?`;
+        formattedResponse.answer = `I'll connect you with our customer service team who can help with your exchange request. Could you provide your order number and any relevant details?`;
         formattedResponse.action_context = {
           contact_help_form: true,
-          message: `User requested to ${actionTypeMap[originalAction]} an order.`,
+          message: `User requested to exchange an order.`,
         };
       }
+    }
+
+    // Make sure return_order responses have appropriate answer text
+    if (formattedResponse.action === "return_order") {
+      if (!formattedResponse.action_context) {
+        formattedResponse.action_context = {};
+      }
+
+      formattedResponse.answer =
+        "I'll help you process your return request. Could you provide your order number and the reason for your return?";
     }
 
     return cors(
