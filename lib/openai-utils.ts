@@ -1,6 +1,5 @@
 import OpenAI from "openai";
 import { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
-import { createThrottledChatCompletion } from "./openai-throttler";
 
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000; // 1 second
@@ -15,8 +14,8 @@ export async function createChatCompletionWithRetry(
 
   while (retryCount < MAX_RETRIES) {
     try {
-      // Use the throttled version instead of direct API call
-      const completion = await createThrottledChatCompletion(openai, params);
+      // Direct API call without throttling
+      const completion = await openai.chat.completions.create(params);
       return completion;
     } catch (error: any) {
       lastError = error;
