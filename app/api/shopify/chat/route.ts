@@ -2105,61 +2105,106 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check query limits based on plan
-    const queryLimit = 1000; // Starter plan limit is 1000 queries
-    if (website.monthlyQueries >= queryLimit && website.plan !== "Enterprise") {
-      // Before returning an error, try to auto-upgrade to Enterprise plan if approaching limit
-      if (website.stripeSubscriptionId) {
-        try {
-          const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-          const enterprisePriceId = process.env.STRIPE_ENTERPRISE_PRICE_ID;
+    // Special handling for Beta plan - just increment queries and skip other checks
+    if (website.plan === "Beta") {
+      // Increment monthly queries
+      await prisma.website.update({
+        where: { id: website.id },
+        data: { monthlyQueries: { increment: 1 } },
+      });
+    } else {
+      // Check query limits based on plan
+      const queryLimit = 1000; // Starter plan limit is 1000 queries
+      if (
+        website.monthlyQueries >= queryLimit &&
+        website.plan !== "Enterprise"
+      ) {
+        // Before returning an error, try to auto-upgrade to Enterprise plan if approaching limit
+        if (website.stripeSubscriptionId) {
+          try {
+            const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+            const enterprisePriceId = process.env.STRIPE_ENTERPRISE_PRICE_ID;
 
-          if (enterprisePriceId) {
-            // Retrieve the subscription
-            const subscription = await stripe.subscriptions.retrieve(
-              website.stripeSubscriptionId
-            );
+            if (enterprisePriceId) {
+              // Retrieve the subscription
+              const subscription = await stripe.subscriptions.retrieve(
+                website.stripeSubscriptionId
+              );
 
-            // Update subscription to Enterprise plan
-            const updated = await stripe.subscriptions.update(
-              website.stripeSubscriptionId,
-              {
-                items: [
-                  {
-                    id: subscription.items.data[0].id,
-                    price: enterprisePriceId,
+              // Update subscription to Enterprise plan
+              const updated = await stripe.subscriptions.update(
+                website.stripeSubscriptionId,
+                {
+                  items: [
+                    {
+                      id: subscription.items.data[0].id,
+                      price: enterprisePriceId,
+                    },
+                  ],
+                  proration_behavior: "none",
+                }
+              );
+
+              // Update website with Enterprise plan and subscription item ID
+              await prisma.website.update({
+                where: { id: website.id },
+                data: {
+                  plan: "Enterprise",
+                  stripeSubscriptionItemId: updated.items.data[0].id,
+                },
+              });
+
+              // Update the website object in memory so rest of request processing works
+              website.plan = "Enterprise";
+              website.stripeSubscriptionItemId = updated.items.data[0].id;
+
+              console.log("Successfully auto-upgraded to Enterprise plan:", {
+                websiteId: website.id,
+                subscriptionId: website.stripeSubscriptionId,
+              });
+
+              // Continue processing since we've upgraded
+            }
+          } catch (error) {
+            console.error("Failed to auto-upgrade to Enterprise plan:", error);
+
+            // If upgrade fails, then return the error response
+            const errorMessage =
+              "You have reached your monthly query limit of 1000. Auto-upgrade to Enterprise plan failed.";
+
+            return cors(
+              request,
+              NextResponse.json(
+                {
+                  response: {
+                    action: "none",
+                    answer: errorMessage,
+                    category: "discovery",
+                    pageId: "error",
+                    pageTitle: "Error",
+                    question: message,
+                    scrollText: "",
+                    subcategory: "content_overview",
+                    type: type,
+                    url: website.url,
                   },
-                ],
-                proration_behavior: "none",
-              }
+                  threadId: threadId || crypto.randomUUID(),
+                  context: {
+                    mainContent: null,
+                    relevantQAs: [],
+                  },
+                  success: false,
+                  error: true,
+                  errorMessage,
+                },
+                { status: 429 }
+              )
             );
-
-            // Update website with Enterprise plan and subscription item ID
-            await prisma.website.update({
-              where: { id: website.id },
-              data: {
-                plan: "Enterprise",
-                stripeSubscriptionItemId: updated.items.data[0].id,
-              },
-            });
-
-            // Update the website object in memory so rest of request processing works
-            website.plan = "Enterprise";
-            website.stripeSubscriptionItemId = updated.items.data[0].id;
-
-            console.log("Successfully auto-upgraded to Enterprise plan:", {
-              websiteId: website.id,
-              subscriptionId: website.stripeSubscriptionId,
-            });
-
-            // Continue processing since we've upgraded
           }
-        } catch (error) {
-          console.error("Failed to auto-upgrade to Enterprise plan:", error);
-
-          // If upgrade fails, then return the error response
+        } else {
+          // If no subscription ID, just return the error
           const errorMessage =
-            "You have reached your monthly query limit of 1000. Auto-upgrade to Enterprise plan failed.";
+            "You have reached your monthly query limit of 1000. Please upgrade to Enterprise plan for unlimited queries.";
 
           return cors(
             request,
@@ -2190,39 +2235,6 @@ export async function POST(request: NextRequest) {
             )
           );
         }
-      } else {
-        // If no subscription ID, just return the error
-        const errorMessage =
-          "You have reached your monthly query limit of 1000. Please upgrade to Enterprise plan for unlimited queries.";
-
-        return cors(
-          request,
-          NextResponse.json(
-            {
-              response: {
-                action: "none",
-                answer: errorMessage,
-                category: "discovery",
-                pageId: "error",
-                pageTitle: "Error",
-                question: message,
-                scrollText: "",
-                subcategory: "content_overview",
-                type: type,
-                url: website.url,
-              },
-              threadId: threadId || crypto.randomUUID(),
-              context: {
-                mainContent: null,
-                relevantQAs: [],
-              },
-              success: false,
-              error: true,
-              errorMessage,
-            },
-            { status: 429 }
-          )
-        );
       }
     }
 
@@ -2426,11 +2438,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Increment monthly queries
-    await prisma.website.update({
-      where: { id: website.id },
-      data: { monthlyQueries: { increment: 1 } },
-    });
+    // Increment monthly queries if not already done for Beta plan
+    if (website.plan !== "Beta") {
+      await prisma.website.update({
+        where: { id: website.id },
+        data: { monthlyQueries: { increment: 1 } },
+      });
+    }
 
     // Check if website is on Enterprise plan or needs upgrade
     if (website.plan === "Enterprise") {

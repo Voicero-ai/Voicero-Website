@@ -18,18 +18,24 @@ export async function DELETE(request: Request) {
       },
     });
 
-    if (website?.active && website.plan.toLowerCase() !== "free") {
-      return new Response(
-        JSON.stringify({
-          error: "Cannot delete website with active subscription",
-          message:
-            "Please cancel the subscription first before deleting this website.",
-        }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+    // Only allow Free and Beta plans to be deleted
+    if (website?.active) {
+      const plan = website.plan || "";
+      // Case insensitive comparison - allow empty, Free or Beta plans
+      const lowerPlan = plan.toLowerCase();
+      if (lowerPlan !== "" && lowerPlan !== "free" && lowerPlan !== "beta") {
+        return new Response(
+          JSON.stringify({
+            error: "Cannot delete website with active subscription",
+            message:
+              "Please cancel the subscription first before deleting this website.",
+          }),
+          {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      }
     }
 
     try {

@@ -6,8 +6,9 @@ import { OpenAIEmbeddings } from "@langchain/openai";
 import { Client } from "@opensearch-project/opensearch";
 import { cors } from "../../../../../lib/cors";
 import { RecordSparseValues } from "@pinecone-database/pinecone";
+import { v4 as uuidv4 } from "uuid"; // For generating unique IDs
 import OpenAI from "openai";
-import crypto from "crypto";
+import crypto from "crypto"; // For generating unique index names
 import { Prisma } from "@prisma/client"; // Import Prisma namespace
 import { createChatCompletionWithRetry } from "../../../../../lib/openai-utils";
 export const dynamic = "force-dynamic";
@@ -1121,6 +1122,18 @@ export async function POST(request: NextRequest) {
         where: { id: productRecordId },
         data: { isTraining: false, trained: false }, // Mark as not trained if no vectors
       });
+
+      return cors(
+        request,
+        NextResponse.json({
+          success: true,
+          message: "WordPress product processed but no vectors were generated",
+          count: 0,
+          wpProductId: id,
+          processedQAs: 0,
+          totalQAsGenerated: 0,
+        })
+      );
     }
 
     return cors(
