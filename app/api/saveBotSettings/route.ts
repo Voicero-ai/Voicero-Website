@@ -56,6 +56,8 @@ export async function POST(request: NextRequest) {
       iconMessage,
       removeHighlight,
       popUpQuestions,
+      allowMultiAIReview,
+      clickMessage,
     } = requestBody;
 
     console.log("Extracted fields:", {
@@ -73,6 +75,9 @@ export async function POST(request: NextRequest) {
             Array.isArray(popUpQuestions) ? popUpQuestions.length : 0
           } items`
         : "Missing",
+      allowMultiAIReview:
+        allowMultiAIReview !== undefined ? "Present" : "Missing",
+      clickMessage: clickMessage ? "Present" : "Missing",
     });
 
     if (!websiteId) {
@@ -130,6 +135,9 @@ export async function POST(request: NextRequest) {
     if (iconMessage !== undefined) updateData.iconMessage = iconMessage;
     if (removeHighlight !== undefined)
       updateData.removeHighlight = removeHighlight;
+    if (allowMultiAIReview !== undefined)
+      updateData.allowMultiAIReview = allowMultiAIReview;
+    if (clickMessage !== undefined) updateData.clickMessage = clickMessage;
 
     console.log("Update data prepared:", updateData);
 
@@ -200,6 +208,8 @@ export async function POST(request: NextRequest) {
           iconVoice: result?.iconVoice,
           iconMessage: result?.iconMessage,
           removeHighlight: result?.removeHighlight,
+          allowMultiAIReview: result?.allowMultiAIReview,
+          clickMessage: result?.clickMessage,
           popUpQuestions: result?.popUpQuestions,
         },
       })

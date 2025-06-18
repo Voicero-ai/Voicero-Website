@@ -161,6 +161,8 @@ export async function GET(request: NextRequest) {
           iconBot: website.iconBot,
           iconVoice: website.iconVoice,
           iconMessage: website.iconMessage,
+          allowMultiAIReview: website.allowMultiAIReview,
+          clickMessage: website.clickMessage,
           _count:
             website.type === "WordPress"
               ? {
