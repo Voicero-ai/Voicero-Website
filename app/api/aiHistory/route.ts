@@ -74,6 +74,7 @@ export async function POST(request: NextRequest) {
     const now = new Date();
     const twoDaysAgo = new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000); // 1 day ago
     const needsNewAnalysis =
+      website.allowMultiAIReview || // Always generate new analysis if allowMultiAIReview is true
       !website.lastAnalysedAt ||
       website.lastAnalysedAt < twoDaysAgo ||
       !website.analysis;
