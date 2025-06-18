@@ -39,6 +39,7 @@ interface Website {
   iconBot: string | null;
   iconVoice: string | null;
   iconMessage: string | null;
+  clickMessage: string | null;
   removeHighlight: boolean | null;
   aiThreads: Thread[];
   accessKeys: Array<{ key: string }>;
@@ -62,6 +63,7 @@ interface Website {
   allowAutoLogout: boolean | null;
   allowAutoLogin: boolean | null;
   allowAutoGenerateImage: boolean | null;
+  allowMultiAIReview: boolean | null;
 }
 
 export async function GET(request: NextRequest) {
@@ -934,6 +936,7 @@ export async function GET(request: NextRequest) {
       iconBot: website.iconBot,
       iconVoice: website.iconVoice,
       iconMessage: website.iconMessage,
+      clickMessage: website.clickMessage,
       customInstructions: website.customInstructions,
       removeHighlight: website.removeHighlight,
       allowAutoCancel: website.allowAutoCancel,
@@ -950,6 +953,7 @@ export async function GET(request: NextRequest) {
       allowAutoLogout: website.allowAutoLogout,
       allowAutoLogin: website.allowAutoLogin,
       allowAutoGenerateImage: website.allowAutoGenerateImage,
+      allowMultiAIReview: website.allowMultiAIReview,
       popUpQuestions: website.popUpQuestions.map((q) => ({
         id: q.id,
         question: q.question,

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
+import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 export const dynamic = "force-dynamic";
@@ -30,8 +30,10 @@ export async function POST(request: NextRequest) {
       allowAutoLogout,
       allowAutoLogin,
       allowAutoGenerateImage,
+      allowMultiAIReview,
     } = data;
 
+    // Validate websiteId
     if (!websiteId) {
       return NextResponse.json(
         { error: "Website ID is required" },
@@ -39,7 +41,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Verify user owns this website
+    // Check if website exists and belongs to the user
     const website = await prisma.website.findFirst({
       where: {
         id: websiteId,
@@ -56,7 +58,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Update the website auto features
+    // Update website with auto features
     const updatedWebsite = await prisma.website.update({
       where: {
         id: websiteId,
@@ -86,6 +88,8 @@ export async function POST(request: NextRequest) {
         allowAutoLogin: allowAutoLogin !== undefined ? allowAutoLogin : true,
         allowAutoGenerateImage:
           allowAutoGenerateImage !== undefined ? allowAutoGenerateImage : true,
+        allowMultiAIReview:
+          allowMultiAIReview !== undefined ? allowMultiAIReview : false,
       },
     });
 
@@ -107,12 +111,13 @@ export async function POST(request: NextRequest) {
         allowAutoLogout: updatedWebsite.allowAutoLogout,
         allowAutoLogin: updatedWebsite.allowAutoLogin,
         allowAutoGenerateImage: updatedWebsite.allowAutoGenerateImage,
+        allowMultiAIReview: updatedWebsite.allowMultiAIReview,
       },
     });
   } catch (error) {
-    console.error("Error updating website auto features:", error);
+    console.error("Error updating auto features:", error);
     return NextResponse.json(
-      { error: "Failed to update website auto features" },
+      { error: "Failed to update auto features" },
       { status: 500 }
     );
   }

@@ -229,9 +229,9 @@ interface WebsiteData {
   customType?: string;
   botName: string;
   customWelcomeMessage: string;
-  iconBot: string;
-  iconVoice: string;
-  iconMessage: string;
+  iconBot: "bot" | "voice" | "message" | string;
+  iconVoice: "microphone" | "waveform" | "speaker" | string;
+  iconMessage: "message" | "document" | "cursor" | string;
   allowAutoCancel?: boolean;
   allowAutoReturn?: boolean;
   allowAutoExchange?: boolean;
@@ -246,6 +246,8 @@ interface WebsiteData {
   allowAutoLogout?: boolean;
   allowAutoLogin?: boolean;
   allowAutoGenerateImage?: boolean;
+  allowMultiAIReview?: boolean;
+  clickMessage?: string;
 }
 
 // Add these interfaces at the top with your other interfaces
@@ -361,6 +363,21 @@ export default function WebsiteSettings() {
           return;
         }
         const data = await res.json();
+        console.log("Website data loaded:", {
+          iconBot: data.iconBot,
+          iconVoice: data.iconVoice,
+          iconMessage: data.iconMessage,
+          clickMessage: data.clickMessage,
+        });
+
+        // Ensure default values for icon fields
+        if (!data.iconBot || data.iconBot === "MessageIcon")
+          data.iconBot = "bot";
+        if (!data.iconVoice || data.iconVoice === "VoiceIcon")
+          data.iconVoice = "microphone";
+        if (!data.iconMessage || data.iconMessage === "MessageIcon")
+          data.iconMessage = "message";
+
         setWebsiteData(data);
       } catch (error) {
         console.error("Error fetching website data:", error);
@@ -1396,6 +1413,89 @@ export default function WebsiteSettings() {
     );
   };
 
+  // Add this function to handle updating the clickMessage field
+  const handleSaveUiSettings = async () => {
+    if (!websiteData) return;
+
+    setIsSavingUiSettings(true);
+    setUiSettingsError(null);
+
+    // Define valid icon values
+    const validBotIcons = ["bot", "voice", "message"];
+    const validVoiceIcons = ["microphone", "waveform", "speaker"];
+    const validMessageIcons = ["message", "document", "cursor"];
+
+    // Ensure we have valid icons
+    const iconBot = validBotIcons.includes(websiteData.iconBot)
+      ? websiteData.iconBot
+      : "bot";
+    const iconVoice = validVoiceIcons.includes(websiteData.iconVoice)
+      ? websiteData.iconVoice
+      : "microphone";
+    const iconMessage = validMessageIcons.includes(websiteData.iconMessage)
+      ? websiteData.iconMessage
+      : "message";
+
+    console.log("Current clickMessage value:", websiteData.clickMessage);
+
+    try {
+      console.log("Sending data:", {
+        websiteId: websiteData.id,
+        botName: websiteData.botName,
+        customWelcomeMessage: websiteData.customWelcomeMessage,
+        iconBot,
+        iconVoice,
+        iconMessage,
+        clickMessage: websiteData.clickMessage,
+      });
+
+      const response = await fetch("/api/websites/update-ui-settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          websiteId: websiteData.id,
+          botName: websiteData.botName,
+          customWelcomeMessage: websiteData.customWelcomeMessage,
+          iconBot,
+          iconVoice,
+          iconMessage,
+          clickMessage: websiteData.clickMessage,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        console.error("API error response:", data);
+        throw new Error(data.error || "Failed to update UI settings");
+      }
+
+      const responseData = await response.json();
+      console.log("API success response:", responseData);
+
+      // Update the local state with the response data
+      setWebsiteData({
+        ...websiteData,
+        botName: responseData.website.botName,
+        customWelcomeMessage: responseData.website.customWelcomeMessage,
+        iconBot: responseData.website.iconBot,
+        iconVoice: responseData.website.iconVoice,
+        iconMessage: responseData.website.iconMessage,
+        clickMessage: responseData.website.clickMessage,
+      } as WebsiteData);
+    } catch (error) {
+      console.error("Error updating UI settings:", error);
+      setUiSettingsError("Failed to save UI settings");
+    } finally {
+      setIsSavingUiSettings(false);
+      // Clear error after 3 seconds if there was one
+      if (uiSettingsError) {
+        setTimeout(() => setUiSettingsError(null), 3000);
+      }
+    }
+  };
+
   return (
     <div className="max-w-4xl mx-auto space-y-8">
       <SetupModal />
@@ -1751,49 +1851,7 @@ export default function WebsiteSettings() {
                 Chat UI Elements
               </h3>
               <button
-                onClick={async () => {
-                  if (!websiteData) return;
-
-                  setIsSavingUiSettings(true);
-                  setUiSettingsError(null);
-
-                  try {
-                    const response = await fetch(
-                      "/api/websites/update-ui-settings",
-                      {
-                        method: "POST",
-                        headers: {
-                          "Content-Type": "application/json",
-                        },
-                        body: JSON.stringify({
-                          websiteId: websiteData.id,
-                          botName: websiteData.botName,
-                          customWelcomeMessage:
-                            websiteData.customWelcomeMessage,
-                          iconBot: websiteData.iconBot,
-                          iconVoice: websiteData.iconVoice,
-                          iconMessage: websiteData.iconMessage,
-                        }),
-                      }
-                    );
-
-                    if (!response.ok) {
-                      const data = await response.json();
-                      throw new Error(
-                        data.error || "Failed to update UI settings"
-                      );
-                    }
-                  } catch (error) {
-                    console.error("Error updating UI settings:", error);
-                    setUiSettingsError("Failed to save UI settings");
-                  } finally {
-                    setIsSavingUiSettings(false);
-                    // Clear error after 3 seconds if there was one
-                    if (uiSettingsError) {
-                      setTimeout(() => setUiSettingsError(null), 3000);
-                    }
-                  }
-                }}
+                onClick={handleSaveUiSettings}
                 disabled={isSavingUiSettings}
                 className="px-3 py-1 text-sm bg-brand-accent text-white rounded-lg 
                           hover:bg-brand-accent/90 transition-colors disabled:opacity-50"
@@ -1867,6 +1925,35 @@ export default function WebsiteSettings() {
               </div>
             </div>
 
+            {/* Add the Click Message field here */}
+            <div className="mb-6">
+              <label
+                htmlFor="clickMessage"
+                className="block text-sm font-medium text-brand-text-secondary mb-2"
+              >
+                Click Message
+              </label>
+              <input
+                id="clickMessage"
+                type="text"
+                value={websiteData?.clickMessage || ""}
+                onChange={(e) => {
+                  // Optimistically update
+                  setWebsiteData({
+                    ...websiteData!,
+                    clickMessage: e.target.value,
+                  } as WebsiteData);
+                }}
+                className="w-full p-2 rounded-lg border border-brand-lavender-light/20 
+                         focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-100 text-black"
+                placeholder="e.g., Need help shopping?"
+              />
+              <p className="text-xs text-brand-text-secondary mt-1">
+                This message will be displayed when the AI suggests clicking on
+                elements.
+              </p>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {/* Bot Icon */}
               <div>
@@ -1896,7 +1983,8 @@ export default function WebsiteSettings() {
                             : "gray-600"
                         }`}
                       >
-                        {SVG_ICONS[icon as keyof typeof SVG_ICONS]}
+                        {SVG_ICONS[icon as keyof typeof SVG_ICONS] ||
+                          SVG_ICONS.bot}
                       </div>
                     </div>
                   ))}
@@ -1934,7 +2022,8 @@ export default function WebsiteSettings() {
                             : "gray-600"
                         }`}
                       >
-                        {SVG_ICONS[icon as keyof typeof SVG_ICONS]}
+                        {SVG_ICONS[icon as keyof typeof SVG_ICONS] ||
+                          SVG_ICONS.voice}
                       </div>
                     </div>
                   ))}
@@ -1972,7 +2061,8 @@ export default function WebsiteSettings() {
                             : "gray-600"
                         }`}
                       >
-                        {SVG_ICONS[icon as keyof typeof SVG_ICONS]}
+                        {SVG_ICONS[icon as keyof typeof SVG_ICONS] ||
+                          SVG_ICONS.message}
                       </div>
                     </div>
                   ))}
@@ -2314,6 +2404,7 @@ export default function WebsiteSettings() {
                           allowAutoLogin: websiteData.allowAutoLogin,
                           allowAutoGenerateImage:
                             websiteData.allowAutoGenerateImage,
+                          allowMultiAIReview: websiteData.allowMultiAIReview,
                         }),
                       }
                     );
@@ -2364,6 +2455,32 @@ export default function WebsiteSettings() {
                 </p>
 
                 <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
+                    <div>
+                      <h5 className="font-medium">Multiple AI Reviews</h5>
+                      <p className="text-sm text-brand-text-secondary">
+                        Allow users to see multiple AI summaries per day instead
+                        of just one
+                      </p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="sr-only peer"
+                        checked={websiteData?.allowMultiAIReview ?? false}
+                        onChange={() => {
+                          setWebsiteData({
+                            ...websiteData!,
+                            allowMultiAIReview: !(
+                              websiteData?.allowMultiAIReview ?? false
+                            ),
+                          } as WebsiteData);
+                        }}
+                      />
+                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
+                    </label>
+                  </div>
+
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
                       <h5 className="font-medium">Auto Redirect</h5>

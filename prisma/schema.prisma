@@ -54,8 +54,6 @@ model User {
 model Website {
   id                       String                     @id @default(uuid())
   url                      String
-  stripeSubscriptionId     String?                    @unique
-  stripeSubscriptionItemId String?
   name                     String?
   userId                   String
   type                     String
@@ -94,7 +92,11 @@ model Website {
   allowAutoTrackOrder      Boolean                    @default(true)
   allowAutoLogout          Boolean                    @default(true)
   allowAutoLogin           Boolean                    @default(true)
+  allowMultiAIReview       Boolean                    @default(false)
   allowAutoGenerateImage   Boolean                    @default(true)
+  stripeSubscriptionId     String?                    @unique
+  stripeSubscriptionItemId String?
+  clickMessage             String?                    @default("")
   popUpQuestions           PopUpQuestion[]
   accessKeys               AccessKey[]
   user                     User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -396,11 +398,11 @@ model ShopifyProduct {
   bodyHtml              String?                 @db.Text
   hasOnlyDefaultVariant Boolean?
   hasOutOfStockVariants Boolean?
-  priceRange            Json?                   @default(dbgenerated("(_utf8mb4\\'{}\\')"))
+  priceRange            Json?
   publishedAt           DateTime?
-  seo                   Json?                   @default(dbgenerated("(_utf8mb4\\'{}\\')"))
+  seo                   Json?
   status                String?
-  tags                  Json?                   @default(dbgenerated("(_utf8mb4\\'[]\\')"))
+  tags                  Json?
   totalInventory        Int?
   tracksInventory       Boolean?
   scrapedHtml           String?                 @db.LongText
@@ -523,7 +525,7 @@ model ShopifyBlog {
   articlesCount  Int?
   commentPolicy  String?
   feed           Json?
-  tags           Json?              @default(dbgenerated("(_utf8mb4\\'[]\\')"))
+  tags           Json?
   templateSuffix String?
   website        Website            @relation(fields: [websiteId], references: [id])
   posts          ShopifyBlogPost[]
@@ -549,7 +551,7 @@ model ShopifyBlogPost {
   isPublished    Boolean?
   publishedAt    DateTime?
   summary        String?            @db.Text
-  tags           Json?              @default(dbgenerated("(_utf8mb4\\'[]\\')"))
+  tags           Json?
   templateSuffix String?
   scrapedHtml    String?            @db.LongText
   trained        Boolean?           @default(false)
@@ -622,9 +624,9 @@ model Session {
   autoMic           Boolean          @default(false)
   textWelcome       Boolean          @default(false)
   voiceWelcome      Boolean          @default(false)
+  shopifyCustomerId String?
   website           Website          @relation(fields: [websiteId], references: [id], onDelete: Cascade)
   threads           AiThread[]
-  shopifyCustomerId String?
   customer          ShopifyCustomer? @relation(fields: [shopifyCustomerId], references: [id])
 
   @@index([websiteId])
@@ -680,12 +682,12 @@ model ShopifyCollection {
   handle      String?
   title       String?
   description String?          @db.Text
-  ruleSet     Json?            @default(dbgenerated("(_utf8mb4\\'{}\\')"))
+  ruleSet     Json?
   sortOrder   String?
   updatedAt   DateTime?
   createdAt   DateTime         @default(now())
   websiteId   String
-  image       Json?            @default(dbgenerated("(_utf8mb4\\'{}\\')"))
+  image       Json?
   shopifyId   BigInt
   scrapedHtml String?          @db.LongText
   trained     Boolean?         @default(false)
@@ -799,7 +801,7 @@ model ShopifyCustomer {
   lastName         String?
   phone            String?
   acceptsMarketing Boolean?
-  tags             Json?                    @default(dbgenerated("(_utf8mb4\\'[]\\')"))
+  tags             Json?
   ordersCount      Int?
   totalSpent       Float?
   lastOrderId      String?
@@ -807,8 +809,8 @@ model ShopifyCustomer {
   createdAt        DateTime                 @default(now())
   updatedAt        DateTime                 @updatedAt
   websiteId        String
-  website          Website                  @relation(fields: [websiteId], references: [id])
   customerData     String?                  @db.LongText
+  website          Website                  @relation(fields: [websiteId], references: [id])
   addresses        ShopifyCustomerAddress[]
   orders           ShopifyCustomerOrder[]
   defaultAddress   ShopifyCustomerAddress?  @relation("DefaultAddress", fields: [defaultAddressId], references: [id], onDelete: NoAction, onUpdate: NoAction)

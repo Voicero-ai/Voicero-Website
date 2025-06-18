@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
       iconMessage,
       customInstructions,
       color,
+      clickMessage,
     } = data;
 
     if (!websiteId) {
@@ -85,6 +86,7 @@ export async function POST(request: NextRequest) {
         iconMessage: iconMessage || "message",
         customInstructions,
         color,
+        clickMessage,
       },
     });
 
@@ -97,6 +99,7 @@ export async function POST(request: NextRequest) {
         iconBot: updatedWebsite.iconBot,
         iconVoice: updatedWebsite.iconVoice,
         iconMessage: updatedWebsite.iconMessage,
+        clickMessage: updatedWebsite.clickMessage,
       },
     });
   } catch (error) {
