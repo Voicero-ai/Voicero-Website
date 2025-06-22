@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { cors } from "@/lib/cors";
 
 export const dynamic = "force-dynamic";
 
@@ -37,29 +38,96 @@ interface Order {
   };
 }
 
+interface OrderEdge {
+  node: Order;
+  cursor?: string;
+}
+
+export async function OPTIONS(request: NextRequest) {
+  return cors(request, new NextResponse(null, { status: 204 }));
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Get the authorization header
+    const authHeader = request.headers.get("authorization");
+
+    if (!authHeader?.startsWith("Bearer ")) {
+      return cors(
+        request,
+        NextResponse.json(
+          { error: "Missing or invalid authorization header" },
+          { status: 401 }
+        )
+      );
     }
 
-    const { orders, websiteId } = await request.json();
+    // Extract the access key
+    const accessKey = authHeader.split(" ")[1];
 
-    if (!Array.isArray(orders) || !websiteId) {
-      return NextResponse.json({ error: "Invalid input" }, { status: 400 });
+    if (!accessKey) {
+      return cors(
+        request,
+        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+      );
     }
 
-    // Check if the website exists and belongs to the user
-    const website = await prisma.website.findFirst({
+    // Find the website ID using the access key
+    const accessKeyRecord = await prisma.accessKey.findUnique({
+      where: {
+        key: accessKey,
+      },
+      select: {
+        websiteId: true,
+      },
+    });
+
+    if (!accessKeyRecord) {
+      return cors(
+        request,
+        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+      );
+    }
+
+    const websiteId = accessKeyRecord.websiteId;
+    const body = await request.json();
+    console.log("Received body:", JSON.stringify(body, null, 2));
+
+    // Handle GraphQL-style nested structure
+    let ordersData: Order[] = [];
+    if (body.orders && body.orders.edges && Array.isArray(body.orders.edges)) {
+      ordersData = body.orders.edges.map((edge: OrderEdge) => edge.node);
+    } else if (Array.isArray(body.orders)) {
+      ordersData = body.orders;
+    } else {
+      return cors(
+        request,
+        NextResponse.json(
+          { error: "Invalid orders data structure" },
+          { status: 400 }
+        )
+      );
+    }
+
+    if (ordersData.length === 0) {
+      return cors(
+        request,
+        NextResponse.json({ success: true, message: "No orders to process" })
+      );
+    }
+
+    // Check if the website exists
+    const website = await prisma.website.findUnique({
       where: {
         id: websiteId,
-        userId: session.user.id,
       },
     });
 
     if (!website) {
-      return NextResponse.json({ error: "Website not found" }, { status: 404 });
+      return cors(
+        request,
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
+      );
     }
 
     // Get current date minus 30 days
@@ -83,10 +151,10 @@ export async function POST(request: NextRequest) {
     });
 
     // Track new shopifyIds to determine which ones to delete
-    const currentShopifyIds = orders.map((order) => order.id);
+    const currentShopifyIds = ordersData.map((order) => order.id);
 
     // Process all incoming orders
-    const processOrders = orders.map(async (order: Order) => {
+    const processOrders = ordersData.map(async (order: Order) => {
       const existingOrder = existingOrdersMap.get(order.id);
 
       // Create or update order
@@ -133,18 +201,20 @@ export async function POST(request: NextRequest) {
 
       // Create line items for the order
       if (order.lineItems?.edges) {
-        const lineItemPromises = order.lineItems.edges.map(async (edge) => {
-          const item = edge.node;
-          return prisma.shopifyOrderLineItem.create({
-            data: {
-              orderId: createdOrUpdatedOrder.id,
-              name: item.name || null,
-              quantity: item.quantity || null,
-              variantTitle: item.variant?.title || null,
-              variantPrice: item.variant?.price || null,
-            },
-          });
-        });
+        const lineItemPromises = order.lineItems.edges.map(
+          async (edge: { node: OrderLineItem }) => {
+            const item = edge.node;
+            return prisma.shopifyOrderLineItem.create({
+              data: {
+                orderId: createdOrUpdatedOrder.id,
+                name: item.name || null,
+                quantity: item.quantity || null,
+                variantTitle: item.variant?.title || null,
+                variantPrice: item.variant?.price || null,
+              },
+            });
+          }
+        );
 
         await Promise.all(lineItemPromises);
       }
@@ -171,12 +241,12 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return NextResponse.json({ success: true });
+    return cors(request, NextResponse.json({ success: true }));
   } catch (error) {
     console.error("Error updating orders:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
+    return cors(
+      request,
+      NextResponse.json({ error: "Internal server error" }, { status: 500 })
     );
   }
 }

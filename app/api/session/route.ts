@@ -15,7 +15,7 @@ export async function OPTIONS(request: NextRequest) {
 export async function POST(request: NextRequest) {
   // Create a brand-new session (with a thread) when given a websiteId
   try {
-    const { websiteId, shopifyId } = await request.json();
+    const { websiteId, shopifyId, pageUrl } = await request.json();
     if (!websiteId) {
       return cors(
         request,
@@ -71,6 +71,16 @@ export async function POST(request: NextRequest) {
         ...(shopifyCustomerId ? { customer: true } : {}),
       },
     });
+
+    // Create URL movement record if pageUrl is provided
+    if (pageUrl) {
+      await prisma.urlMovement.create({
+        data: {
+          url: pageUrl,
+          sessionId: session.id,
+        },
+      });
+    }
 
     // Return both session and its initial thread
     const thread = session.threads[0];
