@@ -114,7 +114,17 @@ export async function POST(request: NextRequest) {
       );
 
       // Get the 10 most recent filtered threads
-      const recentThreads = filteredThreads.slice(0, 10);
+      let recentThreads = filteredThreads.slice(0, 10);
+
+      // If we have fewer than 10 threads, add threads with fewer messages
+      if (recentThreads.length < 10) {
+        const remainingThreads = aiThreads
+          .filter((thread) => thread._count.messages < 4)
+          .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
+          .slice(0, 10 - recentThreads.length);
+
+        recentThreads = [...recentThreads, ...remainingThreads];
+      }
 
       // Format threads with all their messages
       const formattedThreads = recentThreads.map((thread) => ({
@@ -129,6 +139,9 @@ export async function POST(request: NextRequest) {
           content: msg.content,
           type: msg.type,
           createdAt: msg.createdAt,
+          threadId: msg.threadId,
+          pageUrl: msg.pageUrl,
+          scrollToText: msg.scrollToText,
         })),
         messageCount: thread._count.messages,
         customers: thread.sessions
@@ -181,7 +194,17 @@ export async function POST(request: NextRequest) {
     );
 
     // Get the 10 most recent filtered threads
-    const recentThreads = filteredThreads.slice(0, 10);
+    let recentThreads = filteredThreads.slice(0, 10);
+
+    // If we have fewer than 10 threads, add threads with fewer messages
+    if (recentThreads.length < 10) {
+      const remainingThreads = aiThreads
+        .filter((thread) => thread._count.messages < 4)
+        .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
+        .slice(0, 10 - recentThreads.length);
+
+      recentThreads = [...recentThreads, ...remainingThreads];
+    }
 
     // Format threads with all their messages
     const formattedThreads = recentThreads.map((thread) => ({
@@ -196,6 +219,9 @@ export async function POST(request: NextRequest) {
         content: msg.content,
         type: msg.type,
         createdAt: msg.createdAt,
+        threadId: msg.threadId,
+        pageUrl: msg.pageUrl,
+        scrollToText: msg.scrollToText,
       })),
       messageCount: thread._count.messages,
       customers: thread.sessions
