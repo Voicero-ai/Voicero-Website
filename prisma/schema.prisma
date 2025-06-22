@@ -124,6 +124,7 @@ model Website {
   Session                  Session[]
   customPages              Page[]
   Contact                  Contact[]
+  shopifyOrders            ShopifyOrder[]
 
   @@unique([userId, url, type])
   @@index([userId])
@@ -628,6 +629,7 @@ model Session {
   website           Website          @relation(fields: [websiteId], references: [id], onDelete: Cascade)
   threads           AiThread[]
   customer          ShopifyCustomer? @relation(fields: [shopifyCustomerId], references: [id])
+  urlMovements      UrlMovement[]
 
   @@index([websiteId])
   @@index([shopifyCustomerId])
@@ -902,4 +904,45 @@ model ShopifyCustomerShippingAddress {
   createdAt DateTime             @default(now())
   updatedAt DateTime             @updatedAt
   order     ShopifyCustomerOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model UrlMovement {
+  id        String   @id @default(uuid())
+  url       String
+  timestamp DateTime @default(now())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+}
+
+model ShopifyOrder {
+  id                       String                 @id @default(uuid())
+  shopifyId                String
+  name                     String
+  createdAt                DateTime
+  displayFulfillmentStatus String?
+  websiteId                String
+  totalPriceAmount         String?
+  totalPriceCurrencyCode   String?
+  customerEmail            String?
+  customerFirstName        String?
+  customerLastName         String?
+  website                  Website                @relation(fields: [websiteId], references: [id], onDelete: Cascade)
+  lineItems                ShopifyOrderLineItem[]
+
+  @@unique([websiteId, shopifyId])
+  @@index([websiteId])
+}
+
+model ShopifyOrderLineItem {
+  id           String       @id @default(uuid())
+  orderId      String
+  name         String?
+  quantity     Int?
+  variantTitle String?
+  variantPrice String?
+  order        ShopifyOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
 }
