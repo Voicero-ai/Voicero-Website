@@ -15,7 +15,34 @@ export async function OPTIONS(request: NextRequest) {
 export async function POST(request: NextRequest) {
   // Create a brand-new session (with a thread) when given a websiteId
   try {
-    const { websiteId, shopifyId, pageUrl } = await request.json();
+    console.log("Session POST received at:", new Date().toISOString());
+
+    // Clone the request before reading it so we can log the raw body
+    const clonedRequest = request.clone();
+    let rawBody = "";
+    try {
+      rawBody = await clonedRequest.text();
+      console.log("Raw request body:", rawBody);
+    } catch (e) {
+      console.error("Error reading raw body:", e);
+    }
+
+    let requestBody;
+    try {
+      requestBody = await request.json();
+      console.log("Parsed request body:", JSON.stringify(requestBody, null, 2));
+    } catch (e) {
+      console.error("Error parsing JSON body:", e);
+      return cors(
+        request,
+        NextResponse.json(
+          { error: "Invalid JSON in request body" },
+          { status: 400 }
+        )
+      );
+    }
+
+    const { websiteId, shopifyId, pageUrl, shopifyCustomerId } = requestBody;
     if (!websiteId) {
       return cors(
         request,
@@ -24,8 +51,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if there's a Shopify customer with this ID
-    let shopifyCustomerId = null;
-    if (shopifyId) {
+    let finalShopifyCustomerId = shopifyCustomerId || null;
+    if (shopifyId && !shopifyCustomerId) {
       console.log(`Looking for Shopify customer with ID: ${shopifyId}`);
       const shopifyCustomer = await prisma.shopifyCustomer.findFirst({
         where: {
@@ -36,16 +63,24 @@ export async function POST(request: NextRequest) {
 
       if (shopifyCustomer) {
         console.log(`Found Shopify customer: ${shopifyCustomer.id}`);
-        shopifyCustomerId = shopifyCustomer.id;
+        finalShopifyCustomerId = shopifyCustomer.id;
       } else {
         console.log(`No Shopify customer found with ID: ${shopifyId}`);
       }
     }
 
+    // Log pageUrl if present
+    if (pageUrl) {
+      console.log(`Page URL received in POST: ${pageUrl}`);
+    } else {
+      console.log("No pageUrl provided in POST request");
+    }
+
+    console.log(`Creating new session for website ${websiteId}...`);
     const session = await prisma.session.create({
       data: {
         websiteId,
-        shopifyCustomerId,
+        shopifyCustomerId: finalShopifyCustomerId,
         coreOpen: false,
         chooserOpen: false,
         textOpen: false,
@@ -68,18 +103,50 @@ export async function POST(request: NextRequest) {
           include: { messages: true },
           orderBy: { lastMessageAt: "desc" },
         },
-        ...(shopifyCustomerId ? { customer: true } : {}),
+        urlMovements: true,
+        ...(finalShopifyCustomerId ? { customer: true } : {}),
       },
     });
+    console.log(`Session created with ID: ${session.id}`);
 
     // Create URL movement record if pageUrl is provided
     if (pageUrl) {
-      await prisma.urlMovement.create({
-        data: {
-          url: pageUrl,
-          sessionId: session.id,
-        },
-      });
+      console.log(
+        `Attempting to create UrlMovement record for session ${session.id} with url: ${pageUrl}`
+      );
+      try {
+        const urlMovement = await prisma.urlMovement.create({
+          data: {
+            url: pageUrl,
+            sessionId: session.id,
+          },
+        });
+        console.log(
+          `Successfully created UrlMovement record with ID: ${urlMovement.id}`
+        );
+      } catch (error) {
+        console.error(`Failed to create UrlMovement record:`, error);
+      }
+    }
+    // Also try using referer header as fallback
+    else {
+      const refererUrl = request.headers.get("referer");
+      if (refererUrl) {
+        console.log(`Using referer URL for UrlMovement: ${refererUrl}`);
+        try {
+          const urlMovement = await prisma.urlMovement.create({
+            data: {
+              url: refererUrl,
+              sessionId: session.id,
+            },
+          });
+          console.log(
+            `Successfully created UrlMovement record with ID: ${urlMovement.id}`
+          );
+        } catch (error) {
+          console.error(`Failed to create UrlMovement from referer:`, error);
+        }
+      }
     }
 
     // Return both session and its initial thread
@@ -89,7 +156,8 @@ export async function POST(request: NextRequest) {
       NextResponse.json({
         session,
         thread,
-        shopifyCustomerLinked: !!shopifyCustomerId,
+        shopifyCustomerLinked: !!finalShopifyCustomerId,
+        urlMovements: session.urlMovements,
       })
     );
   } catch (error) {
@@ -104,10 +172,41 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   // Support fetching by sessionId OR by websiteId (most recent session)
   try {
+    console.log("Session GET received at:", new Date().toISOString());
+
     const { searchParams } = new URL(request.url);
     const sessionId = searchParams.get("sessionId");
     const websiteId = searchParams.get("websiteId");
     const shopifyId = searchParams.get("shopifyId");
+    const pageUrl = searchParams.get("pageUrl");
+
+    console.log("Session GET request params:", {
+      sessionId,
+      websiteId,
+      shopifyId,
+      pageUrl,
+      url: request.url,
+    });
+
+    // Track URL if we have both sessionId and pageUrl
+    if (sessionId && pageUrl) {
+      console.log(
+        `Creating URL movement record for session ${sessionId} with pageUrl: ${pageUrl}`
+      );
+      try {
+        const urlMovement = await prisma.urlMovement.create({
+          data: {
+            url: pageUrl,
+            sessionId: sessionId,
+          },
+        });
+        console.log(
+          `Successfully created UrlMovement with ID: ${urlMovement.id}`
+        );
+      } catch (error) {
+        console.error("Failed to create URL movement record:", error);
+      }
+    }
 
     // If shopifyId is provided, try to find the most recent session for that customer
     if (shopifyId && websiteId) {
@@ -136,6 +235,7 @@ export async function GET(request: NextRequest) {
               orderBy: { lastMessageAt: "desc" },
             },
             customer: true,
+            urlMovements: true,
           },
           orderBy: { createdAt: "desc" },
         });
@@ -149,6 +249,7 @@ export async function GET(request: NextRequest) {
             NextResponse.json({
               session: customerSession,
               shopifyCustomerLinked: true,
+              urlMovements: customerSession.urlMovements,
             })
           );
         }
@@ -170,6 +271,7 @@ export async function GET(request: NextRequest) {
             orderBy: { lastMessageAt: "desc" },
           },
           customer: true,
+          urlMovements: true,
         },
       });
 
@@ -184,6 +286,7 @@ export async function GET(request: NextRequest) {
         NextResponse.json({
           session,
           shopifyCustomerLinked: !!session.shopifyCustomerId,
+          urlMovements: session.urlMovements,
         })
       );
     }
@@ -207,6 +310,7 @@ export async function GET(request: NextRequest) {
           orderBy: { lastMessageAt: "desc" },
         },
         customer: true,
+        urlMovements: true,
       },
       orderBy: { createdAt: "desc" },
     });
@@ -223,6 +327,7 @@ export async function GET(request: NextRequest) {
       NextResponse.json({
         session,
         shopifyCustomerLinked: !!session.shopifyCustomerId,
+        urlMovements: session.urlMovements,
       })
     );
   } catch (error) {

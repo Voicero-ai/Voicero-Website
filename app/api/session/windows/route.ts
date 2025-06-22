@@ -28,6 +28,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Track URL movement from referer header
+    const refererUrl = req.headers.get("referer");
+    if (refererUrl) {
+      console.log(
+        `Session windows: tracking referer URL ${refererUrl} for session ${sessionId}`
+      );
+      try {
+        const urlMovement = await prisma.urlMovement.create({
+          data: {
+            url: refererUrl,
+            sessionId: sessionId,
+          },
+        });
+        console.log(
+          `Successfully created UrlMovement with ID: ${urlMovement.id}`
+        );
+      } catch (error) {
+        console.error("Failed to create URL movement record:", error);
+      }
+    }
+
     const currentSession = await prisma.session.findUnique({
       where: { id: sessionId },
       select: {
