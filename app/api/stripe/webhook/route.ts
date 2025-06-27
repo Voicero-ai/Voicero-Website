@@ -21,6 +21,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    // Verify that the request is from Stripe
     const body = await request.text();
     const headersList = await headers();
     const signature = headersList.get("stripe-signature");
@@ -37,18 +38,12 @@ export async function POST(request: Request) {
     try {
       event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
     } catch (err: any) {
-      console.error("Webhook signature verification failed:", err.message);
-      return NextResponse.json(
-        { error: "Webhook signature verification failed" },
-        { status: 400 }
-      );
+      console.error(`⚠️ Webhook signature verification failed: ${err.message}`);
+      return NextResponse.json({ error: err.message }, { status: 400 });
     }
 
-    console.log("Received Stripe webhook event:", {
-      type: event.type,
-      id: event.id,
-      object: event.object,
-    });
+    // Process the event
+    console.log(`Received event: ${event.type}`);
 
     switch (event.type) {
       case "checkout.session.completed": {
@@ -89,7 +84,7 @@ export async function POST(request: Request) {
           priceId === process.env.STRIPE_ENTERPRISE_PRICE_ID;
 
         const plan = isEnterprisePlan ? "Enterprise" : "Starter";
-        const queryLimit = isEnterprisePlan ? 0 : 1000; // 0 means unlimited for Enterprise
+        const queryLimit = isEnterprisePlan ? 0 : 100; // Now 100 for Starter plan (0 means unlimited for Enterprise)
 
         // Don't reset monthly queries - keep them for analytics
         await prisma.website.update({
@@ -97,68 +92,40 @@ export async function POST(request: Request) {
           data: {
             plan,
             stripeSubscriptionId: session.subscription as string,
+            stripeSubscriptionItemId: subscription.items.data[0].id, // Always store the subscription item ID
             queryLimit,
             renewsOn: new Date(subscription.current_period_end * 1000),
             // Don't reset monthly queries to preserve usage statistics
           },
         });
 
-        console.log("Successfully updated website with new subscription:", {
-          websiteId,
-          plan,
-          subscriptionId: session.subscription,
-        });
+        console.log(`Successfully updated to ${plan} plan`);
+
         break;
       }
 
-      case "customer.subscription.deleted":
+      // Handle other webhook events below
       case "customer.subscription.updated": {
         const subscription = event.data.object;
-        console.log("Processing subscription event:", {
-          id: subscription.id,
-          status: subscription.status,
-          customerId: subscription.customer,
-        });
 
-        // Find all websites to debug
-        const allWebsites = await prisma.website.findMany({
-          where: {
-            NOT: {
-              stripeSubscriptionId: null,
-            },
-          },
-          select: {
-            id: true,
-            stripeSubscriptionId: true,
-            plan: true,
-          },
-        });
-
-        console.log("All websites with stripe subscriptions:", allWebsites);
-
-        // Find website with this subscription
+        // Find the website using subscription ID
         const website = await prisma.website.findFirst({
           where: { stripeSubscriptionId: subscription.id },
           select: {
             id: true,
-            stripeSubscriptionId: true,
             plan: true,
             monthlyQueries: true,
+            stripeSubscriptionId: true,
           },
         });
 
         if (!website) {
-          console.error("No website found for subscription:", {
-            subscriptionId: subscription.id,
-            customerId: subscription.customer,
-            allWebsiteIds: allWebsites.map((w) => ({
-              id: w.id,
-              stripeSubscriptionId: w.stripeSubscriptionId,
-            })),
-          });
-          // Return 200 even if website not found, as per Stripe's recommendation
+          console.error(
+            "No website found with subscription ID:",
+            subscription.id
+          );
           return NextResponse.json(
-            { error: "Website not found" },
+            { error: "No website found" },
             { status: 200 }
           );
         }
@@ -199,6 +166,7 @@ export async function POST(request: Request) {
             data: {
               plan: "",
               stripeSubscriptionId: null,
+              stripeSubscriptionItemId: null,
               renewsOn: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Set 30 days from now
               queryLimit: 0, // Reset to free tier limit
               monthlyQueries: usedQueries, // Maintain their query usage up to the free tier limit
@@ -212,7 +180,7 @@ export async function POST(request: Request) {
             (item) => item.price.id === process.env.STRIPE_ENTERPRISE_PRICE_ID
           );
 
-          const queryLimit = isEnterprisePlan ? 0 : 1000; // 0 means unlimited for Enterprise
+          const queryLimit = isEnterprisePlan ? 0 : 100; // Now 100 for Starter plan (0 means unlimited for Enterprise)
           const plan = isEnterprisePlan ? "Enterprise" : "Starter";
 
           console.log(
@@ -224,6 +192,7 @@ export async function POST(request: Request) {
             data: {
               plan,
               queryLimit,
+              stripeSubscriptionItemId: subscription.items.data[0].id, // Always store the subscription item ID
               renewsOn: new Date(subscription.current_period_end * 1000),
               // Don't reset monthly queries to preserve usage statistics
             },

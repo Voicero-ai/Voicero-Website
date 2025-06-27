@@ -2114,7 +2114,7 @@ export async function POST(request: NextRequest) {
       });
     } else {
       // Check query limits based on plan
-      const queryLimit = 1000; // Starter plan limit is 1000 queries
+      const queryLimit = 100; // Starter plan limit is now 100 queries
       if (
         website.monthlyQueries >= queryLimit &&
         website.plan !== "Enterprise"

@@ -405,6 +405,44 @@ export default function WebsiteSettings() {
     }
   }, [websiteData]);
 
+  // Add a useEffect to refresh data when returning from Stripe with upgraded=true parameter
+  useEffect(() => {
+    const upgraded = searchParams.get("upgraded");
+    const canceled = searchParams.get("upgrade_canceled");
+
+    if (websiteId && upgraded === "true") {
+      // Refresh the website data after plan upgrade
+      const refreshData = async () => {
+        setIsLoading(true);
+        try {
+          const res = await fetch(`/api/websites/get?id=${websiteId}`, {
+            method: "GET",
+            headers: {
+              "Cache-Control": "no-cache",
+            },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            setWebsiteData(data);
+            // Close the plan modal if it was open
+            setShowPlanModal(false);
+            // Show success message
+            alert("Plan upgraded successfully!");
+          }
+        } catch (error) {
+          console.error("Error refreshing website data:", error);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      refreshData();
+    } else if (canceled === "true") {
+      // Handle canceled upgrade if needed
+      setShowPlanModal(false);
+    }
+  }, [searchParams, websiteId]);
+
   // 2) Handle sync
   const handleSync = async () => {
     if (!websiteData) return;
@@ -1993,84 +2031,6 @@ export default function WebsiteSettings() {
                   This icon represents your chatbot in the UI.
                 </p>
               </div>
-
-              {/* Voice Icon */}
-              <div>
-                <label className="block text-sm font-medium text-brand-text-secondary mb-2">
-                  Voice Icon
-                </label>
-                <div className="flex flex-wrap gap-3">
-                  {["microphone", "waveform", "speaker"].map((icon) => (
-                    <div
-                      key={`voice-${icon}`}
-                      onClick={() => {
-                        setWebsiteData({
-                          ...websiteData!,
-                          iconVoice: icon,
-                        } as WebsiteData);
-                      }}
-                      className={`p-3 border ${
-                        websiteData?.iconVoice === icon
-                          ? "border-brand-accent bg-brand-accent/10"
-                          : "border-gray-200 hover:border-brand-accent/50"
-                      } rounded-lg cursor-pointer transition-colors flex items-center justify-center`}
-                    >
-                      <div
-                        className={`text-${
-                          websiteData?.iconVoice === icon
-                            ? "brand-accent"
-                            : "gray-600"
-                        }`}
-                      >
-                        {SVG_ICONS[icon as keyof typeof SVG_ICONS] ||
-                          SVG_ICONS.voice}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-brand-text-secondary mt-1">
-                  This icon is used for voice chat functionality.
-                </p>
-              </div>
-
-              {/* Message Icon */}
-              <div>
-                <label className="block text-sm font-medium text-brand-text-secondary mb-2">
-                  Message Icon
-                </label>
-                <div className="flex flex-wrap gap-3">
-                  {["message", "document", "cursor"].map((icon) => (
-                    <div
-                      key={`message-${icon}`}
-                      onClick={() => {
-                        setWebsiteData({
-                          ...websiteData!,
-                          iconMessage: icon,
-                        } as WebsiteData);
-                      }}
-                      className={`p-3 border ${
-                        websiteData?.iconMessage === icon
-                          ? "border-brand-accent bg-brand-accent/10"
-                          : "border-gray-200 hover:border-brand-accent/50"
-                      } rounded-lg cursor-pointer transition-colors flex items-center justify-center`}
-                    >
-                      <div
-                        className={`text-${
-                          websiteData?.iconMessage === icon
-                            ? "brand-accent"
-                            : "gray-600"
-                        }`}
-                      >
-                        {SVG_ICONS[icon as keyof typeof SVG_ICONS] ||
-                          SVG_ICONS.message}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-brand-text-secondary mt-1">
-                  This icon is used for text chat functionality.
-                </p>
-              </div>
             </div>
 
             {uiSettingsError && (
@@ -2934,41 +2894,6 @@ export default function WebsiteSettings() {
         </div>
       </div>
 
-      {/* Brand Color */}
-      <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 p-6">
-        <h2 className="text-xl font-semibold text-brand-text-primary mb-4">
-          Brand Color
-        </h2>
-        <div className="flex items-center gap-4">
-          <div className="relative">
-            <input
-              type="color"
-              value={websiteData?.color || "#6366F1"}
-              onChange={(e) => handleColorChange(e.target.value)}
-              className="w-12 h-12 rounded-lg cursor-pointer"
-              disabled={isSavingColor}
-            />
-            {isSavingColor && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/10 rounded-lg">
-                <div className="w-4 h-4 border-2 border-brand-accent border-t-transparent rounded-full animate-spin"></div>
-              </div>
-            )}
-          </div>
-          <div className="flex-1">
-            <p className="text-sm text-brand-text-secondary">
-              Choose a color to represent your website. This color will be used
-              throughout the interface.
-            </p>
-            {colorSaveError && (
-              <p className="text-sm text-red-500 mt-1">{colorSaveError}</p>
-            )}
-            {isSavingColor && (
-              <p className="text-sm text-brand-accent mt-1">Saving...</p>
-            )}
-          </div>
-        </div>
-      </div>
-
       {/* Content Tabs */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 overflow-hidden">
         <div className="border-b border-brand-lavender-light/20">
@@ -3112,7 +3037,7 @@ export default function WebsiteSettings() {
                   disabled={isPlanLoading}
                   className="block w-full px-4 py-2 bg-brand-accent text-white rounded-lg border border-brand-accent hover:bg-brand-accent/90 transition-colors disabled:opacity-50"
                 >
-                  Upgrade to Starter ($120/mo - 1000 queries)
+                  Upgrade to Starter ($1/query - 100 queries)
                 </button>
               )}
 
@@ -3125,7 +3050,7 @@ export default function WebsiteSettings() {
                   <p className="text-sm text-brand-text-secondary mb-2">
                     {plan === "Enterprise"
                       ? "You're currently on our Enterprise plan with pay-per-usage pricing at $0.10 per query with unlimited usage."
-                      : "You're currently on our Starter plan with 1,000 monthly queries for $120/month."}
+                      : "You're currently on our Starter plan with 100 monthly queries at $1/query."}
                   </p>
 
                   {/* Plan details section */}
@@ -3137,15 +3062,13 @@ export default function WebsiteSettings() {
                     <div className="flex justify-between mb-1">
                       <span>Monthly Queries:</span>
                       <span className="font-medium text-black">
-                        {plan === "Enterprise" ? "Unlimited" : "1,000"}
+                        {plan === "Enterprise" ? "Unlimited" : "100"}
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span>Pricing:</span>
                       <span className="font-medium text-black">
-                        {plan === "Enterprise"
-                          ? "$0.10 per query"
-                          : "$120/month"}
+                        {plan === "Enterprise" ? "$0.10 per query" : "$1/query"}
                       </span>
                     </div>
                   </div>
@@ -3176,7 +3099,7 @@ export default function WebsiteSettings() {
                     Enterprise Plan
                   </h3>
                   <p className="text-sm text-brand-text-secondary mb-2">
-                    When you exceed your Starter plan limit of 1000 queries,
+                    When you exceed your Starter plan limit of 100 queries,
                     you'll automatically be upgraded to our Enterprise plan.
                   </p>
                   <div className="flex items-center gap-2 mb-2">

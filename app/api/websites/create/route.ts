@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import prisma from "../../../../lib/prisma";
 import { authOptions } from "../../../../lib/auth";
+import prisma from "../../../../lib/prisma";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -23,24 +23,50 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json();
-    const validatedData = createWebsiteSchema.parse(body);
+    const { name, url, accessKey, type } = body;
 
-    // Always return Stripe checkout flow for paid plans
-    return NextResponse.json({
-      websiteData: validatedData,
-      checkoutUrl: true,
-    });
-  } catch (error) {
-    if (error instanceof z.ZodError) {
+    // Required fields
+    if (!name || !url || !accessKey || !type) {
       return NextResponse.json(
-        { error: error.errors[0].message },
+        { error: "Missing required fields" },
         { status: 400 }
       );
     }
 
-    console.error("Error creating website:", error);
+    // Check if website with same URL and type already exists for this user
+    const existingWebsite = await prisma.website.findUnique({
+      where: {
+        userId_url_type: {
+          userId: session.user.id,
+          url,
+          type,
+        },
+      },
+    });
+
+    if (existingWebsite) {
+      return NextResponse.json(
+        { error: "You already have a website with this URL and type" },
+        { status: 400 }
+      );
+    }
+
+    // Don't create the website yet - just return the validated data
+    // The website will be created after payment confirmation
+    return NextResponse.json({
+      websiteData: {
+        name,
+        url,
+        type,
+        accessKey,
+        userId: session.user.id,
+      },
+      checkoutUrl: true,
+    });
+  } catch (error: any) {
+    console.error("Error validating website data:", error);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: error.message || "Failed to validate website data" },
       { status: 500 }
     );
   }

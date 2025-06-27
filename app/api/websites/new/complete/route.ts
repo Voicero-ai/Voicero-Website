@@ -30,7 +30,7 @@ export async function GET(request: Request) {
 
   // Determine plan and query limit
   let plan = websiteData.plan;
-  let queryLimit = 1000;
+  let queryLimit = 100;
   if (plan === "Growth") queryLimit = 10000;
 
   // Create website with subscription data

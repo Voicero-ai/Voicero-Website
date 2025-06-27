@@ -1580,7 +1580,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check query limits based on plan
-    const queryLimit = website.queryLimit || 1000; // Use website's queryLimit if defined, otherwise default to 1000
+    const queryLimit = 100; // Starter plan limit is now 100 queries
     if (website.monthlyQueries >= queryLimit && website.plan !== "Enterprise") {
       // Before returning an error, try to auto-upgrade to Enterprise plan if approaching limit
       if (website.stripeSubscriptionId) {
@@ -1705,6 +1705,64 @@ export async function POST(request: NextRequest) {
       where: { id: website.id },
       data: { monthlyQueries: { increment: 1 } },
     });
+
+    // Track usage billing based on plan
+    try {
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+      // Find the user with this website to get stripeCustomerId
+      const user = website.userId
+        ? await prisma.user.findFirst({
+            where: { id: website.userId },
+            select: { stripeCustomerId: true, email: true },
+          })
+        : null;
+
+      let stripeCustomerId = user?.stripeCustomerId;
+
+      // If no customer ID found, try to find it from subscription
+      if (!stripeCustomerId && website.stripeSubscriptionId) {
+        try {
+          const subscription = await stripe.subscriptions.retrieve(
+            website.stripeSubscriptionId
+          );
+          if (subscription?.customer) {
+            stripeCustomerId =
+              typeof subscription.customer === "string"
+                ? subscription.customer
+                : subscription.customer.id;
+          }
+        } catch (error) {
+          console.error("Error retrieving subscription for billing:", error);
+        }
+      }
+
+      if (stripeCustomerId) {
+        // Different billing based on plan
+        if (website.plan === "Starter") {
+          // For Starter plan: $1 per query billing
+          const meterEvent = await stripe.billing.meterEvents.create({
+            event_name: "api_requests", // Specific meter for Starter plan
+            payload: {
+              stripe_customer_id: stripeCustomerId,
+              value: "1", // $1 per query
+            },
+            timestamp: Math.floor(Date.now() / 1000),
+          });
+          console.log(
+            `BILLING: Charged $1 for Starter plan query usage. Customer: ${stripeCustomerId.substring(
+              0,
+              8
+            )}...`
+          );
+        }
+        // Enterprise plan billing stays as is
+      } else {
+        console.log("No Stripe customer ID found for usage billing");
+      }
+    } catch (error) {
+      console.error("Failed to record query billing:", error);
+    }
 
     // Check if website is on Enterprise plan or needs upgrade
     if (website.plan === "Enterprise") {

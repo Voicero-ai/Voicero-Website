@@ -96,14 +96,18 @@ export async function POST(request: Request) {
     const checkoutSession = await stripe.checkout.sessions.create({
       customer: customerId,
       payment_method_types: ["card"],
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items: [{ price: priceId }],
       mode: "subscription",
       success_url:
         successUrl ||
-        `${process.env.NEXT_PUBLIC_APP_URL}/app/websites/website?id=${websiteId}&upgraded=true`,
+        `${
+          process.env.NEXT_PUBLIC_APP_URL
+        }/app/websites/website?id=${websiteId}&upgraded=true&t=${Date.now()}`,
       cancel_url:
         cancelUrl ||
-        `${process.env.NEXT_PUBLIC_APP_URL}/app/websites/website?id=${websiteId}&upgrade_canceled=true`,
+        `${
+          process.env.NEXT_PUBLIC_APP_URL
+        }/app/websites/website?id=${websiteId}&upgrade_canceled=true&t=${Date.now()}`,
       metadata: websiteId
         ? {
             websiteId,
@@ -113,7 +117,13 @@ export async function POST(request: Request) {
         : {
             plan: "Starter",
             userId: session.user.id,
-            websiteData: JSON.stringify(websiteData || {}),
+            // Only include essential fields to stay under 500 char limit
+            websiteData: JSON.stringify({
+              name: websiteData?.name || "",
+              url: websiteData?.url || "",
+              type: websiteData?.type || "",
+              accessKey: websiteData?.accessKey || "",
+            }),
           },
     });
 
@@ -152,6 +162,9 @@ export async function GET(request: Request) {
 
     // Get the website ID either from query params or metadata
     const targetWebsiteId = websiteId || checkoutSession.metadata?.websiteId;
+
+    // Get subscription item ID for usage-based billing
+    const subscriptionItemId = subscription.items.data[0].id;
 
     if (!targetWebsiteId) {
       // If no website ID, this is a new website creation
@@ -198,20 +211,21 @@ export async function GET(request: Request) {
         );
       }
 
-      // Always use Starter plan with 1000 queries
+      // Set plan and queryLimit
       const plan = "Starter";
-      const queryLimit = 1000;
+      const queryLimit = 100;
 
-      // Create new website
+      // Create new website ONLY after payment is confirmed
       const website = await prisma.website.create({
         data: {
           name: websiteData.name,
           url: websiteData.url,
           type: websiteData.type,
           plan,
-          active: false,
+          active: true, // Active since payment is confirmed
           userId: userId,
           stripeSubscriptionId: checkoutSession.subscription as string,
+          stripeSubscriptionItemId: subscriptionItemId,
           queryLimit,
           renewsOn,
           accessKeys: {
@@ -226,7 +240,7 @@ export async function GET(request: Request) {
 
     // Update existing website - always to Starter plan
     const plan = "Starter";
-    const queryLimit = 1000;
+    const queryLimit = 100;
 
     // Update the website with the new subscription data
     await prisma.website.update({
@@ -234,6 +248,7 @@ export async function GET(request: Request) {
       data: {
         plan,
         stripeSubscriptionId: checkoutSession.subscription as string,
+        stripeSubscriptionItemId: subscriptionItemId, // Store subscription item ID
         queryLimit,
         renewsOn,
         active: true, // Activate the website when upgrading

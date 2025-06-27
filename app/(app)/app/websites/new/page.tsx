@@ -648,46 +648,25 @@ export default function NewWebsite() {
                   Professional AI for your website
                 </p>
                 <p className="text-3xl font-bold text-brand-accent mb-2">
-                  $120
+                  $1
                   <span className="text-base font-normal text-brand-text-secondary">
-                    /month
+                    /query
                   </span>
                 </p>
-
-                <ul className="space-y-2 mt-4">
-                  <li className="flex items-center gap-2 text-sm text-brand-text-secondary">
-                    <FaCheck className="w-4 h-4 text-purple-400" />
-                    1,000 Chat interactions/month
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-brand-text-secondary">
-                    <FaCheck className="w-4 h-4 text-purple-400" />
-                    Basic voice commands
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-brand-text-secondary">
-                    <FaCheck className="w-4 h-4 text-purple-400" />
-                    Standard response time
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-brand-text-secondary">
-                    <FaCheck className="w-4 h-4 text-purple-400" />
-                    Community support
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-brand-text-secondary">
-                    <FaCheck className="w-4 h-4 text-purple-400" />
-                    Single website integration
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-brand-text-secondary">
-                    <FaCheck className="w-4 h-4 text-purple-400" />
-                    Basic analytics
-                  </li>
-                  <li className="flex items-center gap-2 text-sm text-brand-text-secondary">
-                    <FaCheck className="w-4 h-4 text-purple-400" />
-                    Documentation access
+                <ul className="space-y-2 mb-4">
+                  <li className="flex items-start">
+                    <div className="flex-shrink-0 h-5 w-5 text-brand-accent">
+                      <FaCheck className="h-5 w-5" />
+                    </div>
+                    <span className="ml-2 text-brand-text-secondary">
+                      100 monthly queries
+                    </span>
                   </li>
                 </ul>
 
                 <p className="mt-4 text-sm text-brand-text-secondary">
                   By creating a website, you agree to subscribe to the Starter
-                  plan at $120/month.
+                  plan at $1/query.
                 </p>
               </div>
 
@@ -702,9 +681,7 @@ export default function NewWebsite() {
                 </p>
                 <div className="flex items-center gap-2 mb-2">
                   <span className="font-bold text-brand-accent">$0.10</span>
-                  <span className="text-sm text-black">
-                    per query
-                  </span>
+                  <span className="text-sm text-black">per query</span>
                 </div>
                 <ul className="text-sm text-brand-text-secondary list-disc pl-5 space-y-1">
                   <li>Unlimited queries</li>
@@ -738,7 +715,7 @@ export default function NewWebsite() {
                      hover:shadow-xl hover:shadow-brand-accent/30 transition-shadow
                      disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isSubmitting ? "Creating..." : "Create Website ($120/month)"}
+            {isSubmitting ? "Creating..." : "Create Website ($1/query)"}
           </motion.button>
         </div>
       </form>
