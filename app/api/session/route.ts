@@ -244,6 +244,28 @@ export async function GET(request: NextRequest) {
           console.log(
             `Found existing session for Shopify customer: ${customerSession.id}`
           );
+
+          // Create a new thread if none exists
+          if (customerSession.threads.length === 0) {
+            console.log(
+              `No threads found for session ${customerSession.id}, creating one...`
+            );
+            const newThread = await prisma.aiThread.create({
+              data: {
+                threadId: crypto.randomUUID(),
+                title: "New Conversation",
+                websiteId,
+                sessions: {
+                  connect: { id: customerSession.id },
+                },
+              },
+              include: { messages: true },
+            });
+
+            customerSession.threads = [newThread];
+            console.log(`Created new thread with ID: ${newThread.threadId}`);
+          }
+
           return cors(
             request,
             NextResponse.json({
@@ -281,6 +303,28 @@ export async function GET(request: NextRequest) {
           NextResponse.json({ error: "Session not found" }, { status: 404 })
         );
       }
+
+      // Create a new thread if none exists
+      if (session.threads.length === 0) {
+        console.log(
+          `No threads found for session ${session.id}, creating one...`
+        );
+        const newThread = await prisma.aiThread.create({
+          data: {
+            threadId: crypto.randomUUID(),
+            title: "New Conversation",
+            websiteId: session.websiteId,
+            sessions: {
+              connect: { id: session.id },
+            },
+          },
+          include: { messages: true },
+        });
+
+        session.threads = [newThread];
+        console.log(`Created new thread with ID: ${newThread.threadId}`);
+      }
+
       return cors(
         request,
         NextResponse.json({
@@ -320,6 +364,27 @@ export async function GET(request: NextRequest) {
         request,
         NextResponse.json({ error: "No session found" }, { status: 404 })
       );
+    }
+
+    // Create a new thread if none exists
+    if (session.threads.length === 0) {
+      console.log(
+        `No threads found for session ${session.id}, creating one...`
+      );
+      const newThread = await prisma.aiThread.create({
+        data: {
+          threadId: crypto.randomUUID(),
+          title: "New Conversation",
+          websiteId,
+          sessions: {
+            connect: { id: session.id },
+          },
+        },
+        include: { messages: true },
+      });
+
+      session.threads = [newThread];
+      console.log(`Created new thread with ID: ${newThread.threadId}`);
     }
 
     return cors(

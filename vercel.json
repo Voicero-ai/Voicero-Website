@@ -56,6 +56,21 @@
     },
     "app/api/aiHistory/route.ts": {
       "maxDuration": 300
+    },
+    "app/api/cron/cleanup-empty-threads/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/cron/send-follow-up/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/cron/reset-queries/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/cron/refresh-threads/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/cron/reminder-unread-contacts/route.ts": {
+      "maxDuration": 300
     }
   },
   "crons": [
@@ -66,6 +81,18 @@
     {
       "path": "/api/cron/reset-queries",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/refresh-threads",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/cleanup-empty-threads",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/reminder-unread-contacts",
+      "schedule": "0 * * * *"
     }
   ]
 }

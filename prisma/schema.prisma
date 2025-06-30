@@ -784,6 +784,7 @@ model Contact {
   message   String   @db.Text
   read      Boolean  @default(false)
   replied   Boolean  @default(false)
+  reminded  Boolean  @default(false)
   threadId  String
   createdAt DateTime @default(now())
   userId    String
