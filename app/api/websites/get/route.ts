@@ -626,11 +626,24 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
     },
   });
 
-  // Fetch discounts
-  const shopifyDiscounts = await prisma.shopifyDiscount.findMany({
-    where: { websiteId },
-    orderBy: { updatedAt: "desc" },
-  });
+  // Fetch discounts - use try/catch to handle invalid date values
+  let shopifyDiscounts: any[] = [];
+  try {
+    shopifyDiscounts = await prisma.shopifyDiscount.findMany({
+      where: { websiteId },
+      orderBy: { createdAt: "desc" }, // Use createdAt instead of updatedAt to avoid date issues
+    });
+  } catch (error) {
+    console.error("Error fetching discount data:", error);
+    // Fallback: get discounts without ordering
+    try {
+      shopifyDiscounts = await prisma.shopifyDiscount.findMany({
+        where: { websiteId },
+      });
+    } catch (fallbackError) {
+      console.error("Fallback discount fetch also failed:", fallbackError);
+    }
+  }
 
   // Fetch products with relations
   const shopifyProducts = await prisma.shopifyProduct.findMany({
@@ -687,7 +700,7 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
     };
   });
 
-  // Map discounts
+  // Map discounts - add null checks for all date fields
   const discounts = shopifyDiscounts.map((discount) => {
     return {
       id: discount.id,
@@ -696,8 +709,14 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
       value: discount.value,
       type: discount.type,
       status: discount.status,
-      startsAt: discount.startsAt?.toISOString() || null,
-      endsAt: discount.endsAt?.toISOString() || null,
+      startsAt:
+        discount.startsAt && isValidDate(discount.startsAt)
+          ? discount.startsAt.toISOString()
+          : null,
+      endsAt:
+        discount.endsAt && isValidDate(discount.endsAt)
+          ? discount.endsAt.toISOString()
+          : null,
       appliesTo: discount.appliesTo,
       shopifyId: discount.shopifyId.toString(),
     };
@@ -788,6 +807,16 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   });
 
   return { products, blogPosts, pages, collections, discounts };
+}
+
+// Helper function to check if a date is valid
+function isValidDate(date: Date): boolean {
+  return (
+    date instanceof Date &&
+    !isNaN(date.getTime()) &&
+    date.getMonth() > 0 &&
+    date.getDate() > 0
+  ); // Month and day must be > 0
 }
 
 async function fetchCustomContent(websiteId: string, stats: any) {
