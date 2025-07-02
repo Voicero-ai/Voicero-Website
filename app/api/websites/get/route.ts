@@ -13,7 +13,7 @@ const routePrisma = new PrismaClient({
   datasourceUrl: process.env.DATABASE_URL,
   // @ts-expect-error - Prisma doesn't properly type these connection settings
   connectionTimeout: 30000, // 30 seconds (default is 10)
-  // @ts-expect-error
+  // @ts-expect-error - Prisma typing issue with connection limit configuration
   connectionLimit: 20, // 20 concurrent connections (default is 5)
 });
 
