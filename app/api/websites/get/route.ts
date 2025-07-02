@@ -2,8 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "../../../../lib/prisma"; // Adjust this path as needed
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../../lib/auth";
+import { PrismaClient } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60; // Extend timeout to 60 seconds
+
+// Create a specialized instance of Prisma with longer timeout for this route
+const routePrisma = new PrismaClient({
+  log: ["query", "error", "warn"],
+  datasourceUrl: process.env.DATABASE_URL,
+  // @ts-expect-error - Prisma doesn't properly type these connection settings
+  connectionTimeout: 30000, // 30 seconds (default is 10)
+  // @ts-expect-error
+  connectionLimit: 20, // 20 concurrent connections (default is 5)
+});
 
 interface Message {
   id: string;
@@ -82,7 +94,7 @@ export async function GET(request: NextRequest) {
     // Check if we have a valid session
     if (session?.user?.email) {
       // Get the current user based on email
-      const user = await prisma.user.findUnique({
+      const user = await routePrisma.user.findUnique({
         where: { email: session.user.email },
         select: { id: true },
       });
@@ -100,7 +112,7 @@ export async function GET(request: NextRequest) {
         const accessKey = authHeader.substring(7); // Remove "Bearer " prefix
 
         // Look up the website by accessKey
-        const websiteByKey = await prisma.website.findFirst({
+        const websiteByKey = await routePrisma.website.findFirst({
           where: {
             accessKeys: {
               some: {
@@ -150,7 +162,7 @@ export async function GET(request: NextRequest) {
     const urlRedirectCounts = new Map<string, number>();
 
     // First check if the website belongs to the user
-    const websiteOwnership = await prisma.website.findFirst({
+    const websiteOwnership = await routePrisma.website.findFirst({
       where: {
         id: websiteId,
         userId: userId,
@@ -171,7 +183,7 @@ export async function GET(request: NextRequest) {
     // Fetch website with basic data first, then fetch related data separately
     // This splits the queries to reduce connection pool pressure
     console.log("Fetching basic website data...");
-    const basicWebsite = await prisma.website.findUnique({
+    const basicWebsite = await routePrisma.website.findUnique({
       where: { id: websiteId },
       include: {
         accessKeys: {
@@ -196,7 +208,7 @@ export async function GET(request: NextRequest) {
     }
 
     console.log("Fetching AI threads...");
-    const aiThreads = await prisma.aiThread.findMany({
+    const aiThreads = await routePrisma.aiThread.findMany({
       where: { websiteId },
       orderBy: {
         createdAt: "desc",
@@ -229,7 +241,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Let's also log the raw count from the database
-    const threadCount = await prisma.aiThread.count({
+    const threadCount = await routePrisma.aiThread.count({
       where: { websiteId },
     });
 
@@ -526,7 +538,7 @@ export async function GET(request: NextRequest) {
       // 5) Check website.type => If "wordpress", fetch from WordPress tables
       if (website.type === "WordPress") {
         // Fetch WordPress Products with reviews
-        const wpProducts = await prisma.wordpressProduct.findMany({
+        const wpProducts = await routePrisma.wordpressProduct.findMany({
           where: { websiteId },
           orderBy: { updatedAt: "desc" },
           include: {
@@ -576,7 +588,7 @@ export async function GET(request: NextRequest) {
         });
 
         // Fetch WordPress Posts with more relations
-        const wpPosts = await prisma.wordpressPost.findMany({
+        const wpPosts = await routePrisma.wordpressPost.findMany({
           where: { websiteId },
           orderBy: { updatedAt: "desc" },
           include: {
@@ -624,7 +636,7 @@ export async function GET(request: NextRequest) {
         });
 
         // Fetching WordPress Pages
-        const wpPages = await prisma.wordpressPage.findMany({
+        const wpPages = await routePrisma.wordpressPage.findMany({
           where: { websiteId },
           orderBy: { updatedAt: "desc" },
         });
@@ -646,16 +658,18 @@ export async function GET(request: NextRequest) {
         // 6) If Shopify => fetch from Shopify tables
       } else if (website.type === "Shopify") {
         // Fetch Shopify Collections first
-        const shopifyCollections = await prisma.shopifyCollection.findMany({
-          where: { websiteId },
-          orderBy: { updatedAt: "desc" },
-          include: {
-            products: true,
-          },
-        });
+        const shopifyCollections = await routePrisma.shopifyCollection.findMany(
+          {
+            where: { websiteId },
+            orderBy: { updatedAt: "desc" },
+            include: {
+              products: true,
+            },
+          }
+        );
 
         // Fetch Shopify Discounts
-        const shopifyDiscounts = await prisma.shopifyDiscount.findMany({
+        const shopifyDiscounts = await routePrisma.shopifyDiscount.findMany({
           where: { websiteId },
           orderBy: { updatedAt: "desc" },
         });
@@ -699,7 +713,7 @@ export async function GET(request: NextRequest) {
         });
 
         // Shopify Products with variants, reviews, and images
-        const shopifyProducts = await prisma.shopifyProduct.findMany({
+        const shopifyProducts = await routePrisma.shopifyProduct.findMany({
           where: { websiteId },
           orderBy: { updatedAt: "desc" },
           include: {
@@ -748,7 +762,7 @@ export async function GET(request: NextRequest) {
         });
 
         // Shopify Blog Posts with comments
-        const shopifyBlogs = await prisma.shopifyBlog.findMany({
+        const shopifyBlogs = await routePrisma.shopifyBlog.findMany({
           where: { websiteId },
           include: {
             posts: {
@@ -791,7 +805,7 @@ export async function GET(request: NextRequest) {
         );
 
         // Shopify Pages
-        const shopifyPages = await prisma.shopifyPage.findMany({
+        const shopifyPages = await routePrisma.shopifyPage.findMany({
           where: { websiteId },
           orderBy: { updatedAt: "desc" },
         });
@@ -817,7 +831,7 @@ export async function GET(request: NextRequest) {
 
         // Get pages from the Page model for custom websites
         try {
-          const customPages = await prisma.page.findMany({
+          const customPages = await routePrisma.page.findMany({
             where: { websiteId },
             orderBy: { updatedAt: "desc" },
           });
@@ -853,7 +867,7 @@ export async function GET(request: NextRequest) {
       // Check for additional custom pages regardless of website type
       if (website.type !== "Custom") {
         try {
-          const additionalCustomPages = await prisma.page.findMany({
+          const additionalCustomPages = await routePrisma.page.findMany({
             where: { websiteId },
             orderBy: { updatedAt: "desc" },
           });
