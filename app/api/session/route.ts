@@ -103,49 +103,18 @@ export async function POST(request: NextRequest) {
           include: { messages: true },
           orderBy: { lastMessageAt: "desc" },
         },
-        urlMovements: true,
         ...(finalShopifyCustomerId ? { customer: true } : {}),
       },
     });
     console.log(`Session created with ID: ${session.id}`);
 
-    // Create URL movement record if pageUrl is provided
+    // Log pageUrl, but don't create UrlMovement record anymore
     if (pageUrl) {
-      console.log(
-        `Attempting to create UrlMovement record for session ${session.id} with url: ${pageUrl}`
-      );
-      try {
-        const urlMovement = await prisma.urlMovement.create({
-          data: {
-            url: pageUrl,
-            sessionId: session.id,
-          },
-        });
-        console.log(
-          `Successfully created UrlMovement record with ID: ${urlMovement.id}`
-        );
-      } catch (error) {
-        console.error(`Failed to create UrlMovement record:`, error);
-      }
-    }
-    // Also try using referer header as fallback
-    else {
+      console.log(`Page URL for session ${session.id}: ${pageUrl}`);
+    } else {
       const refererUrl = request.headers.get("referer");
       if (refererUrl) {
-        console.log(`Using referer URL for UrlMovement: ${refererUrl}`);
-        try {
-          const urlMovement = await prisma.urlMovement.create({
-            data: {
-              url: refererUrl,
-              sessionId: session.id,
-            },
-          });
-          console.log(
-            `Successfully created UrlMovement record with ID: ${urlMovement.id}`
-          );
-        } catch (error) {
-          console.error(`Failed to create UrlMovement from referer:`, error);
-        }
+        console.log(`Referer URL for session ${session.id}: ${refererUrl}`);
       }
     }
 
@@ -157,7 +126,6 @@ export async function POST(request: NextRequest) {
         session,
         thread,
         shopifyCustomerLinked: !!finalShopifyCustomerId,
-        urlMovements: session.urlMovements,
       })
     );
   } catch (error) {
@@ -188,24 +156,9 @@ export async function GET(request: NextRequest) {
       url: request.url,
     });
 
-    // Track URL if we have both sessionId and pageUrl
+    // Log URL but don't create UrlMovement record
     if (sessionId && pageUrl) {
-      console.log(
-        `Creating URL movement record for session ${sessionId} with pageUrl: ${pageUrl}`
-      );
-      try {
-        const urlMovement = await prisma.urlMovement.create({
-          data: {
-            url: pageUrl,
-            sessionId: sessionId,
-          },
-        });
-        console.log(
-          `Successfully created UrlMovement with ID: ${urlMovement.id}`
-        );
-      } catch (error) {
-        console.error("Failed to create URL movement record:", error);
-      }
+      console.log(`Page URL for session ${sessionId}: ${pageUrl}`);
     }
 
     // If shopifyId is provided, try to find the most recent session for that customer
@@ -235,7 +188,6 @@ export async function GET(request: NextRequest) {
               orderBy: { lastMessageAt: "desc" },
             },
             customer: true,
-            urlMovements: true,
           },
           orderBy: { createdAt: "desc" },
         });
@@ -271,7 +223,6 @@ export async function GET(request: NextRequest) {
             NextResponse.json({
               session: customerSession,
               shopifyCustomerLinked: true,
-              urlMovements: customerSession.urlMovements,
             })
           );
         }
@@ -293,7 +244,6 @@ export async function GET(request: NextRequest) {
             orderBy: { lastMessageAt: "desc" },
           },
           customer: true,
-          urlMovements: true,
         },
       });
 
@@ -330,7 +280,6 @@ export async function GET(request: NextRequest) {
         NextResponse.json({
           session,
           shopifyCustomerLinked: !!session.shopifyCustomerId,
-          urlMovements: session.urlMovements,
         })
       );
     }
@@ -354,7 +303,6 @@ export async function GET(request: NextRequest) {
           orderBy: { lastMessageAt: "desc" },
         },
         customer: true,
-        urlMovements: true,
       },
       orderBy: { createdAt: "desc" },
     });
@@ -392,7 +340,6 @@ export async function GET(request: NextRequest) {
       NextResponse.json({
         session,
         shopifyCustomerLinked: !!session.shopifyCustomerId,
-        urlMovements: session.urlMovements,
       })
     );
   } catch (error) {

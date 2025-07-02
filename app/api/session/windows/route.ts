@@ -34,19 +34,7 @@ export async function POST(req: NextRequest) {
       console.log(
         `Session windows: tracking referer URL ${refererUrl} for session ${sessionId}`
       );
-      try {
-        const urlMovement = await prisma.urlMovement.create({
-          data: {
-            url: refererUrl,
-            sessionId: sessionId,
-          },
-        });
-        console.log(
-          `Successfully created UrlMovement with ID: ${urlMovement.id}`
-        );
-      } catch (error) {
-        console.error("Failed to create URL movement record:", error);
-      }
+      // URL movement tracking removed
     }
 
     const currentSession = await prisma.session.findUnique({

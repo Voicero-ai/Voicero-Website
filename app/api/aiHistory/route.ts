@@ -100,7 +100,6 @@ export async function POST(request: NextRequest) {
           sessions: {
             include: {
               customer: true,
-              urlMovements: true,
             },
           },
         },
@@ -151,7 +150,6 @@ export async function POST(request: NextRequest) {
         sessions: thread.sessions.map((session) => ({
           id: session.id,
           customer: session.customer,
-          urlMovements: session.urlMovements || [],
         })),
       }));
 
@@ -186,7 +184,6 @@ export async function POST(request: NextRequest) {
         sessions: {
           include: {
             customer: true,
-            urlMovements: true,
           },
         },
       },
@@ -237,7 +234,6 @@ export async function POST(request: NextRequest) {
       sessions: thread.sessions.map((session) => ({
         id: session.id,
         customer: session.customer,
-        urlMovements: session.urlMovements || [],
       })),
     }));
 

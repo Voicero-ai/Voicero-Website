@@ -92,11 +92,11 @@ model Website {
   allowAutoTrackOrder      Boolean                    @default(true)
   allowAutoLogout          Boolean                    @default(true)
   allowAutoLogin           Boolean                    @default(true)
-  allowMultiAIReview       Boolean                    @default(false)
   allowAutoGenerateImage   Boolean                    @default(true)
   stripeSubscriptionId     String?                    @unique
   stripeSubscriptionItemId String?
   clickMessage             String?                    @default("")
+  allowMultiAIReview       Boolean                    @default(false)
   popUpQuestions           PopUpQuestion[]
   accessKeys               AccessKey[]
   user                     User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -472,11 +472,11 @@ model ShopifyDiscount {
   appliesTo    String?
   code         String?
   status       String?   @default("ACTIVE")
-  discountType String?
+  type         String    @default("general")
   websiteId    String
   trained      Boolean?  @default(false)
   isTraining   Boolean?  @default(false)
-  type         String    @default("general")
+  discountType String?
   website      Website   @relation(fields: [websiteId], references: [id])
 
   @@unique([websiteId, shopifyId])
@@ -633,7 +633,6 @@ model Session {
   website           Website          @relation(fields: [websiteId], references: [id], onDelete: Cascade)
   threads           AiThread[]
   customer          ShopifyCustomer? @relation(fields: [shopifyCustomerId], references: [id])
-  urlMovements      UrlMovement[]
 
   @@index([websiteId])
   @@index([shopifyCustomerId])
@@ -789,11 +788,11 @@ model Contact {
   message   String   @db.Text
   read      Boolean  @default(false)
   replied   Boolean  @default(false)
-  reminded  Boolean  @default(false)
   threadId  String
   createdAt DateTime @default(now())
   userId    String
   websiteId String
+  reminded  Boolean  @default(false)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   website   Website  @relation(fields: [websiteId], references: [id], onDelete: Cascade)
 
@@ -910,16 +909,6 @@ model ShopifyCustomerShippingAddress {
   createdAt DateTime             @default(now())
   updatedAt DateTime             @updatedAt
   order     ShopifyCustomerOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
-}
-
-model UrlMovement {
-  id        String   @id @default(uuid())
-  url       String
-  timestamp DateTime @default(now())
-  sessionId String
-  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  @@index([sessionId])
 }
 
 model ShopifyOrder {
