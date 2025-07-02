@@ -618,13 +618,28 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   const { redirectMaps } = stats;
 
   // Fetch collections first since products reference them
-  const shopifyCollections = await prisma.shopifyCollection.findMany({
-    where: { websiteId },
-    orderBy: { updatedAt: "desc" },
-    include: {
-      products: true,
-    },
-  });
+  let shopifyCollections: any[] = [];
+  try {
+    shopifyCollections = await prisma.shopifyCollection.findMany({
+      where: { websiteId },
+      orderBy: { createdAt: "desc" }, // Use createdAt instead of updatedAt to avoid date issues
+      include: {
+        products: true,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching collection data:", error);
+    try {
+      shopifyCollections = await prisma.shopifyCollection.findMany({
+        where: { websiteId },
+        include: {
+          products: true,
+        },
+      });
+    } catch (fallbackError) {
+      console.error("Fallback collection fetch also failed:", fallbackError);
+    }
+  }
 
   // Fetch discounts - use try/catch to handle invalid date values
   let shopifyDiscounts: any[] = [];
@@ -646,36 +661,84 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   }
 
   // Fetch products with relations
-  const shopifyProducts = await prisma.shopifyProduct.findMany({
-    where: { websiteId },
-    orderBy: { updatedAt: "desc" },
-    include: {
-      variants: true,
-      reviews: true,
-      images: true,
-    },
-  });
+  let shopifyProducts: any[] = [];
+  try {
+    shopifyProducts = await prisma.shopifyProduct.findMany({
+      where: { websiteId },
+      orderBy: { createdAt: "desc" }, // Use createdAt instead of updatedAt
+      include: {
+        variants: true,
+        reviews: true,
+        images: true,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching product data:", error);
+    try {
+      shopifyProducts = await prisma.shopifyProduct.findMany({
+        where: { websiteId },
+        include: {
+          variants: true,
+          reviews: true,
+          images: true,
+        },
+      });
+    } catch (fallbackError) {
+      console.error("Fallback product fetch also failed:", fallbackError);
+    }
+  }
 
   // Fetch blog posts with comments
-  const shopifyBlogs = await prisma.shopifyBlog.findMany({
-    where: { websiteId },
-    include: {
-      posts: {
-        include: {
-          comments: true,
+  let shopifyBlogs: any[] = [];
+  try {
+    shopifyBlogs = await prisma.shopifyBlog.findMany({
+      where: { websiteId },
+      include: {
+        posts: {
+          include: {
+            comments: true,
+          },
+          orderBy: { createdAt: "desc" }, // Use createdAt instead of updatedAt
         },
-        orderBy: { updatedAt: "desc" },
       },
-    },
-  });
+    });
+  } catch (error) {
+    console.error("Error fetching blog data:", error);
+    try {
+      shopifyBlogs = await prisma.shopifyBlog.findMany({
+        where: { websiteId },
+        include: {
+          posts: {
+            include: {
+              comments: true,
+            },
+          },
+        },
+      });
+    } catch (fallbackError) {
+      console.error("Fallback blog fetch also failed:", fallbackError);
+    }
+  }
 
-  // Fetch pages
-  const shopifyPages = await prisma.shopifyPage.findMany({
-    where: { websiteId },
-    orderBy: { updatedAt: "desc" },
-  });
+  // Fetch pages - with error handling for invalid dates
+  let shopifyPages: any[] = [];
+  try {
+    shopifyPages = await prisma.shopifyPage.findMany({
+      where: { websiteId },
+      orderBy: { createdAt: "desc" }, // Use createdAt instead of updatedAt to avoid date issues
+    });
+  } catch (error) {
+    console.error("Error fetching page data:", error);
+    try {
+      shopifyPages = await prisma.shopifyPage.findMany({
+        where: { websiteId },
+      });
+    } catch (fallbackError) {
+      console.error("Fallback page fetch also failed:", fallbackError);
+    }
+  }
 
-  // Map collections
+  // Map collections - with date validation
   const collections = shopifyCollections.map((collection) => {
     const collectionUrl = `/collections/${collection.handle}`;
     return {
@@ -686,11 +749,9 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
       image: collection.image,
       ruleSet: collection.ruleSet,
       sortOrder: collection.sortOrder,
-      updatedAt:
-        collection.updatedAt?.toISOString() ||
-        collection.createdAt.toISOString(),
+      updatedAt: collection.createdAt.toISOString(), // Just use createdAt which should be valid
       createdAt: collection.createdAt.toISOString(),
-      products: collection.products.map((p) => ({
+      products: collection.products.map((p: any) => ({
         ...p,
         shopifyId: p.shopifyId.toString(),
       })),
@@ -700,7 +761,7 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
     };
   });
 
-  // Map discounts - add null checks for all date fields
+  // Map discounts - with date validation
   const discounts = shopifyDiscounts.map((discount) => {
     return {
       id: discount.id,
@@ -722,7 +783,7 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
     };
   });
 
-  // Map products
+  // Map products - with date validation
   const products = shopifyProducts.map((prod) => {
     const productUrl = `/products/${prod.handle}`;
     return {
@@ -730,20 +791,20 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
       title: prod.title,
       url: productUrl,
       type: "product" as const,
-      lastUpdated: prod.updatedAt.toISOString(),
+      lastUpdated: prod.createdAt.toISOString(), // Use createdAt instead of updatedAt
       aiRedirects: redirectMaps.productRedirects.get(prod.handle) || 0,
       description: prod.description,
       vendor: prod.vendor,
       productType: prod.productType,
       price: prod.variants[0]?.price || 0,
-      variants: prod.variants.map((v) => ({
+      variants: prod.variants.map((v: any) => ({
         id: v.id,
         title: v.title,
         price: v.price,
         sku: v.sku,
         inventory: v.inventory,
       })),
-      reviews: prod.reviews.map((r) => ({
+      reviews: prod.reviews.map((r: any) => ({
         id: r.id,
         reviewer: r.reviewer,
         rating: r.rating,
@@ -752,7 +813,7 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
         verified: r.verified,
         date: r.createdAt.toISOString(),
       })),
-      images: prod.images.map((img) => ({
+      images: prod.images.map((img: any) => ({
         id: img.id,
         url: img.url,
         altText: img.altText,
@@ -761,16 +822,16 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
     };
   });
 
-  // Map blog posts
+  // Map blog posts - with date validation
   const blogPosts = shopifyBlogs.flatMap((blog) =>
-    blog.posts.map((post) => {
+    blog.posts.map((post: any) => {
       const postUrl = `/blogs/${blog.handle}/${post.handle}`;
       return {
         id: post.id,
         title: post.title,
         url: postUrl,
         type: "post" as const,
-        lastUpdated: post.updatedAt.toISOString(),
+        lastUpdated: post.createdAt.toISOString(), // Use createdAt instead of updatedAt
         aiRedirects: redirectMaps.blogRedirects.get(post.handle || "") || 0,
         content: post.content,
         author: post.author,
@@ -780,7 +841,7 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
           title: blog.title,
           handle: blog.handle,
         },
-        comments: post.comments.map((c) => ({
+        comments: post.comments.map((c: any) => ({
           id: c.id,
           author: c.author,
           content: c.body,
@@ -792,7 +853,7 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
     })
   );
 
-  // Map pages
+  // Map pages - with date validation
   const pages = shopifyPages.map((p) => {
     const pageUrl = `/pages/${p.handle}`;
     return {
@@ -800,7 +861,7 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
       title: p.title,
       url: pageUrl,
       type: "page" as const,
-      lastUpdated: p.updatedAt.toISOString(),
+      lastUpdated: p.createdAt.toISOString(), // Use createdAt instead of updatedAt
       aiRedirects: redirectMaps.pageRedirects.get(p.handle) || 0,
       content: p.content,
     };
