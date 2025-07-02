@@ -102,8 +102,39 @@ export async function GET(request: NextRequest) {
     // Initialize stat tracking
     const stats = initializeStats();
 
+    // Filter out empty threads that have no messages
+    const validThreads = aiThreads.filter(
+      (thread) => thread.messages.length > 0
+    );
+
+    // Get accurate count of valid threads with actual messages
+    const validThreadCount = validThreads.length;
+    console.log(
+      `Found ${
+        aiThreads.length - validThreadCount
+      } empty threads that will be filtered out`
+    );
+    console.log(
+      `Valid thread count: ${validThreadCount}, Current monthlyQueries: ${website.monthlyQueries}`
+    );
+
+    // Force update the monthly queries count to exactly match valid threads count
+    try {
+      // Always update to ensure the count is accurate
+      await prisma.website.update({
+        where: { id: websiteId },
+        data: { monthlyQueries: validThreadCount },
+      });
+
+      // Update in-memory website object as well
+      website.monthlyQueries = validThreadCount;
+      console.log(`Updated monthlyQueries to ${validThreadCount}`);
+    } catch (error) {
+      console.error("Failed to update monthlyQueries count:", error);
+    }
+
     // Process threads and calculate stats
-    processThreadsAndMessages(aiThreads, stats);
+    processThreadsAndMessages(validThreads, stats);
 
     // Fetch and process content based on website type
     const content = await fetchWebsiteContent(website, stats);
@@ -284,13 +315,25 @@ function initializeStats() {
 function processThreadsAndMessages(aiThreads: Thread[], stats: any) {
   const { redirectMaps, globalStats } = stats;
 
+  // Reset counters to ensure they're accurate
+  globalStats.totalVoiceChats = 0;
+  globalStats.totalTextChats = 0;
+
   aiThreads.forEach((thread: Thread) => {
     let hasVoiceMessage = false;
     let hasTextMessage = false;
+    let hasUserMessage = false;
+
+    // Skip empty threads entirely
+    if (thread.messages.length === 0) {
+      console.log(`Empty thread found: ${thread.id}`);
+      return;
+    }
 
     thread.messages.forEach((message: Message) => {
       // Process user messages for voice/text stats
       if (message.role === "user") {
+        hasUserMessage = true;
         if (message.type === "voice") hasVoiceMessage = true;
         if (message.type === "text" || !message.type) hasTextMessage = true;
       }
@@ -301,9 +344,12 @@ function processThreadsAndMessages(aiThreads: Thread[], stats: any) {
       }
     });
 
-    // Update global stats for the thread
-    if (hasVoiceMessage) globalStats.totalVoiceChats++;
-    if (hasTextMessage) globalStats.totalTextChats++;
+    // Only count threads that have at least one user message
+    if (hasUserMessage) {
+      // Update global stats for the thread
+      if (hasVoiceMessage) globalStats.totalVoiceChats++;
+      if (hasTextMessage) globalStats.totalTextChats++;
+    }
   });
 }
 
@@ -388,13 +434,25 @@ function processAssistantMessage(
 
   // Process pageUrl if exists
   if (message.pageUrl) {
-    globalStats.totalAiRedirects++;
-    const normalizedUrl = normalizeUrl(message.pageUrl);
-    urlRedirectCounts.set(
-      normalizedUrl,
-      (urlRedirectCounts.get(normalizedUrl) || 0) + 1
-    );
-    countRedirectByType(normalizedUrl);
+    // Count redirect once per thread rather than once per message
+    if (
+      !message.threadId ||
+      !urlRedirectCounts.has(`thread:${message.threadId}`)
+    ) {
+      globalStats.totalAiRedirects++;
+
+      // Mark this thread as already counted
+      if (message.threadId) {
+        urlRedirectCounts.set(`thread:${message.threadId}`, 1);
+      }
+
+      const normalizedUrl = normalizeUrl(message.pageUrl);
+      urlRedirectCounts.set(
+        normalizedUrl,
+        (urlRedirectCounts.get(normalizedUrl) || 0) + 1
+      );
+      countRedirectByType(normalizedUrl);
+    }
   }
 
   // Try to parse content as JSON for structured actions
@@ -644,53 +702,66 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   // Fetch discounts - use try/catch to handle invalid date values
   let shopifyDiscounts: any[] = [];
   try {
+    // Fetch without ordering first, as it's more likely to succeed
     shopifyDiscounts = await prisma.shopifyDiscount.findMany({
       where: { websiteId },
-      orderBy: { createdAt: "desc" }, // Use createdAt instead of updatedAt to avoid date issues
+      select: {
+        id: true,
+        title: true,
+        code: true,
+        value: true,
+        type: true,
+        status: true,
+        startsAt: true,
+        endsAt: true,
+        appliesTo: true,
+        shopifyId: true,
+        createdAt: true,
+      },
+    });
+
+    // Sort in memory instead of using database ordering
+    shopifyDiscounts = shopifyDiscounts.sort((a, b) => {
+      // Safely handle dates
+      const dateA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
+      const dateB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
+      return dateB - dateA; // descending order
     });
   } catch (error) {
     console.error("Error fetching discount data:", error);
-    // Fallback: get discounts without ordering
-    try {
-      shopifyDiscounts = await prisma.shopifyDiscount.findMany({
-        where: { websiteId },
-      });
-    } catch (fallbackError) {
-      console.error("Fallback discount fetch also failed:", fallbackError);
-    }
+    // If all attempts fail, just return an empty array
+    shopifyDiscounts = [];
   }
 
   // Fetch products with relations
   let shopifyProducts: any[] = [];
   try {
+    // Fetch products without ordering first
     shopifyProducts = await prisma.shopifyProduct.findMany({
       where: { websiteId },
-      orderBy: { createdAt: "desc" }, // Use createdAt instead of updatedAt
       include: {
         variants: true,
         reviews: true,
         images: true,
       },
     });
+
+    // Sort in memory instead of using database ordering
+    shopifyProducts = shopifyProducts.sort((a, b) => {
+      // Safely handle dates
+      const dateA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
+      const dateB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
+      return dateB - dateA; // descending order
+    });
   } catch (error) {
     console.error("Error fetching product data:", error);
-    try {
-      shopifyProducts = await prisma.shopifyProduct.findMany({
-        where: { websiteId },
-        include: {
-          variants: true,
-          reviews: true,
-          images: true,
-        },
-      });
-    } catch (fallbackError) {
-      console.error("Fallback product fetch also failed:", fallbackError);
-    }
+    shopifyProducts = []; // If all attempts fail, return empty array
   }
 
   // Fetch blog posts with comments
   let shopifyBlogs: any[] = [];
   try {
+    // Fetch blogs without ordering first
     shopifyBlogs = await prisma.shopifyBlog.findMany({
       where: { websiteId },
       include: {
@@ -698,44 +769,55 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
           include: {
             comments: true,
           },
-          orderBy: { createdAt: "desc" }, // Use createdAt instead of updatedAt
+          // No ordering at database level
         },
       },
     });
+
+    // Sort blog posts in memory
+    shopifyBlogs = shopifyBlogs.map((blog) => {
+      if (blog.posts && Array.isArray(blog.posts)) {
+        blog.posts = blog.posts.sort((a: any, b: any) => {
+          // Safely handle dates
+          const dateA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
+          const dateB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
+          return dateB - dateA; // descending order
+        });
+      }
+      return blog;
+    });
   } catch (error) {
     console.error("Error fetching blog data:", error);
-    try {
-      shopifyBlogs = await prisma.shopifyBlog.findMany({
-        where: { websiteId },
-        include: {
-          posts: {
-            include: {
-              comments: true,
-            },
-          },
-        },
-      });
-    } catch (fallbackError) {
-      console.error("Fallback blog fetch also failed:", fallbackError);
-    }
+    shopifyBlogs = []; // If all attempts fail, return empty array
   }
 
-  // Fetch pages - with error handling for invalid dates
+  // Fetch pages - with improved error handling for invalid dates
   let shopifyPages: any[] = [];
   try {
+    // Fetch without ordering first, as it's more likely to succeed
     shopifyPages = await prisma.shopifyPage.findMany({
       where: { websiteId },
-      orderBy: { createdAt: "desc" }, // Use createdAt instead of updatedAt to avoid date issues
+      select: {
+        id: true,
+        title: true,
+        handle: true,
+        content: true,
+        createdAt: true,
+        shopifyId: true,
+      },
+    });
+
+    // Sort in memory instead of using database ordering
+    shopifyPages = shopifyPages.sort((a, b) => {
+      // Safely handle dates
+      const dateA = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
+      const dateB = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
+      return dateB - dateA; // descending order
     });
   } catch (error) {
     console.error("Error fetching page data:", error);
-    try {
-      shopifyPages = await prisma.shopifyPage.findMany({
-        where: { websiteId },
-      });
-    } catch (fallbackError) {
-      console.error("Fallback page fetch also failed:", fallbackError);
-    }
+    // If all attempts fail, just return an empty array
+    shopifyPages = [];
   }
 
   // Map collections - with date validation
@@ -956,6 +1038,22 @@ async function fetchWebsiteContent(website: any, stats: any) {
 function buildResponseData(website: any, stats: any, content: any) {
   const { globalStats, redirectMaps } = stats;
 
+  // Log statistics discrepancy for debugging
+  if (
+    globalStats.totalTextChats + globalStats.totalVoiceChats !==
+    website.monthlyQueries
+  ) {
+    console.log(`Statistics discrepancy detected for website ${website.id}:`);
+    console.log(`Monthly queries: ${website.monthlyQueries}`);
+    console.log(`Total text chats: ${globalStats.totalTextChats}`);
+    console.log(`Total voice chats: ${globalStats.totalVoiceChats}`);
+    console.log(
+      `Combined chats: ${
+        globalStats.totalTextChats + globalStats.totalVoiceChats
+      }`
+    );
+  }
+
   return {
     id: website.id,
     domain: website.url,
@@ -1007,7 +1105,10 @@ function buildResponseData(website: any, stats: any, content: any) {
       aiClicks: globalStats.totalAiClicks,
       redirectRate:
         website.monthlyQueries > 0
-          ? (globalStats.totalAiRedirects / website.monthlyQueries) * 100
+          ? Math.min(
+              (globalStats.totalAiRedirects / website.monthlyQueries) * 100,
+              100
+            )
           : 0,
       totalVoiceChats: globalStats.totalVoiceChats,
       totalTextChats: globalStats.totalTextChats,

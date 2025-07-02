@@ -200,6 +200,11 @@ interface WebsiteData {
     aiRedirects: number;
     totalRedirects: number;
     redirectRate: number;
+    aiScrolls?: number;
+    aiPurchases?: number;
+    aiClicks?: number;
+    totalVoiceChats?: number;
+    totalTextChats?: number;
   };
   content: {
     products: ContentItem[];
@@ -363,6 +368,7 @@ export default function WebsiteSettings() {
           return;
         }
         const data = await res.json();
+        console.log("Website data loaded:", data);
         console.log("Website data loaded:", {
           iconBot: data.iconBot,
           iconVoice: data.iconVoice,
@@ -2848,10 +2854,10 @@ export default function WebsiteSettings() {
         <h2 className="text-xl font-semibold text-brand-text-primary mb-6">
           Global Statistics
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div>
             <h3 className="text-sm text-brand-text-secondary mb-2">
-              Total AI Redirects
+              AI Redirects
             </h3>
             <div className="flex items-end gap-2">
               <span className="text-3xl font-bold text-brand-accent">
@@ -2861,34 +2867,32 @@ export default function WebsiteSettings() {
           </div>
           <div>
             <h3 className="text-sm text-brand-text-secondary mb-2">
-              Voice Chats
+              AI Clicks
             </h3>
-            <div className="flex items-center gap-3">
+            <div className="flex items-end gap-2">
               <span className="text-3xl font-bold text-brand-text-primary">
-                {globalStats.totalVoiceChats.toLocaleString()}
+                {websiteData.stats.aiClicks?.toLocaleString() || "0"}
               </span>
-              <Link
-                href={`/app/chats?website=${websiteData.id}&type=voice`}
-                className="text-sm text-brand-accent hover:text-brand-accent/80 transition-colors"
-              >
-                View chats →
-              </Link>
             </div>
           </div>
           <div>
             <h3 className="text-sm text-brand-text-secondary mb-2">
-              Text Chats
+              AI Scrolls
             </h3>
-            <div className="flex items-center gap-3">
+            <div className="flex items-end gap-2">
               <span className="text-3xl font-bold text-brand-text-primary">
-                {globalStats.totalTextChats.toLocaleString()}
+                {websiteData.stats.aiScrolls?.toLocaleString() || "0"}
               </span>
-              <Link
-                href={`/app/chats?website=${websiteData.id}&type=text`}
-                className="text-sm text-brand-accent hover:text-brand-accent/80 transition-colors"
-              >
-                View chats →
-              </Link>
+            </div>
+          </div>
+          <div>
+            <h3 className="text-sm text-brand-text-secondary mb-2">
+              AI Purchases
+            </h3>
+            <div className="flex items-end gap-2">
+              <span className="text-3xl font-bold text-brand-text-primary">
+                {websiteData.stats.aiPurchases?.toLocaleString() || "0"}
+              </span>
             </div>
           </div>
         </div>
