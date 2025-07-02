@@ -68,6 +68,8 @@ interface Website {
 
 export async function GET(request: NextRequest) {
   try {
+    console.time("website-get-route");
+    console.log("Starting website data fetch...");
     // 1) Extract the 'id' query param => e.g. /api/website/get?id=<websiteId>
     const { searchParams } = new URL(request.url);
     const providedWebsiteId = searchParams.get("id");
@@ -166,8 +168,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Fetch website with aiThreads and messages
-    const website = (await prisma.website.findUnique({
+    // Fetch website with basic data first, then fetch related data separately
+    // This splits the queries to reduce connection pool pressure
+    console.log("Fetching basic website data...");
+    const basicWebsite = await prisma.website.findUnique({
       where: { id: websiteId },
       include: {
         accessKeys: {
@@ -176,32 +180,41 @@ export async function GET(request: NextRequest) {
           },
           take: 1,
         },
-        aiThreads: {
-          orderBy: {
-            createdAt: "desc",
-          },
-          include: {
-            messages: {
-              orderBy: {
-                createdAt: "asc",
-              },
-            },
-          },
-        },
         popUpQuestions: {
           orderBy: {
             createdAt: "desc",
           },
         },
       },
-    })) as Website | null;
+    });
 
-    if (!website) {
+    if (!basicWebsite) {
       return NextResponse.json(
         { error: "Website not found." },
         { status: 404 }
       );
     }
+
+    console.log("Fetching AI threads...");
+    const aiThreads = await prisma.aiThread.findMany({
+      where: { websiteId },
+      orderBy: {
+        createdAt: "desc",
+      },
+      include: {
+        messages: {
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+
+    // Combine the data
+    const website = {
+      ...basicWebsite,
+      aiThreads,
+    } as Website;
 
     // We've already verified above that the user owns this website, so this check is redundant
     // But keeping it as a double-check for security
@@ -220,6 +233,8 @@ export async function GET(request: NextRequest) {
       where: { websiteId },
     });
 
+    console.log("Beginning stats calculation...");
+
     // Calculate global stats and content-specific redirects
     const globalStats = {
       totalAiRedirects: 0,
@@ -229,6 +244,11 @@ export async function GET(request: NextRequest) {
       totalAiPurchases: 0,
       totalAiClicks: 0,
     };
+
+    // Check if we need to fetch detailed content
+    const minimalMode = searchParams.get("minimal") === "true";
+
+    console.log("Processing threads and messages...");
 
     // At the start of the counting logic
 
@@ -497,358 +517,371 @@ export async function GET(request: NextRequest) {
       shopifyId: string;
     }> = [];
 
-    // 5) Check website.type => If "wordpress", fetch from WordPress tables
-    if (website.type === "WordPress") {
-      // Fetch WordPress Products with reviews
-      const wpProducts = await prisma.wordpressProduct.findMany({
-        where: { websiteId },
-        orderBy: { updatedAt: "desc" },
-        include: {
-          reviews: true,
-          categories: true,
-          tags: true,
-          customFields: true,
-        },
-      });
+    // Skip detailed content fetching in minimal mode
+    if (minimalMode) {
+      console.log("Minimal mode enabled, skipping detailed content fetch");
+    } else {
+      console.log("Starting content data fetch...");
 
-      products = wpProducts.map((prod) => {
-        const productUrl = `/products/${prod.slug}`;
-
-        return {
-          id: String(prod.id),
-          title: prod.name,
-          url: productUrl,
-          type: "product" as const,
-          lastUpdated: prod.updatedAt.toISOString(),
-          aiRedirects: getRedirectCount(productUrl),
-          description: prod.description,
-          price: prod.price,
-          regularPrice: prod.regularPrice,
-          salePrice: prod.salePrice,
-          stockQuantity: prod.stockQuantity,
-          categories: prod.categories.map((c) => ({ id: c.id, name: c.name })),
-          tags: prod.tags.map((t) => ({ id: t.id, name: t.name })),
-          reviews: prod.reviews.map((r) => ({
-            id: r.id,
-            reviewer: r.reviewer,
-            rating: r.rating,
-            review: r.review,
-            verified: r.verified,
-            date: r.date.toISOString(),
-          })),
-          customFields: prod.customFields.reduce(
-            (acc, field) => ({
-              ...acc,
-              [field.metaKey]: field.metaValue,
-            }),
-            {}
-          ),
-        };
-      });
-
-      // Fetch WordPress Posts with more relations
-      const wpPosts = await prisma.wordpressPost.findMany({
-        where: { websiteId },
-        orderBy: { updatedAt: "desc" },
-        include: {
-          author: true,
-          categories: true,
-          tags: true,
-          comments: true,
-          customFields: true,
-        },
-      });
-
-      blogPosts = wpPosts.map((post) => {
-        const postUrl = `/${post.slug}`;
-
-        return {
-          id: String(post.id),
-          title: post.title,
-          url: postUrl,
-          type: "post" as const,
-          lastUpdated: post.updatedAt.toISOString(),
-          aiRedirects: getRedirectCount(postUrl),
-          content: post.excerpt ?? post.content,
-          author: post.author?.name ?? "Unknown",
-          categories: post.categories.map((c) => ({ id: c.id, name: c.name })),
-          tags: post.tags.map((t) => ({ id: t.id, name: t.name })),
-          comments: post.comments.map((c) => ({
-            id: c.id,
-            author: c.authorName,
-            content: c.content,
-            date: c.date.toISOString(),
-            status: c.status,
-            parentId: c.parentId,
-          })),
-          customFields: post.customFields.reduce(
-            (acc, field) => ({
-              ...acc,
-              [field.metaKey]: field.metaValue,
-            }),
-            {}
-          ),
-        };
-      });
-
-      // Fetching WordPress Pages
-      const wpPages = await prisma.wordpressPage.findMany({
-        where: { websiteId },
-        orderBy: { updatedAt: "desc" },
-      });
-
-      pages = wpPages.map((p) => {
-        const pageUrl = `/${p.slug}`;
-
-        return {
-          id: String(p.id),
-          title: p.title,
-          url: pageUrl,
-          type: "page" as const,
-          lastUpdated: p.updatedAt.toISOString(),
-          aiRedirects: getRedirectCount(pageUrl),
-          content: p.content,
-        };
-      });
-
-      // 6) If Shopify => fetch from Shopify tables
-    } else if (website.type === "Shopify") {
-      // Fetch Shopify Collections first
-      const shopifyCollections = await prisma.shopifyCollection.findMany({
-        where: { websiteId },
-        orderBy: { updatedAt: "desc" },
-        include: {
-          products: true,
-        },
-      });
-
-      // Fetch Shopify Discounts
-      const shopifyDiscounts = await prisma.shopifyDiscount.findMany({
-        where: { websiteId },
-        orderBy: { updatedAt: "desc" },
-      });
-
-      discounts = shopifyDiscounts.map((discount) => {
-        return {
-          id: discount.id,
-          title: discount.title,
-          code: discount.code,
-          value: discount.value,
-          type: discount.type,
-          status: discount.status,
-          startsAt: discount.startsAt?.toISOString() || null,
-          endsAt: discount.endsAt?.toISOString() || null,
-          appliesTo: discount.appliesTo,
-          shopifyId: discount.shopifyId.toString(),
-        };
-      });
-
-      collections = shopifyCollections.map((collection) => {
-        const collectionUrl = `/collections/${collection.handle}`;
-        return {
-          id: collection.id,
-          title: collection.title || "",
-          handle: collection.handle || "",
-          description: collection.description,
-          image: collection.image,
-          ruleSet: collection.ruleSet,
-          sortOrder: collection.sortOrder,
-          updatedAt:
-            collection.updatedAt?.toISOString() ||
-            collection.createdAt.toISOString(),
-          createdAt: collection.createdAt.toISOString(),
-          products: collection.products.map((p) => ({
-            ...p,
-            shopifyId: p.shopifyId.toString(),
-          })),
-          aiRedirects: collectionRedirects.get(collection.handle || "") || 0,
-          shopifyId: collection.shopifyId.toString(),
-        };
-      });
-
-      // Shopify Products with variants, reviews, and images
-      const shopifyProducts = await prisma.shopifyProduct.findMany({
-        where: { websiteId },
-        orderBy: { updatedAt: "desc" },
-        include: {
-          variants: true,
-          reviews: true,
-          images: true,
-        },
-      });
-
-      products = shopifyProducts.map((prod) => {
-        const productUrl = `/products/${prod.handle}`;
-        return {
-          id: prod.id,
-          title: prod.title,
-          url: productUrl,
-          type: "product" as const,
-          lastUpdated: prod.updatedAt.toISOString(),
-          aiRedirects: getRedirectCount(productUrl),
-          description: prod.description,
-          vendor: prod.vendor,
-          productType: prod.productType,
-          price: prod.variants[0]?.price || 0,
-          variants: prod.variants.map((v) => ({
-            id: v.id,
-            title: v.title,
-            price: v.price,
-            sku: v.sku,
-            inventory: v.inventory,
-          })),
-          reviews: prod.reviews.map((r) => ({
-            id: r.id,
-            reviewer: r.reviewer,
-            rating: r.rating,
-            review: r.body,
-            title: r.title,
-            verified: r.verified,
-            date: r.createdAt.toISOString(),
-          })),
-          images: prod.images.map((img) => ({
-            id: img.id,
-            url: img.url,
-            altText: img.altText,
-            caption: img.caption,
-          })),
-        };
-      });
-
-      // Shopify Blog Posts with comments
-      const shopifyBlogs = await prisma.shopifyBlog.findMany({
-        where: { websiteId },
-        include: {
-          posts: {
-            include: {
-              comments: true,
-            },
-            orderBy: { updatedAt: "desc" },
+      // 5) Check website.type => If "wordpress", fetch from WordPress tables
+      if (website.type === "WordPress") {
+        // Fetch WordPress Products with reviews
+        const wpProducts = await prisma.wordpressProduct.findMany({
+          where: { websiteId },
+          orderBy: { updatedAt: "desc" },
+          include: {
+            reviews: true,
+            categories: true,
+            tags: true,
+            customFields: true,
           },
-        },
-      });
+        });
 
-      blogPosts = shopifyBlogs.flatMap((blog) =>
-        blog.posts.map((post) => {
-          const postUrl = `/blogs/${blog.handle}/${post.handle}`;
+        products = wpProducts.map((prod) => {
+          const productUrl = `/products/${prod.slug}`;
+
           return {
-            id: post.id,
+            id: String(prod.id),
+            title: prod.name,
+            url: productUrl,
+            type: "product" as const,
+            lastUpdated: prod.updatedAt.toISOString(),
+            aiRedirects: getRedirectCount(productUrl),
+            description: prod.description,
+            price: prod.price,
+            regularPrice: prod.regularPrice,
+            salePrice: prod.salePrice,
+            stockQuantity: prod.stockQuantity,
+            categories: prod.categories.map((c) => ({
+              id: c.id,
+              name: c.name,
+            })),
+            tags: prod.tags.map((t) => ({ id: t.id, name: t.name })),
+            reviews: prod.reviews.map((r) => ({
+              id: r.id,
+              reviewer: r.reviewer,
+              rating: r.rating,
+              review: r.review,
+              verified: r.verified,
+              date: r.date.toISOString(),
+            })),
+            customFields: prod.customFields.reduce(
+              (acc, field) => ({
+                ...acc,
+                [field.metaKey]: field.metaValue,
+              }),
+              {}
+            ),
+          };
+        });
+
+        // Fetch WordPress Posts with more relations
+        const wpPosts = await prisma.wordpressPost.findMany({
+          where: { websiteId },
+          orderBy: { updatedAt: "desc" },
+          include: {
+            author: true,
+            categories: true,
+            tags: true,
+            comments: true,
+            customFields: true,
+          },
+        });
+
+        blogPosts = wpPosts.map((post) => {
+          const postUrl = `/${post.slug}`;
+
+          return {
+            id: String(post.id),
             title: post.title,
             url: postUrl,
             type: "post" as const,
             lastUpdated: post.updatedAt.toISOString(),
-            aiRedirects: blogRedirects.get(post.handle || "") || 0,
-            content: post.content,
-            author: post.author,
-            image: post.image,
-            blog: {
-              id: blog.id,
-              title: blog.title,
-              handle: blog.handle,
-            },
+            aiRedirects: getRedirectCount(postUrl),
+            content: post.excerpt ?? post.content,
+            author: post.author?.name ?? "Unknown",
+            categories: post.categories.map((c) => ({
+              id: c.id,
+              name: c.name,
+            })),
+            tags: post.tags.map((t) => ({ id: t.id, name: t.name })),
             comments: post.comments.map((c) => ({
               id: c.id,
-              author: c.author,
-              content: c.body,
-              email: c.email,
+              author: c.authorName,
+              content: c.content,
+              date: c.date.toISOString(),
               status: c.status,
-              date: c.createdAt.toISOString(),
+              parentId: c.parentId,
+            })),
+            customFields: post.customFields.reduce(
+              (acc, field) => ({
+                ...acc,
+                [field.metaKey]: field.metaValue,
+              }),
+              {}
+            ),
+          };
+        });
+
+        // Fetching WordPress Pages
+        const wpPages = await prisma.wordpressPage.findMany({
+          where: { websiteId },
+          orderBy: { updatedAt: "desc" },
+        });
+
+        pages = wpPages.map((p) => {
+          const pageUrl = `/${p.slug}`;
+
+          return {
+            id: String(p.id),
+            title: p.title,
+            url: pageUrl,
+            type: "page" as const,
+            lastUpdated: p.updatedAt.toISOString(),
+            aiRedirects: getRedirectCount(pageUrl),
+            content: p.content,
+          };
+        });
+
+        // 6) If Shopify => fetch from Shopify tables
+      } else if (website.type === "Shopify") {
+        // Fetch Shopify Collections first
+        const shopifyCollections = await prisma.shopifyCollection.findMany({
+          where: { websiteId },
+          orderBy: { updatedAt: "desc" },
+          include: {
+            products: true,
+          },
+        });
+
+        // Fetch Shopify Discounts
+        const shopifyDiscounts = await prisma.shopifyDiscount.findMany({
+          where: { websiteId },
+          orderBy: { updatedAt: "desc" },
+        });
+
+        discounts = shopifyDiscounts.map((discount) => {
+          return {
+            id: discount.id,
+            title: discount.title,
+            code: discount.code,
+            value: discount.value,
+            type: discount.type,
+            status: discount.status,
+            startsAt: discount.startsAt?.toISOString() || null,
+            endsAt: discount.endsAt?.toISOString() || null,
+            appliesTo: discount.appliesTo,
+            shopifyId: discount.shopifyId.toString(),
+          };
+        });
+
+        collections = shopifyCollections.map((collection) => {
+          const collectionUrl = `/collections/${collection.handle}`;
+          return {
+            id: collection.id,
+            title: collection.title || "",
+            handle: collection.handle || "",
+            description: collection.description,
+            image: collection.image,
+            ruleSet: collection.ruleSet,
+            sortOrder: collection.sortOrder,
+            updatedAt:
+              collection.updatedAt?.toISOString() ||
+              collection.createdAt.toISOString(),
+            createdAt: collection.createdAt.toISOString(),
+            products: collection.products.map((p) => ({
+              ...p,
+              shopifyId: p.shopifyId.toString(),
+            })),
+            aiRedirects: collectionRedirects.get(collection.handle || "") || 0,
+            shopifyId: collection.shopifyId.toString(),
+          };
+        });
+
+        // Shopify Products with variants, reviews, and images
+        const shopifyProducts = await prisma.shopifyProduct.findMany({
+          where: { websiteId },
+          orderBy: { updatedAt: "desc" },
+          include: {
+            variants: true,
+            reviews: true,
+            images: true,
+          },
+        });
+
+        products = shopifyProducts.map((prod) => {
+          const productUrl = `/products/${prod.handle}`;
+          return {
+            id: prod.id,
+            title: prod.title,
+            url: productUrl,
+            type: "product" as const,
+            lastUpdated: prod.updatedAt.toISOString(),
+            aiRedirects: getRedirectCount(productUrl),
+            description: prod.description,
+            vendor: prod.vendor,
+            productType: prod.productType,
+            price: prod.variants[0]?.price || 0,
+            variants: prod.variants.map((v) => ({
+              id: v.id,
+              title: v.title,
+              price: v.price,
+              sku: v.sku,
+              inventory: v.inventory,
+            })),
+            reviews: prod.reviews.map((r) => ({
+              id: r.id,
+              reviewer: r.reviewer,
+              rating: r.rating,
+              review: r.body,
+              title: r.title,
+              verified: r.verified,
+              date: r.createdAt.toISOString(),
+            })),
+            images: prod.images.map((img) => ({
+              id: img.id,
+              url: img.url,
+              altText: img.altText,
+              caption: img.caption,
             })),
           };
-        })
-      );
+        });
 
-      // Shopify Pages
-      const shopifyPages = await prisma.shopifyPage.findMany({
-        where: { websiteId },
-        orderBy: { updatedAt: "desc" },
-      });
+        // Shopify Blog Posts with comments
+        const shopifyBlogs = await prisma.shopifyBlog.findMany({
+          where: { websiteId },
+          include: {
+            posts: {
+              include: {
+                comments: true,
+              },
+              orderBy: { updatedAt: "desc" },
+            },
+          },
+        });
 
-      pages = shopifyPages.map((p) => {
-        const pageUrl = `/pages/${p.handle}`;
-        return {
-          id: p.id,
-          title: p.title,
-          url: pageUrl,
-          type: "page" as const,
-          lastUpdated: p.updatedAt.toISOString(),
-          aiRedirects: getRedirectCount(pageUrl),
-          content: p.content,
-        };
-      });
-    } else if (website.type === "Custom") {
-      // For Custom websites, we only handle pages
-      // Set empty arrays for products and blog posts
-      products = [];
-      blogPosts = [];
-      collections = [];
+        blogPosts = shopifyBlogs.flatMap((blog) =>
+          blog.posts.map((post) => {
+            const postUrl = `/blogs/${blog.handle}/${post.handle}`;
+            return {
+              id: post.id,
+              title: post.title,
+              url: postUrl,
+              type: "post" as const,
+              lastUpdated: post.updatedAt.toISOString(),
+              aiRedirects: blogRedirects.get(post.handle || "") || 0,
+              content: post.content,
+              author: post.author,
+              image: post.image,
+              blog: {
+                id: blog.id,
+                title: blog.title,
+                handle: blog.handle,
+              },
+              comments: post.comments.map((c) => ({
+                id: c.id,
+                author: c.author,
+                content: c.body,
+                email: c.email,
+                status: c.status,
+                date: c.createdAt.toISOString(),
+              })),
+            };
+          })
+        );
 
-      // Get pages from the Page model for custom websites
-      try {
-        const customPages = await prisma.page.findMany({
+        // Shopify Pages
+        const shopifyPages = await prisma.shopifyPage.findMany({
           where: { websiteId },
           orderBy: { updatedAt: "desc" },
         });
 
-        if (customPages.length > 0) {
-          pages = customPages.map((p: any) => {
-            const pageUrl = p.url;
-            return {
-              id: p.id,
-              title: p.title,
-              url: pageUrl,
-              type: "page" as const,
-              lastUpdated: p.updatedAt.toISOString(),
-              aiRedirects: getRedirectCount(pageUrl),
-              content: p.content,
-              htmlContent: p.html,
-            };
+        pages = shopifyPages.map((p) => {
+          const pageUrl = `/pages/${p.handle}`;
+          return {
+            id: p.id,
+            title: p.title,
+            url: pageUrl,
+            type: "page" as const,
+            lastUpdated: p.updatedAt.toISOString(),
+            aiRedirects: getRedirectCount(pageUrl),
+            content: p.content,
+          };
+        });
+      } else if (website.type === "Custom") {
+        // For Custom websites, we only handle pages
+        // Set empty arrays for products and blog posts
+        products = [];
+        blogPosts = [];
+        collections = [];
+
+        // Get pages from the Page model for custom websites
+        try {
+          const customPages = await prisma.page.findMany({
+            where: { websiteId },
+            orderBy: { updatedAt: "desc" },
           });
-        } else {
+
+          if (customPages.length > 0) {
+            pages = customPages.map((p: any) => {
+              const pageUrl = p.url;
+              return {
+                id: p.id,
+                title: p.title,
+                url: pageUrl,
+                type: "page" as const,
+                lastUpdated: p.updatedAt.toISOString(),
+                aiRedirects: getRedirectCount(pageUrl),
+                content: p.content,
+                htmlContent: p.html,
+              };
+            });
+          } else {
+            pages = [];
+          }
+        } catch (error) {
+          console.error("Error fetching custom pages:", error);
           pages = [];
         }
-      } catch (error) {
-        console.error("Error fetching custom pages:", error);
-        pages = [];
+      } else {
+        return NextResponse.json(
+          { error: `Unsupported website type: ${website.type}` },
+          { status: 400 }
+        );
       }
-    } else {
-      return NextResponse.json(
-        { error: `Unsupported website type: ${website.type}` },
-        { status: 400 }
-      );
-    }
 
-    // Check for additional custom pages regardless of website type
-    if (website.type !== "Custom") {
-      try {
-        const additionalCustomPages = await prisma.page.findMany({
-          where: { websiteId },
-          orderBy: { updatedAt: "desc" },
-        });
-
-        if (additionalCustomPages.length > 0) {
-          const customPages = additionalCustomPages.map((p: any) => {
-            const pageUrl = p.url;
-            return {
-              id: p.id,
-              title: p.title,
-              url: pageUrl,
-              type: "page" as const,
-              lastUpdated: p.updatedAt.toISOString(),
-              aiRedirects: getRedirectCount(pageUrl),
-              content: p.content,
-              htmlContent: p.html,
-              source: "custom_crawler", // Mark these as coming from the custom crawler
-            };
+      // Check for additional custom pages regardless of website type
+      if (website.type !== "Custom") {
+        try {
+          const additionalCustomPages = await prisma.page.findMany({
+            where: { websiteId },
+            orderBy: { updatedAt: "desc" },
           });
 
-          // Combine with existing pages
-          pages = [...pages, ...customPages];
+          if (additionalCustomPages.length > 0) {
+            const customPages = additionalCustomPages.map((p: any) => {
+              const pageUrl = p.url;
+              return {
+                id: p.id,
+                title: p.title,
+                url: pageUrl,
+                type: "page" as const,
+                lastUpdated: p.updatedAt.toISOString(),
+                aiRedirects: getRedirectCount(pageUrl),
+                content: p.content,
+                htmlContent: p.html,
+                source: "custom_crawler", // Mark these as coming from the custom crawler
+              };
+            });
+
+            // Combine with existing pages
+            pages = [...pages, ...customPages];
+          }
+        } catch (error) {
+          console.error("Error fetching additional custom pages:", error);
         }
-      } catch (error) {
-        console.error("Error fetching additional custom pages:", error);
       }
-    }
+    } // Close the minimal mode condition
 
     // After processing all messages, log the final counts
 
@@ -973,65 +1006,85 @@ export async function GET(request: NextRequest) {
         totalVoiceChats: globalStats.totalVoiceChats,
         totalTextChats: globalStats.totalTextChats,
       },
-      content: {
-        products: products.map((p) => ({
-          id: p.id,
-          shopifyId: p.shopifyId ? p.shopifyId.toString() : undefined,
-          handle: extractHandle(p.url, "products"),
-          title: p.title || "",
-          description: p.description || "",
-          url: p.url,
-          aiRedirects:
-            productRedirects.get(extractHandle(p.url, "products") || "") || 0,
-        })),
-        blogPosts: blogPosts.map((p) => ({
-          id: p.id,
-          shopifyId: p.shopifyId ? p.shopifyId.toString() : undefined,
-          handle: extractHandle(p.url, "blogs"),
-          title: p.title || "",
-          content: p.content || "",
-          url: p.url,
-          aiRedirects:
-            blogRedirects.get(extractHandle(p.url, "blogs") || "") || 0,
-        })),
-        pages: pages.map((p) => ({
-          id: p.id,
-          shopifyId: p.shopifyId ? p.shopifyId.toString() : undefined,
-          handle: extractHandle(p.url, "pages"),
-          title: p.title || "",
-          content: p.content || "",
-          url: p.url,
-          aiRedirects:
-            pageRedirects.get(extractHandle(p.url, "pages") || "") || 0,
-        })),
-        collections: collections.map((c) => ({
-          id: c.id,
-          shopifyId: c.shopifyId.toString(),
-          handle: c.handle || "",
-          title: c.title || "",
-          description: c.description || "",
-          aiRedirects: collectionRedirects.get(c.handle || "") || 0,
-        })),
-        discounts: discounts.map((d) => ({
-          id: d.id,
-          shopifyId: d.shopifyId,
-          title: d.title || "",
-          code: d.code || "",
-          value: d.value || "",
-          type: d.type || "",
-          status: d.status || "",
-          startsAt: d.startsAt,
-          endsAt: d.endsAt,
-          appliesTo: d.appliesTo || "",
-        })),
-      },
+      // Only include detailed content if not in minimal mode
+      content: minimalMode
+        ? {
+            products: [],
+            blogPosts: [],
+            pages: [],
+            collections: [],
+            discounts: [],
+          }
+        : {
+            products: products.map((p) => ({
+              id: p.id,
+              shopifyId: p.shopifyId ? p.shopifyId.toString() : undefined,
+              handle: extractHandle(p.url, "products"),
+              title: p.title || "",
+              description: p.description || "",
+              url: p.url,
+              aiRedirects:
+                productRedirects.get(extractHandle(p.url, "products") || "") ||
+                0,
+            })),
+            blogPosts: blogPosts.map((p) => ({
+              id: p.id,
+              shopifyId: p.shopifyId ? p.shopifyId.toString() : undefined,
+              handle: extractHandle(p.url, "blogs"),
+              title: p.title || "",
+              content: p.content || "",
+              url: p.url,
+              aiRedirects:
+                blogRedirects.get(extractHandle(p.url, "blogs") || "") || 0,
+            })),
+            pages: pages.map((p) => ({
+              id: p.id,
+              shopifyId: p.shopifyId ? p.shopifyId.toString() : undefined,
+              handle: extractHandle(p.url, "pages"),
+              title: p.title || "",
+              content: p.content || "",
+              url: p.url,
+              aiRedirects:
+                pageRedirects.get(extractHandle(p.url, "pages") || "") || 0,
+            })),
+            collections: collections.map((c) => ({
+              id: c.id,
+              shopifyId: c.shopifyId.toString(),
+              handle: c.handle || "",
+              title: c.title || "",
+              description: c.description || "",
+              aiRedirects: collectionRedirects.get(c.handle || "") || 0,
+            })),
+            discounts: discounts.map((d) => ({
+              id: d.id,
+              shopifyId: d.shopifyId,
+              title: d.title || "",
+              code: d.code || "",
+              value: d.value || "",
+              type: d.type || "",
+              status: d.status || "",
+              startsAt: d.startsAt,
+              endsAt: d.endsAt,
+              appliesTo: d.appliesTo || "",
+            })),
+          },
     };
 
+    console.timeEnd("website-get-route");
     return NextResponse.json(responseData, { status: 200 });
   } catch (err) {
     console.error("Failed to retrieve website data:", err);
+    // Provide more detailed error information
+    const errorMessage =
+      err instanceof Error ? `${err.name}: ${err.message}` : "Unknown error";
+    console.error("Error details:", errorMessage);
+
+    if (err instanceof Error && err.stack) {
+      console.error("Stack trace:", err.stack);
+    }
+
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Internal server error", details: errorMessage },
       { status: 500 }
     );
   }
