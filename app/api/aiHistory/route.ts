@@ -100,6 +100,7 @@ export async function POST(request: NextRequest) {
           sessions: {
             include: {
               customer: true,
+              urlMovements: true,
             },
           },
         },
@@ -147,6 +148,9 @@ export async function POST(request: NextRequest) {
         customers: thread.sessions
           .map((session) => session.customer)
           .filter((customer) => customer !== null),
+        urlMovements: thread.sessions.flatMap(
+          (session) => session.urlMovements || []
+        ),
       }));
 
       return cors(
@@ -180,6 +184,7 @@ export async function POST(request: NextRequest) {
         sessions: {
           include: {
             customer: true,
+            urlMovements: true,
           },
         },
       },
@@ -227,6 +232,9 @@ export async function POST(request: NextRequest) {
       customers: thread.sessions
         .map((session) => session.customer)
         .filter((customer) => customer !== null),
+      urlMovements: thread.sessions.flatMap(
+        (session) => session.urlMovements || []
+      ),
     }));
 
     // Gather all Shopify customer data related to this websiteId

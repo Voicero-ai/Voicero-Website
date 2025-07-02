@@ -409,6 +409,7 @@ model ShopifyProduct {
   scrapedHtml           String?                 @db.LongText
   trained               Boolean?                @default(false)
   isTraining            Boolean?                @default(false)
+  type                  String                  @default("general")
   website               Website                 @relation(fields: [websiteId], references: [id])
   images                ShopifyMedia[]
   variants              ShopifyProductVariant[]
@@ -460,22 +461,23 @@ model ShopifyReview {
 }
 
 model ShopifyDiscount {
-  id         String    @id @default(uuid())
-  shopifyId  BigInt
-  title      String?
-  value      String?
-  startsAt   DateTime?
-  endsAt     DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  appliesTo  String?
-  code       String?
-  status     String?   @default("ACTIVE")
-  type       String?
-  websiteId  String
-  trained    Boolean?  @default(false)
-  isTraining Boolean?  @default(false)
-  website    Website   @relation(fields: [websiteId], references: [id])
+  id           String    @id @default(uuid())
+  shopifyId    BigInt
+  title        String?
+  value        String?
+  startsAt     DateTime?
+  endsAt       DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  appliesTo    String?
+  code         String?
+  status       String?   @default("ACTIVE")
+  discountType String?
+  websiteId    String
+  trained      Boolean?  @default(false)
+  isTraining   Boolean?  @default(false)
+  type         String    @default("general")
+  website      Website   @relation(fields: [websiteId], references: [id])
 
   @@unique([websiteId, shopifyId])
   @@index([websiteId])
@@ -507,6 +509,7 @@ model ShopifyPage {
   scrapedHtml    String?            @db.LongText
   trained        Boolean?           @default(false)
   isTraining     Boolean?           @default(false)
+  type           String             @default("general")
   website        Website            @relation(fields: [websiteId], references: [id])
   metafields     ShopifyMetafield[]
 
@@ -557,6 +560,7 @@ model ShopifyBlogPost {
   scrapedHtml    String?            @db.LongText
   trained        Boolean?           @default(false)
   isTraining     Boolean?           @default(false)
+  type           String             @default("general")
   website        Website            @relation(fields: [websiteId], references: [id])
   blog           ShopifyBlog        @relation(fields: [blogId], references: [id], onDelete: Cascade)
   comments       ShopifyComment[]
@@ -694,6 +698,7 @@ model ShopifyCollection {
   scrapedHtml String?          @db.LongText
   trained     Boolean?         @default(false)
   isTraining  Boolean?         @default(false)
+  type        String           @default("general")
   website     Website          @relation(fields: [websiteId], references: [id])
   products    ShopifyProduct[]
 
