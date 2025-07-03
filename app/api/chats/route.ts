@@ -13,24 +13,32 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url);
     const websiteId = searchParams.get("websiteId");
-    const type = searchParams.get("type") as "voice" | "text" | null;
+    const action = searchParams.get("action") as
+      | "click"
+      | "scroll"
+      | "purchase"
+      | "redirect"
+      | null;
     const sort =
       (searchParams.get("sort") as
         | "recent"
         | "oldest"
         | "longest"
         | "shortest") || "recent";
-    const timeRange = searchParams.get("timeRange") || "all";
     const page = parseInt(searchParams.get("page") || "1");
     let limit = parseInt(searchParams.get("limit") || "10");
     const skip = (page - 1) * limit;
 
     const whereClause: {
       website: { userId: string; id?: string };
-      createdAt?: { gte: Date };
       messages?: {
         some: {
-          type?: string;
+          content?: {
+            contains: string;
+          };
+          role?: string;
+          AND?: any[];
+          OR?: any[];
         };
       };
     } = {
@@ -38,33 +46,30 @@ export async function GET(req: Request) {
         userId: session.user.id,
         ...(websiteId ? { id: websiteId } : {}),
       },
-      ...(type
-        ? {
-            messages: {
-              some: {
-                type: type,
-              },
-            },
-          }
-        : {}),
     };
 
-    // Apply time range filter
-    if (timeRange === "today") {
-      whereClause.createdAt = {
-        gte: new Date(new Date().setHours(0, 0, 0, 0)),
+    // Apply action filter
+    if (action) {
+      const actionQueries = {
+        click: 'action":"click',
+        scroll: 'action":"scroll',
+        purchase: 'action":"purchase',
+        redirect: ['action":"redirect', "pageUrl", "redirect_url", 'url":'],
       };
-    } else if (timeRange === "week") {
-      const lastWeek = new Date();
-      lastWeek.setDate(lastWeek.getDate() - 7);
-      whereClause.createdAt = { gte: lastWeek };
-    } else if (timeRange === "month") {
-      const lastMonth = new Date();
-      lastMonth.setMonth(lastMonth.getMonth() - 1);
-      whereClause.createdAt = { gte: lastMonth };
-    } else if (timeRange === "last20") {
-      // For last20, we'll handle this in the query by limiting to 20 most recent
-      limit = 20;
+
+      const actionSearchTerms =
+        action === "redirect"
+          ? actionQueries.redirect
+          : [actionQueries[action as keyof typeof actionQueries]];
+
+      whereClause.messages = {
+        some: {
+          role: "assistant",
+          OR: actionSearchTerms.map((term) => ({
+            content: { contains: term },
+          })),
+        },
+      };
     }
 
     // Determine sort order
@@ -91,16 +96,13 @@ export async function GET(req: Request) {
             },
           },
           messages: {
-            take: 1,
             orderBy: {
               createdAt: "asc",
-            },
-            where: {
-              role: "user",
             },
             select: {
               content: true,
               type: true,
+              role: true,
             },
           },
           _count: {
@@ -117,18 +119,51 @@ export async function GET(req: Request) {
     ]);
 
     // Transform the data to match the frontend structure
-    const formattedThreads = threads.map((thread) => ({
-      id: thread.id,
-      type: thread.messages[0]?.type || "text", // Use the type from the first message
-      startedAt: thread.createdAt.toISOString(),
-      initialQuery: thread.messages[0]?.content || "New Conversation",
-      messageCount: thread._count.messages,
-      website: {
-        id: thread.website.id,
-        domain: thread.website.url,
-        name: thread.website.name,
-      },
-    }));
+    const formattedThreads = threads.map((thread) => {
+      const initialMessage = thread.messages.find((m) => m.role === "user");
+
+      // Check for AI actions in assistant messages
+      const hasClick = thread.messages.some(
+        (m) => m.role === "assistant" && m.content.includes('"action":"click')
+      );
+      const hasScroll = thread.messages.some(
+        (m) => m.role === "assistant" && m.content.includes('"action":"scroll')
+      );
+      const hasPurchase = thread.messages.some(
+        (m) =>
+          m.role === "assistant" && m.content.includes('"action":"purchase')
+      );
+      const hasRedirect = thread.messages.some(
+        (m) =>
+          m.role === "assistant" &&
+          (m.content.includes('"action":"redirect') ||
+            m.content.includes("pageUrl") ||
+            m.content.includes("redirect_url") ||
+            m.content.includes('url":'))
+      );
+
+      return {
+        id: thread.id,
+        type: initialMessage?.type || "text", // Use the type from the first user message
+        startedAt: thread.createdAt.toISOString(),
+        initialQuery: initialMessage?.content || "New Conversation",
+        messageCount: thread._count.messages,
+        website: {
+          id: thread.website.id,
+          domain: thread.website.url,
+          name: thread.website.name,
+        },
+        hasAction:
+          hasClick || hasScroll || hasPurchase || hasRedirect
+            ? {
+                click: hasClick,
+                scroll: hasScroll,
+                purchase: hasPurchase,
+                redirect: hasRedirect,
+              }
+            : undefined,
+      };
+    });
 
     return NextResponse.json({
       sessions: formattedThreads,
