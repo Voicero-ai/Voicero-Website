@@ -161,6 +161,14 @@ export async function GET(request: NextRequest) {
       console.log(`Page URL for session ${sessionId}: ${pageUrl}`);
     }
 
+    // Function to check if a thread is less than 1 hour old
+    const isThreadRecent = (thread: any): boolean => {
+      if (!thread) return false;
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000); // 1 hour ago
+      const threadCreatedAt = new Date(thread.createdAt);
+      return threadCreatedAt > oneHourAgo;
+    };
+
     // If shopifyId is provided, try to find the most recent session for that customer
     if (shopifyId && websiteId) {
       console.log(`Looking for session with Shopify ID: ${shopifyId}`);
@@ -197,12 +205,25 @@ export async function GET(request: NextRequest) {
             `Found existing session for Shopify customer: ${customerSession.id}`
           );
 
-          // Create a new thread if none exists
-          if (customerSession.threads.length === 0) {
+          let threadToUse = null;
+
+          // Check if there's a recent thread (less than 1 hour old)
+          if (customerSession.threads.length > 0) {
+            const mostRecentThread = customerSession.threads[0];
+            if (isThreadRecent(mostRecentThread)) {
+              console.log(
+                `Using existing thread (${mostRecentThread.threadId}) as it's less than 1 hour old`
+              );
+              threadToUse = mostRecentThread;
+            }
+          }
+
+          // Create a new thread if no recent thread exists
+          if (!threadToUse) {
             console.log(
-              `No threads found for session ${customerSession.id}, creating one...`
+              `Creating new thread for session ${customerSession.id}...`
             );
-            const newThread = await prisma.aiThread.create({
+            threadToUse = await prisma.aiThread.create({
               data: {
                 threadId: crypto.randomUUID(),
                 title: "New Conversation",
@@ -214,14 +235,16 @@ export async function GET(request: NextRequest) {
               include: { messages: true },
             });
 
-            customerSession.threads = [newThread];
-            console.log(`Created new thread with ID: ${newThread.threadId}`);
+            // Add the new thread to the session's threads list
+            customerSession.threads.unshift(threadToUse);
+            console.log(`Created new thread with ID: ${threadToUse.threadId}`);
           }
 
           return cors(
             request,
             NextResponse.json({
               session: customerSession,
+              thread: threadToUse,
               shopifyCustomerLinked: true,
             })
           );
@@ -254,12 +277,23 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      // Create a new thread if none exists
-      if (session.threads.length === 0) {
-        console.log(
-          `No threads found for session ${session.id}, creating one...`
-        );
-        const newThread = await prisma.aiThread.create({
+      let threadToUse = null;
+
+      // Check if there's a recent thread (less than 1 hour old)
+      if (session.threads.length > 0) {
+        const mostRecentThread = session.threads[0];
+        if (isThreadRecent(mostRecentThread)) {
+          console.log(
+            `Using existing thread (${mostRecentThread.threadId}) as it's less than 1 hour old`
+          );
+          threadToUse = mostRecentThread;
+        }
+      }
+
+      // Create a new thread if no recent thread exists
+      if (!threadToUse) {
+        console.log(`Creating new thread for session ${session.id}...`);
+        threadToUse = await prisma.aiThread.create({
           data: {
             threadId: crypto.randomUUID(),
             title: "New Conversation",
@@ -271,14 +305,16 @@ export async function GET(request: NextRequest) {
           include: { messages: true },
         });
 
-        session.threads = [newThread];
-        console.log(`Created new thread with ID: ${newThread.threadId}`);
+        // Add the new thread to the session's threads list
+        session.threads.unshift(threadToUse);
+        console.log(`Created new thread with ID: ${threadToUse.threadId}`);
       }
 
       return cors(
         request,
         NextResponse.json({
           session,
+          thread: threadToUse,
           shopifyCustomerLinked: !!session.shopifyCustomerId,
         })
       );
@@ -314,12 +350,23 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Create a new thread if none exists
-    if (session.threads.length === 0) {
-      console.log(
-        `No threads found for session ${session.id}, creating one...`
-      );
-      const newThread = await prisma.aiThread.create({
+    let threadToUse = null;
+
+    // Check if there's a recent thread (less than 1 hour old)
+    if (session.threads.length > 0) {
+      const mostRecentThread = session.threads[0];
+      if (isThreadRecent(mostRecentThread)) {
+        console.log(
+          `Using existing thread (${mostRecentThread.threadId}) as it's less than 1 hour old`
+        );
+        threadToUse = mostRecentThread;
+      }
+    }
+
+    // Create a new thread if no recent thread exists
+    if (!threadToUse) {
+      console.log(`Creating new thread for session ${session.id}...`);
+      threadToUse = await prisma.aiThread.create({
         data: {
           threadId: crypto.randomUUID(),
           title: "New Conversation",
@@ -331,14 +378,16 @@ export async function GET(request: NextRequest) {
         include: { messages: true },
       });
 
-      session.threads = [newThread];
-      console.log(`Created new thread with ID: ${newThread.threadId}`);
+      // Add the new thread to the session's threads list
+      session.threads.unshift(threadToUse);
+      console.log(`Created new thread with ID: ${threadToUse.threadId}`);
     }
 
     return cors(
       request,
       NextResponse.json({
         session,
+        thread: threadToUse,
         shopifyCustomerLinked: !!session.shopifyCustomerId,
       })
     );

@@ -3,9 +3,8 @@ import prisma from "../../../../lib/prisma";
 
 export const dynamic = "force-dynamic";
 
-// Constants for batch processing
-const BATCH_SIZE = 20;
-const MAX_TOTAL_PROCESSED = 200; // Safety limit to prevent long-running jobs
+// Internal batch size for database efficiency
+const BATCH_SIZE = 200;
 
 export async function GET(request: Request) {
   try {
@@ -16,195 +15,255 @@ export async function GET(request: Request) {
     );
 
     let totalDeleted = 0;
-    let totalProcessed = 0;
+    let totalConnectionsRemoved = 0;
+    let orphanedConnectionsRemoved = 0;
 
     // PART 1: Process empty threads in batches
-    console.log("Processing empty threads in batches...");
+    console.log("Processing ALL empty threads...");
 
-    let hasMoreEmptyThreads = true;
     let emptyDeletedCount = 0;
+    let hasMoreEmptyThreads = true;
+    let emptyOffset = 0;
 
-    while (hasMoreEmptyThreads && totalProcessed < MAX_TOTAL_PROCESSED) {
+    // Process all empty threads without an artificial limit
+    while (hasMoreEmptyThreads) {
       // Get a batch of empty threads
       const emptyThreadsBatch = await prisma.aiThread.findMany({
         where: {
           messages: {
             none: {}, // This checks for threads with no related messages
           },
+          // Remove the time filter to get all empty threads regardless of age
         },
-        include: {
+        select: {
+          id: true,
+          websiteId: true,
           _count: {
             select: {
-              messages: true,
               sessions: true,
             },
           },
         },
         take: BATCH_SIZE,
+        skip: emptyOffset,
+        orderBy: {
+          createdAt: "asc",
+        },
       });
 
       if (emptyThreadsBatch.length === 0) {
         hasMoreEmptyThreads = false;
+        console.log("No more empty threads to process");
         continue;
       }
 
       console.log(
-        `Processing batch of ${emptyThreadsBatch.length} empty threads`
+        `Processing batch of ${emptyThreadsBatch.length} empty threads (offset: ${emptyOffset})`
       );
 
-      // Process each empty thread in the batch
-      for (const thread of emptyThreadsBatch) {
-        try {
-          totalProcessed++;
+      // Get thread IDs with sessions
+      const threadIdsWithSessions = emptyThreadsBatch
+        .filter((thread) => thread._count.sessions > 0)
+        .map((thread) => thread.id);
 
-          // Check if the thread was just created (within last hour) - maybe give some grace period
-          const threadAge = now.getTime() - thread.createdAt.getTime();
-          const oneHourInMs = 60 * 60 * 1000;
+      if (threadIdsWithSessions.length > 0) {
+        // Batch delete all session connections for this batch
+        const result = await prisma.$executeRawUnsafe(
+          `DELETE FROM _AiThreadToSession WHERE A IN (${threadIdsWithSessions
+            .map(() => "?")
+            .join(",")})`,
+          ...threadIdsWithSessions
+        );
 
-          if (threadAge < oneHourInMs) {
-            console.log(
-              `Skipping recently created thread ${thread.id} (age: ${
-                threadAge / 1000 / 60
-              } minutes)`
-            );
-            continue;
-          }
-
-          // Log info about connected sessions
-          if (thread._count.sessions > 0) {
-            console.log(
-              `Thread ${thread.id} has ${thread._count.sessions} sessions but 0 messages`
-            );
-          }
-
-          // Delete the thread
-          await prisma.aiThread.delete({
-            where: { id: thread.id },
-          });
-
-          emptyDeletedCount++;
-          totalDeleted++;
-          console.log(
-            `Deleted empty thread ${thread.id} (websiteId: ${thread.websiteId})`
-          );
-        } catch (error) {
-          console.error(`Error processing thread ${thread.id}:`, error);
-        }
+        totalConnectionsRemoved += result;
+        console.log(
+          `Deleted ${result} session connections for ${threadIdsWithSessions.length} threads`
+        );
       }
+
+      // Get all thread IDs in this batch
+      const threadIds = emptyThreadsBatch.map((thread) => thread.id);
+
+      // Batch delete all threads in this batch
+      const deleteResult = await prisma.aiThread.deleteMany({
+        where: {
+          id: {
+            in: threadIds,
+          },
+        },
+      });
+
+      emptyDeletedCount += deleteResult.count;
+      totalDeleted += deleteResult.count;
+      console.log(`Deleted ${deleteResult.count} empty threads in batch`);
+
+      // Update offset for next iteration
+      emptyOffset += emptyThreadsBatch.length;
     }
 
     console.log(`Deleted ${emptyDeletedCount} completely empty threads`);
 
     // PART 2: Process threads with only assistant messages in batches
-    console.log("Processing assistant-only threads in batches...");
+    console.log("Processing ALL assistant-only threads...");
 
-    let skip = 0;
-    let hasMoreThreads = true;
     let assistantOnlyDeletedCount = 0;
+    let assistantOffset = 0;
+    let hasMoreThreads = true;
 
-    while (hasMoreThreads && totalProcessed < MAX_TOTAL_PROCESSED) {
-      // Get a batch of threads
-      const threadsBatch = await prisma.aiThread.findMany({
+    // Process all assistant-only threads without an artificial limit
+    while (hasMoreThreads) {
+      // Get threads with messages, excluding threads with user messages
+      const assistantOnlyThreadsIds = (await prisma.$queryRaw`
+        SELECT a.id, a.websiteId 
+        FROM AiThread a
+        WHERE EXISTS (
+          SELECT 1 FROM AiMessage m 
+          WHERE m.threadId = a.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM AiMessage m 
+          WHERE m.threadId = a.id AND m.role = 'user'
+        )
+        ORDER BY a.createdAt ASC
+        LIMIT ${BATCH_SIZE}
+        OFFSET ${assistantOffset}
+      `) as { id: string; websiteId: string }[];
+
+      if (assistantOnlyThreadsIds.length === 0) {
+        hasMoreThreads = false;
+        console.log("No more assistant-only threads to process");
+        continue;
+      }
+
+      console.log(
+        `Processing batch of ${assistantOnlyThreadsIds.length} assistant-only threads (offset: ${assistantOffset})`
+      );
+
+      // Extract the thread IDs
+      const threadIds = assistantOnlyThreadsIds.map((thread) => thread.id);
+
+      // Get threads with sessions
+      const threadsWithSessions = await prisma.aiThread.findMany({
         where: {
-          messages: {
-            some: {}, // Has at least one message
+          id: {
+            in: threadIds,
           },
         },
         include: {
-          messages: true,
           _count: {
             select: {
               sessions: true,
             },
           },
         },
-        take: BATCH_SIZE,
-        skip: skip,
       });
 
-      if (threadsBatch.length === 0) {
-        hasMoreThreads = false;
-        continue;
+      // Get IDs of threads with sessions
+      const threadIdsWithSessions = threadsWithSessions
+        .filter((thread) => thread._count.sessions > 0)
+        .map((thread) => thread.id);
+
+      if (threadIdsWithSessions.length > 0) {
+        // Batch delete all session connections for this batch
+        const result = await prisma.$executeRawUnsafe(
+          `DELETE FROM _AiThreadToSession WHERE A IN (${threadIdsWithSessions
+            .map(() => "?")
+            .join(",")})`,
+          ...threadIdsWithSessions
+        );
+
+        totalConnectionsRemoved += result;
+        console.log(
+          `Deleted ${result} session connections for ${threadIdsWithSessions.length} assistant-only threads`
+        );
       }
 
+      // Batch delete all message records for these threads
+      await prisma.aiMessage.deleteMany({
+        where: {
+          threadId: {
+            in: threadIds,
+          },
+        },
+      });
+
+      // Batch delete all threads in this batch
+      const deleteResult = await prisma.aiThread.deleteMany({
+        where: {
+          id: {
+            in: threadIds,
+          },
+        },
+      });
+
+      assistantOnlyDeletedCount += deleteResult.count;
+      totalDeleted += deleteResult.count;
       console.log(
-        `Processing batch of ${threadsBatch.length} threads with messages (offset: ${skip})`
+        `Deleted ${deleteResult.count} assistant-only threads in batch`
       );
-      skip += threadsBatch.length;
 
-      // Process each thread in the batch
-      for (const thread of threadsBatch) {
-        try {
-          totalProcessed++;
-
-          // Skip threads with no messages (already handled in Part 1)
-          if (thread.messages.length === 0) {
-            continue;
-          }
-
-          // Check if there are any user messages
-          const hasUserMessages = thread.messages.some(
-            (msg) => msg.role === "user"
-          );
-
-          // If there are no user messages, delete the thread
-          if (!hasUserMessages) {
-            // Check if the thread was just created (within last hour)
-            const threadAge = now.getTime() - thread.createdAt.getTime();
-            const oneHourInMs = 60 * 60 * 1000;
-
-            if (threadAge < oneHourInMs) {
-              console.log(
-                `Skipping recently created assistant-only thread ${
-                  thread.id
-                } (age: ${threadAge / 1000 / 60} minutes)`
-              );
-              continue;
-            }
-
-            console.log(
-              `Thread ${thread.id} has ${thread.messages.length} messages, all from assistant`
-            );
-
-            // Log info about connected sessions
-            if (thread._count.sessions > 0) {
-              console.log(
-                `Thread ${thread.id} has ${thread._count.sessions} sessions but only assistant messages`
-              );
-            }
-
-            // Delete the thread
-            await prisma.aiThread.delete({
-              where: { id: thread.id },
-            });
-
-            assistantOnlyDeletedCount++;
-            totalDeleted++;
-            console.log(
-              `Deleted assistant-only thread ${thread.id} (websiteId: ${thread.websiteId})`
-            );
-          }
-        } catch (error) {
-          console.error(`Error processing thread ${thread.id}:`, error);
-        }
-      }
+      // Update offset for next iteration
+      assistantOffset += assistantOnlyThreadsIds.length;
     }
 
     console.log(
       `Deleted ${assistantOnlyDeletedCount} threads with only assistant messages`
     );
 
-    const hitLimit = totalProcessed >= MAX_TOTAL_PROCESSED;
+    // PART 3: Clean up orphaned AiThreadToSession entries
+    console.log("Cleaning up orphaned AiThreadToSession entries...");
+
+    let hasMoreOrphanedConnections = true;
+    let orphanedBatchCount = 0;
+
+    while (hasMoreOrphanedConnections) {
+      // Get a batch of orphaned thread-to-session connections
+      const orphanedConnections = (await prisma.$queryRaw`
+        SELECT ts.A as threadId, ts.B as sessionId 
+        FROM _AiThreadToSession ts 
+        WHERE NOT EXISTS (SELECT 1 FROM AiThread t WHERE t.id = ts.A)
+        LIMIT ${BATCH_SIZE}
+      `) as { threadId: string; sessionId: string }[];
+
+      if (orphanedConnections.length === 0) {
+        hasMoreOrphanedConnections = false;
+        console.log("No more orphaned connections to process");
+        continue;
+      }
+
+      // Extract thread IDs
+      const threadIds = orphanedConnections.map((conn) => conn.threadId);
+
+      // Batch delete orphaned connections
+      if (threadIds.length > 0) {
+        const result = await prisma.$executeRawUnsafe(
+          `DELETE FROM _AiThreadToSession WHERE A IN (${threadIds
+            .map(() => "?")
+            .join(",")})`,
+          ...threadIds
+        );
+
+        orphanedConnectionsRemoved += result;
+        orphanedBatchCount++;
+        console.log(
+          `Deleted ${result} orphaned session connections in batch ${orphanedBatchCount}`
+        );
+      }
+    }
+
+    console.log(
+      `Deleted ${orphanedConnectionsRemoved} total orphaned thread-to-session connections`
+    );
 
     return NextResponse.json({
-      message: `Cleanup complete - deleted ${totalDeleted} threads${
-        hitLimit ? " (hit processing limit)" : ""
-      }`,
+      message: `Cleanup complete - deleted ${totalDeleted} threads total and ${orphanedConnectionsRemoved} orphaned connections`,
       emptyThreadsDeleted: emptyDeletedCount,
       assistantOnlyThreadsDeleted: assistantOnlyDeletedCount,
+      totalConnectionsRemoved,
+      orphanedConnectionsRemoved,
       totalDeleted,
-      totalProcessed,
-      hitProcessingLimit: hitLimit,
+      emptyThreadsProcessed: emptyOffset,
+      assistantThreadsProcessed: assistantOffset,
     });
   } catch (error) {
     console.error("Error in cleanup-empty-threads cron job:", error);
