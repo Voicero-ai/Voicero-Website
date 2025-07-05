@@ -97,6 +97,7 @@ model Website {
   stripeSubscriptionItemId String?
   clickMessage             String?                    @default("")
   allowMultiAIReview       Boolean                    @default(false)
+  newAiSynced              Boolean                    @default(false)
   popUpQuestions           PopUpQuestion[]
   accessKeys               AccessKey[]
   user                     User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
