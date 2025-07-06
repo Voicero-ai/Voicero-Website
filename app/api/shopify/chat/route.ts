@@ -3905,7 +3905,7 @@ export async function POST(request: NextRequest) {
           // Create a valid parsedResponse
           parsedResponse = {
             answer: extractedAnswer,
-            action: "none" as "none",
+            action: "none" as const,
             url: null,
             action_context: {},
           };
@@ -3914,7 +3914,7 @@ export async function POST(request: NextRequest) {
         // If not JSON-like at all, create a plain text response
         parsedResponse = {
           answer: aiResponse,
-          action: "none" as "none",
+          action: "none" as const,
           url: null,
           action_context: {},
         };
