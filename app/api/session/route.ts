@@ -81,15 +81,7 @@ export async function POST(request: NextRequest) {
       data: {
         websiteId,
         shopifyCustomerId: finalShopifyCustomerId,
-        coreOpen: false,
-        chooserOpen: false,
         textOpen: false,
-        voiceOpen: false,
-        voiceOpenWindowUp: false,
-        textWelcome: false,
-        voiceWelcome: false,
-        autoMic: false,
-        textOpenWindowUp: false,
         threads: {
           create: {
             threadId: crypto.randomUUID(),

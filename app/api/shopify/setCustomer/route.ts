@@ -3,6 +3,8 @@ import { PrismaClient } from "@prisma/client";
 import OpenAI from "openai";
 import { cors } from "../../../../lib/cors";
 
+export const dynamic = "force-dynamic";
+
 // Create a Prisma Client instance
 const prisma = new PrismaClient();
 // Create a type-unsafe client that will bypass TypeScript's concerns about missing models
@@ -439,35 +441,98 @@ export async function POST(req: NextRequest) {
 
       // Update orders separately since they have nested relationships
       if (orders.length > 0) {
-        // Delete existing orders
-        await db.shopifyCustomerOrder.deleteMany({
-          where: {
-            customerId: existingCustomer.id,
-          },
-        });
-
-        // Create new orders
+        // Process each order individually instead of bulk deleting
         for (const orderData of orders) {
           const { lineItems, fulfillments, shippingAddress, ...orderFields } =
             orderData;
 
-          await db.shopifyCustomerOrder.create({
-            data: {
-              ...orderFields,
-              customerId: existingCustomer.id,
-              lineItems: {
-                create: lineItems,
+          // Check if order already exists
+          const existingOrder = orderData.orderId
+            ? await db.shopifyCustomerOrder.findFirst({
+                where: {
+                  customerId: existingCustomer.id,
+                  orderId: orderData.orderId,
+                },
+              })
+            : null;
+
+          if (existingOrder) {
+            // Delete related records first
+            await db.shopifyCustomerLineItem.deleteMany({
+              where: { orderId: existingOrder.id },
+            });
+
+            await db.shopifyCustomerFulfillment.deleteMany({
+              where: { orderId: existingOrder.id },
+            });
+
+            // Update the existing order without the shippingAddress relation
+            await db.shopifyCustomerOrder.update({
+              where: { id: existingOrder.id },
+              data: {
+                ...orderFields,
+                lineItems: {
+                  create: lineItems,
+                },
+                fulfillments: {
+                  create: fulfillments,
+                },
               },
-              fulfillments: {
-                create: fulfillments,
+            });
+
+            // Handle shipping address with upsert to avoid unique constraint issues
+            if (shippingAddress) {
+              // First check if shipping address exists
+              const existingShippingAddress =
+                await db.shopifyCustomerShippingAddress.findUnique({
+                  where: { orderId: existingOrder.id },
+                });
+
+              if (existingShippingAddress) {
+                // Update existing shipping address
+                await db.shopifyCustomerShippingAddress.update({
+                  where: { orderId: existingOrder.id },
+                  data: shippingAddress,
+                });
+              } else {
+                // Create new shipping address
+                await db.shopifyCustomerShippingAddress.create({
+                  data: {
+                    ...shippingAddress,
+                    orderId: existingOrder.id,
+                  },
+                });
+              }
+            } else {
+              // If no shipping address provided but one exists, delete it
+              try {
+                await db.shopifyCustomerShippingAddress.delete({
+                  where: { orderId: existingOrder.id },
+                });
+              } catch (e) {
+                // Ignore if no shipping address exists to delete
+              }
+            }
+          } else {
+            // Create new order if it doesn't exist
+            await db.shopifyCustomerOrder.create({
+              data: {
+                ...orderFields,
+                customerId: existingCustomer.id,
+                lineItems: {
+                  create: lineItems,
+                },
+                fulfillments: {
+                  create: fulfillments,
+                },
+                shippingAddress: shippingAddress
+                  ? {
+                      create: shippingAddress,
+                    }
+                  : undefined,
               },
-              shippingAddress: shippingAddress
-                ? {
-                    create: shippingAddress,
-                  }
-                : undefined,
-            },
-          });
+            });
+          }
         }
       }
 

@@ -51,14 +51,13 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Update the session: set welcome flags to false and connect the new thread
+    // Update the session: connect the new thread
     const updatedSession = await prisma.session.update({
       where: {
         id: sessionId,
       },
       data: {
-        textWelcome: true,
-        voiceWelcome: true,
+        textOpen: false,
         threads: {
           connect: {
             id: newThread.id,

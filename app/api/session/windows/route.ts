@@ -40,15 +40,7 @@ export async function POST(req: NextRequest) {
     const currentSession = await prisma.session.findUnique({
       where: { id: sessionId },
       select: {
-        textWelcome: true,
-        voiceWelcome: true,
-        coreOpen: true,
-        chooserOpen: true,
         textOpen: true,
-        voiceOpen: true,
-        autoMic: true,
-        voiceOpenWindowUp: true,
-        textOpenWindowUp: true,
       },
     });
 
@@ -60,17 +52,7 @@ export async function POST(req: NextRequest) {
     }
 
     const updateData = {
-      coreOpen: windowState.coreOpen ?? currentSession.coreOpen,
-      chooserOpen: windowState.chooserOpen ?? currentSession.chooserOpen,
       textOpen: windowState.textOpen ?? currentSession.textOpen,
-      voiceOpen: windowState.voiceOpen ?? currentSession.voiceOpen,
-      textWelcome: windowState.textWelcome ?? currentSession.textWelcome,
-      voiceWelcome: windowState.voiceWelcome ?? currentSession.voiceWelcome,
-      autoMic: windowState.autoMic ?? currentSession.autoMic,
-      voiceOpenWindowUp:
-        windowState.voiceOpenWindowUp ?? currentSession.voiceOpenWindowUp,
-      textOpenWindowUp:
-        windowState.textOpenWindowUp ?? currentSession.textOpenWindowUp,
     };
 
     const session = await prisma.session.update({

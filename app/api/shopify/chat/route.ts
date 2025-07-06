@@ -111,6 +111,7 @@ type WebsiteWithAutoSettings = {
   allowAutoLogout: boolean;
   allowAutoLogin: boolean;
   allowAutoGenerateImage: boolean;
+  newAiSynced?: boolean;
   stripeSubscriptionId?: string | null;
   stripeSubscriptionItemId?: string | null;
   userId?: string;
@@ -123,6 +124,7 @@ type QuestionClassification = {
   "sub-category": string;
   page?: string;
   context_dependency?: "high" | "low";
+  interaction_type?: "sales" | "support" | "general" | "noneSpecified";
   action_intent?:
     | string
     | "redirect"
@@ -280,12 +282,13 @@ async function generateSparseVectors(
   }
 }
 
-// Function to classify question using fine-tuned model
+// Function to classify question using two specialized classifiers
 async function classifyQuestion(
   question: string,
   previousContext: PreviousContext | null = null,
   pageData: any = null
 ): Promise<QuestionClassification | null> {
+  // We'll run two specialized classifiers in parallel for better performance
   // Check if the question is ambiguous and could benefit from previous context
   const ambiguousWords = [
     "it",
@@ -441,41 +444,15 @@ async function classifyQuestion(
     };
   }
 
-  const SYSTEM_PROMPT = `You are an AI assistant that classifies e-commerce questions into specific types, categories, and sub-categories.
+  const CONTENT_CLASSIFIER_PROMPT = `You are an AI assistant specializing in classifying the CONTENT TYPE of e-commerce questions.
 
-When a user asks a question, you must respond with a JSON object containing these fields:
+When a user asks a question, you must respond with a JSON object containing ONLY these fields:
 - type: one of ["product", "post", "collection", "discount", "page"]
 - category: depends on the type
 - sub-category: depends on the type and category
-- action_intent: one of ["redirect", "click", "scroll", "fill_form", "purchase", "track_order", "get_orders", "return_order", "cancel_order", "refund_order", "exchange_order", "login", "logout", "account_reset", "account_management", "scheduler", "highlight_text", "generate_image", "contact", "none"]
-- context_dependency: "high" or "low"
-- language: ISO 639-1 language code (e.g., "en", "es", "fr", "de", etc.)
-- content_targets: an object containing relevant targets for the action
+- interaction_type: one of ["sales", "support", "general", "noneSpecified"] - determines which vector index to search
 
-CONVERSATIONAL CONTEXT AND ACTION CONTINUITY (EXTREMELY CRITICAL):
-- ALWAYS thoroughly analyze the ENTIRE conversation history for context, not just the current message
-- You MUST maintain continuity of user intentions across multiple messages
-- Pay special attention to the immediate previous messages for context clues
-- When a user responds to a prompt for specific information (e.g., providing an email after being asked for it), MAINTAIN the previous action_intent
-- If the previous assistant message was about orders and had "get_orders" action_intent, and the user responds with email/confirmation/details, you MUST:
-  * Keep the "get_orders" action_intent 
-  * DO NOT switch to "none" action_intent
-  * Set context_dependency to "high"
-  * Include the email or identifying information in content_targets
-- Action flows that must maintain continuity:
-  * "get_orders" → [user provides email/confirmation] → KEEP "get_orders"
-  * "track_order" → [user provides order number/details] → KEEP "track_order"
-  * "return_order" → [user provides order details] → KEEP "return_order"
-  * "cancel_order" → [user provides order details] → KEEP "cancel_order"
-  * "refund_order" → [user provides order details] → KEEP "refund_order"
-  * "exchange_order" → [user provides order details] → KEEP "exchange_order"
-  * "fill_form" → [user provides form inputs] → KEEP "fill_form"
-- Detect email addresses, order numbers, confirmation codes, and affirmative responses ("yes", "sure", etc.) as continuations of previous actions
-- The previous action_intent should be preserved when user is responding with requested information
-- This action continuity is EXTREMELY important as breaking it creates a poor user experience
-- NEVER lose context between messages in a conversation flow
-
-Valid combinations are:
+Your task is to FOCUS EXCLUSIVELY on classifying what the question is ABOUT, not what action should be taken.
 
 PRODUCT:
 - discovery: use_case, experience_level 
@@ -506,170 +483,36 @@ DISCOUNT:
 - on-page: products
 - filter_sort: price, availability, sort
 
-CRITICAL CLASSIFICATION PRIORITIES:
-1.  The users question and the current page context are the primary basis for classification
-2. if the question has the answer on the main content of the page then use the "on-page" category
- - then feel free to use "highlight_text" or "scroll" action_intent to help the user find the information they need
- - make sure when highlighting or scrolling that you are using the correct exact text you find from the text in the page data
- - smaller chunks of text are better than larger chunks when inputting it
+INTERACTION TYPE CLASSIFICATION RULES:
+1. "sales" - Use when the user is:
+   - Asking about products or collections
+   - Inquiring about pricing, availability, features
+   - Requesting product recommendations
+   - Asking product comparison questions
+   - Showing purchase intent
+   - Asking about sales, discounts, promotions
+   - Example queries: "Do you have red shirts?", "What's the price of this?", "Tell me about this product", "Do you have this in blue?"
 
-CATEGORY AND ACTION INTENT RULES (CRITICAL):
- - For "discovery" category (when answer isn't on current page):
-   * ONLY use "redirect" action_intent - NEVER use "scroll" or "highlight_text"
-   * Use "redirect" to send the user to a page where the answer can be found
-   * If no appropriate URL is available, use "none" action_intent with a helpful response
- - For "on-page" category (when answer is on current page):
-   * Use "scroll" or "highlight_text" action_intent to help users find information
-   * NEVER use "redirect" action_intent for "on-page" category
- - This category-action pairing is MANDATORY - violating it will result in navigation errors
+2. "support" - Use when the user is:
+   - Asking about existing orders (tracking, cancellations, returns)
+   - Requesting help with product issues
+   - Needing assistance with accounts/login
+   - Asking about shipping/delivery issues
+   - Mentioning problems with products/services
+   - Example queries: "Where's my order?", "How do I return this?", "My product isn't working", "Can I cancel my order?", "How do I track my package?"
 
-SCROLL AND HIGHLIGHT TEXT RULES (CRITICAL):
- - When selecting text for highlighting or scrolling:
-   * Use SMALL chunks (3-5 words maximum)
-   - you must only choose exact text inside of the full_text part of the relevantPageData
-   - your only allowed to highlight a word 5 sequence maximum
-   - When user EXPLICITLY requests "highlight [text]" or "scroll to [text]", use EXACTLY the text they specified
-   - DO NOT automatically expand product names or add additional information to the highlight text the user requested
-   - NEVER include newline characters (\n) in the exact_text field as they don't render on webpages
-   - Break longer content into separate, smaller logical chunks
-   - Choose focused text that directly answers the user's question
-   - For lists, select only one specific item rather than the entire list
-   - Always verify the text exists exactly as copied in the page data
-   * Use titles, headers, or key sentences when possible
-   * Ensure the exact_text field is a continuous string with no line breaks
+3. "general" - Use when the user is:
+   - Asking general questions about the store/company
+   - Asking about store policies, locations, hours
+   - Making small talk or greeting
+   - Asking about topics not specific to sales or support
+   - Example queries: "What are your store hours?", "Tell me about your company", "Do you have a privacy policy?", "Hello", "Thanks for your help"
 
-3. if the question doesn't have an answer on the current page then use the "discovery" category
- - use redirect action_intent to send the user to the correct page
- - you don't have to fill in the action_context for the redirect action_intent if you don't see a url that can help you
-4. for all other categories above follow what the word says
- - if its tips give a tip
- - if its instructions give instructions
- - if its eligibility give eligibility
- etc...
-
-
-ORDER HANDLING (CRITICAL):
- - use "get_orders" action_intent when user asks to see all orders
- - use "track_order" action_intent when user asks to track an order
- - use "return_order" action_intent when user asks to return an order
- - use "cancel_order" action_intent when user asks to cancel an order
- - use "refund_order" action_intent when user asks for a refund
- - use "exchange_order" action_intent when user asks to exchange an order
-
- - For all order action types (cancel_order, return_order, refund_order, exchange_order):
-   * ALWAYS include order_id in content_targets when available
-   * ALWAYS include order_email in content_targets when available
-   * Capture these details from user messages and maintain them in the conversation
-   * DO NOT use "redirect" when any of these order actions are appropriate
-
-REFUND AND RETURN HANDLING (CRITICAL):
- - ALWAYS use specific order action intent when user mentions:
-   * "cancel" or "cancel my order" → use "cancel_order"
-   * "refund" or "get money back" or "get a refund" → use "refund_order"
-   * "return" or "send back" → use "return_order"
-   * "exchange" or "swap" or "replace with" → use "exchange_order"
-   * Any questions about returns, refunds, cancellations or exchanges policy
- - NEVER classify these as "redirect" - they MUST be the appropriate order action
- - This takes precedence over other classifications
- - For action_context, search for refund-policy or return-policy pages if policy information is requested
- - If on refund or return policy page, use "highlight_text" instead
-
-LOGIN HANDLING (CRITICAL):
- - for "login" action_intent, use when user asks to log in to their account
- - for "logout" action_intent, use when user asks to log out of their account
-
-ACCOUNT MANAGEMENT HANDLING (CRITICAL):
- - for "account_reset" action_intent, use when user asks to reset their account
- - for "account_management" action_intent, use when user wants to modify their account information
- - IMPORTANT: ANY query about changing, updating, modifying, or editing account information MUST use "account_management" action_intent
- - This includes ALL requests related to:
-   * Updating first name, last name, email, or phone
-   * Changing address information
-   * Any mention of "update my account", "change my account details", "edit my profile", etc.
- - NEVER use "redirect" action_intent for account modification requests - always use "account_management"
- - The action_context should be empty initially, not containing URL information
- - Account updates should be handled directly through the action_context, NOT through navigation
- - Examples of queries that MUST use "account_management":
-   * "I need to update my account"
-   * "Change my email address"
-   * "Update my shipping address"
-   * "Edit my profile information"
-   * "Change my first name"
-   * "I want to modify my account details"
-   * "Update my phone number"
-   * "I need to change my last name"
-   * "Edit my default address"
-
-PRODUCT VISUALIZATION (CRITICAL):
-   - use "generate_image" action_intent when user asks to see their virtual try-on
-   - only do a "generate_image" action_intent if the user is on a product page and the product is wearable and they specifically ask to see the product on them
-
-URL HANDLING FOR REDIRECTS (EXTREMELY IMPORTANT):
- - ALWAYS use the EXACT handle for all URLs - NEVER use partial matches or approximations
- - Pages vs Collections URL formats MUST follow these STRICT rules:
-   * For regular pages: ALWAYS use "/pages/[handle]"
-   * For collections/products (plural): ALWAYS use "/collections/[handle]"
-   * For individual products: ALWAYS use "/products/[handle]"
-   * For blog posts: ALWAYS use "/blogs/[handle]"
-   * For policy pages: ALWAYS use "/policies/[handle]" (NOT "/pages/")
- - When user mentions "products", "shop", "collections", or any plural product term:
-   * ALWAYS redirect to a collection with "/collections/[handle]"
-   * NEVER redirect to pages in this case
- - If user asks for a collection by name that doesn't match complete collection name:
-   * DO NOT use the partial name
-   * ALWAYS use the COMPLETE collection handle from available data
-   * Example: If user asks for "winter gear" but collection is named "winter-sports-collection", 
-     use "/collections/winter-sports-collection"
- - NEVER create or invent URLs - only use URLs found in the available data
- - For policy pages (handles containing privacy-policy, return-policy, refund-policy, contact-information, terms-of-service or shipping-policy), use URL format "/policies/[handle]" instead of regular page URL
- - This URL formatting is CRITICALLY IMPORTANT - incorrect URL paths will cause navigation errors
-
-CONTENT TYPE DOUBLE-CHECK (CRITICAL):
- - ALWAYS verify the actual content type before determining URL format
- - Even if classified as "page", if the content appears to be a collection of products:
-   * Use "/collections/[handle]" instead of "/pages/[handle]"
- - If a user asks for a specific product category, sport equipment, apparel, or anything with "ball" in the name:
-   * These are likely collections, NOT pages
-   * Example: If user asks for "soccer balls" or "soccer ball page" use "/collections/soccer-ball", NOT "/pages/soccer-ball"
- - Common collection indicators in user queries:
-   * Mentions of products (plural form)
-   * Sports equipment (footballs, soccer balls, basketballs)
-   * Apparel categories (shirts, shoes, pants)
- - Check both the handle AND query context when determining URL format
- - When in doubt about page vs collection, prefer "/collections/[handle]"
- - Be particularly careful with these commonly confused terms:
-   * "Soccer ball page", "basketball section", "football area" → These are collections (/collections/soccer-ball)
-   * "About us page", "contact page", "FAQ page" → These are pages (/pages/about-us)
-
-PURCHASE vs CLICK ACTIONS (CRITICAL):
-1. Use "purchase" action_intent ONLY when:
-   - User explicitly wants to add a product to cart
-   - User is on a product page and says "buy this", "add to cart", "purchase", etc.
-   - Never do a "purchase" action_intent if its not incredibly clear that the user wants to purchase the product
-   - Button text contains "Add to Cart", "Buy Now", "Purchase", etc.
-2. ALWAYS include the exact product_name in content_targets for purchase actions
-3. ALWAYS include product_id in content_targets for purchase actions when available
-4. Use "click" action_intent for all other button clicks that aren't purchases
-
-
-FORM SUBMISSION HANDLING (CRITICAL):
-1. When a user responds with "yes", "ok", "sure", "submit", etc. to a form filling interaction:
-   - This should be classified as a "click" action_intent
-   - Find the submit button from buttons array that relates to the form (e.g., "Submit", "Subscribe", "Send")
-   - Include this button in content_targets
-   - This applies even if the user's response is just a single word like "yes"
-2. ALWAYS check the previous context for form filling interactions before determining action_intent
-3. If there was a form-filling interaction and user responds affirmatively, this is a submit/click action
-4. Look for any "Submit", "Subscribe", "Send", "Continue", or similar buttons in the page data
-5. make sure to fill in all parts exactly as you see them for the the form fields bu take the values from the user and make sure they are good
-
-LANGUAGE DETECTION (CRITICAL):
-1. You MUST identify the language of the user's question
-2. Include a "language" field in your response with the ISO language code (e.g., "en", "es", "fr", "de", etc.)
-3. Support at least these common languages: English (en), Spanish (es), French (fr), German (de), Chinese (zh), Japanese (ja), Portuguese (pt), Italian (it), Russian (ru), Arabic (ar)
-4. For languages that aren't in this common list, use their proper ISO 639-1 code
-5. This language field will be used to determine which language to respond in
-
+4. "noneSpecified" - Only use when:
+   - The query is extremely ambiguous with insufficient context
+   - The query could equally belong to multiple categories
+   - The query is very short with no clear intent
+   - Example queries: "Yes", "No", "Ok", very short ambiguous responses
 
 PRODUCT vs COLLECTION:
 - Classify as PRODUCT if:
@@ -708,7 +551,133 @@ COLLECTION vs DISCOUNT:
 - Classify as COLLECTION if:
   * Query is about browsing/filtering products
   * Query asks about product categories/types
-  * Query uses plural forms without discount terms
+  * Query uses plural forms without discount terms`;
+
+  const ACTION_CLASSIFIER_PROMPT = `You are an AI assistant specializing in determining the appropriate ACTION for e-commerce questions.
+
+When a user asks a question, you must respond with a JSON object containing ONLY these fields:
+- action_intent: one of ["redirect", "click", "scroll", "fill_form", "purchase", "track_order", "get_orders", "return_order", "cancel_order", "refund_order", "exchange_order", "login", "logout", "account_reset", "account_management", "scheduler", "highlight_text", "generate_image", "contact", "none"]
+- context_dependency: "high" or "low"
+- language: ISO 639-1 language code (e.g., "en", "es", "fr", "de", etc.)
+- content_targets: an object containing relevant targets for the action
+
+Your task is to FOCUS EXCLUSIVELY on determining what ACTION should be taken, not what the question is about.
+
+CONVERSATIONAL CONTEXT AND ACTION CONTINUITY (EXTREMELY CRITICAL):
+- ALWAYS thoroughly analyze the ENTIRE conversation history for context, not just the current message
+- You MUST maintain continuity of user intentions across multiple messages
+- Pay special attention to the immediate previous messages for context clues
+- When a user responds to a prompt for specific information (e.g., providing an email after being asked for it), MAINTAIN the previous action_intent
+- If the previous assistant message was about orders and had "get_orders" action_intent, and the user responds with email/confirmation/details, you MUST:
+  * Keep the "get_orders" action_intent 
+  * DO NOT switch to "none" action_intent
+  * Set context_dependency to "high"
+  * Include the email or identifying information in content_targets
+- Action flows that must maintain continuity:
+  * "get_orders" → [user provides email/confirmation] → KEEP "get_orders"
+  * "track_order" → [user provides order number/details] → KEEP "track_order"
+  * "return_order" → [user provides order details] → KEEP "return_order"
+  * "cancel_order" → [user provides order details] → KEEP "cancel_order"
+  * "refund_order" → [user provides order details] → KEEP "refund_order"
+  * "exchange_order" → [user provides order details] → KEEP "exchange_order"
+  * "fill_form" → [user provides form inputs] → KEEP "fill_form"
+- Detect email addresses, order numbers, confirmation codes, and affirmative responses ("yes", "sure", etc.) as continuations of previous actions
+- The previous action_intent should be preserved when user is responding with requested information
+- This action continuity is EXTREMELY important as breaking it creates a poor user experience
+- NEVER lose context between messages in a conversation flow
+
+CRITICAL CLASSIFICATION PRIORITIES:
+1. If the question has the answer on the main content of the page then use "on-page" category
+ - then use "highlight_text" or "scroll" action_intent to help the user find the information they need
+ - make sure when highlighting or scrolling that you are using the correct exact text from the page data
+ - smaller chunks of text are better than larger chunks when inputting it
+
+CATEGORY AND ACTION INTENT RULES (CRITICAL):
+ - For "discovery" category (when answer isn't on current page):
+   * ONLY use "redirect" action_intent - NEVER use "scroll" or "highlight_text"
+   * Use "redirect" to send the user to a page where the answer can be found
+   * If no appropriate URL is available, use "none" action_intent with a helpful response
+ - For "on-page" category (when answer is on current page):
+   * Use "scroll" or "highlight_text" action_intent to help users find information
+   * NEVER use "redirect" action_intent for "on-page" category
+ - This category-action pairing is MANDATORY - violating it will result in navigation errors
+
+SCROLL AND HIGHLIGHT TEXT RULES (CRITICAL):
+ - When selecting text for highlighting or scrolling:
+   * Use SMALL chunks (3-5 words maximum)
+   - you must only choose exact text inside of the full_text part of the relevantPageData
+   - your only allowed to highlight a word 5 sequence maximum
+   - When user EXPLICITLY requests "highlight [text]" or "scroll to [text]", use EXACTLY the text they specified
+   - DO NOT automatically expand product names or add additional information to the highlight text the user requested
+   - NEVER include newline characters (\\n) in the exact_text field as they don't render on webpages
+   - Break longer content into separate, smaller logical chunks
+   - Choose focused text that directly answers the user's question
+   - For lists, select only one specific item rather than the entire list
+   - Always verify the text exists exactly as copied in the page data
+   * Use titles, headers, or key sentences when possible
+   * Ensure the exact_text field is a continuous string with no line breaks
+
+ORDER HANDLING (CRITICAL):
+ - use "get_orders" action_intent when user asks to see all orders
+ - use "track_order" action_intent when user asks to track an order
+ - use "return_order" action_intent when user asks to return an order
+ - use "cancel_order" action_intent when user asks to cancel an order
+ - use "refund_order" action_intent when user asks for a refund
+ - use "exchange_order" action_intent when user asks to exchange an order
+ 
+ - For all order action types (cancel_order, return_order, refund_order, exchange_order):
+   * ALWAYS include order_id in content_targets when available
+   * ALWAYS include order_email in content_targets when available
+   * Capture these details from user messages and maintain them in the conversation
+   * DO NOT use "redirect" when any of these order actions are appropriate
+
+REFUND AND RETURN HANDLING (CRITICAL):
+ - ALWAYS use specific order action intent when user mentions:
+   * "cancel" or "cancel my order" → use "cancel_order"
+   * "refund" or "get money back" or "get a refund" → use "refund_order"
+   * "return" or "send back" → use "return_order"
+   * "exchange" or "swap" or "replace with" → use "exchange_order"
+   * Any questions about returns, refunds, cancellations or exchanges policy
+ - NEVER classify these as "redirect" - they MUST be the appropriate order action
+ - This takes precedence over other classifications
+ - For action_context, search for refund-policy or return-policy pages if policy information is requested
+ - If on refund or return policy page, use "highlight_text" instead
+
+LOGIN HANDLING (CRITICAL):
+ - for "login" action_intent, use when user asks to log in to their account
+ - for "logout" action_intent, use when user asks to log out of their account
+
+ACCOUNT MANAGEMENT HANDLING (CRITICAL):
+ - for "account_reset" action_intent, use when user asks to reset their account
+ - for "account_management" action_intent, use when user wants to modify their account information
+ - IMPORTANT: ANY query about changing, updating, modifying, or editing account information MUST use "account_management" action_intent
+ - This includes ALL requests related to:
+   * Updating first name, last name, email, or phone
+   * Changing address information
+   * Any mention of "update my account", "change my account details", "edit my profile", etc.
+ - NEVER use "redirect" action_intent for account modification requests - always use "account_management"
+ - The action_context should be empty initially, not containing URL information
+ - Account updates should be handled directly through the action_context, NOT through navigation
+
+PURCHASE vs CLICK ACTIONS (CRITICAL):
+1. Use "purchase" action_intent ONLY when:
+   - User explicitly wants to add a product to cart
+   - User is on a product page and says "buy this", "add to cart", "purchase", etc.
+   - Never do a "purchase" action_intent if its not incredibly clear that the user wants to purchase the product
+   - Button text contains "Add to Cart", "Buy Now", "Purchase", etc.
+2. ALWAYS include the exact product_name in content_targets for purchase actions
+3. ALWAYS include product_id in content_targets for purchase actions when available
+4. Use "click" action_intent for all other button clicks that aren't purchases
+
+FORM SUBMISSION HANDLING (CRITICAL):
+1. When a user responds with "yes", "ok", "sure", "submit", etc. to a form filling interaction:
+   - This should be classified as a "click" action_intent
+   - Find the submit button from buttons array that relates to the form (e.g., "Submit", "Subscribe", "Send")
+   - Include this button in content_targets
+   - This applies even if the user's response is just a single word like "yes"
+2. ALWAYS check the previous context for form filling interactions before determining action_intent
+3. If there was a form-filling interaction and user responds affirmatively, this is a submit/click action
+4. Look for any "Submit", "Subscribe", "Send", "Continue", or similar buttons in the page data
 
 GET_ORDERS vs TRACK_ORDER vs ORDER ACTIONS:
 - Classify as GET_ORDERS if:
@@ -722,56 +691,86 @@ GET_ORDERS vs TRACK_ORDER vs ORDER ACTIONS:
   * Query includes specific order number(s) or identifier(s)
   * Query is about the status or location of order(s)
   * User is looking for specific order information
-  * The query indicates the user wants to track or locate specific orders, even if multiple
-- Classify as CANCEL_ORDER if:
-  * Query mentions "cancel" or "stop" with "order"
-  * User wants to prevent an order from being processed or shipped
-  * Captures order_id and order_email when provided
-- Classify as RETURN_ORDER if:
-  * Query mentions "return" or "send back" items
-  * User wants to initiate a return process
-  * Captures order_id and order_email when provided
-- Classify as REFUND_ORDER if:
-  * Query mentions "refund" or "get money back"
-  * User wants to get a refund for their purchase
-  * Captures order_id and order_email when provided
-- Classify as EXCHANGE_ORDER if:
-  * Query mentions "exchange", "swap", or "replace with different" for ordered items
-  * User wants to exchange one product for another
-  * Captures order_id and order_email when provided
-
-
-
-  
-
-
-Always respond with ONLY the JSON classification. Do not include any other text or explanation.`;
+  * The query indicates the user wants to track or locate specific orders, even if multiple`;
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4.1-mini",
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: pageData
-            ? `Question: ${enhancedQuestion}\n\nPage Snapshot: ${JSON.stringify(
-                pageData,
-                null,
-                2
-              )}`
-            : enhancedQuestion,
-        },
-      ],
-      temperature: 0,
-    });
+    // Run both classifiers in parallel for better performance
+    const [contentClassifierCompletion, actionClassifierCompletion] =
+      await Promise.all([
+        // Content classifier - focuses on what the question is about
+        openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          messages: [
+            { role: "system", content: CONTENT_CLASSIFIER_PROMPT },
+            {
+              role: "user",
+              content: pageData
+                ? `Question: ${enhancedQuestion}\n\nPage Snapshot: ${JSON.stringify(
+                    pageData,
+                    null,
+                    2
+                  )}`
+                : enhancedQuestion,
+            },
+          ],
+          temperature: 0,
+        }),
 
-    const content = completion.choices[0].message.content;
-    if (!content) {
-      throw new Error("No content returned from classification model");
+        // Action classifier - focuses on what action should be taken
+        openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          messages: [
+            { role: "system", content: ACTION_CLASSIFIER_PROMPT },
+            {
+              role: "user",
+              content: pageData
+                ? `Question: ${enhancedQuestion}\n\nPage Snapshot: ${JSON.stringify(
+                    pageData,
+                    null,
+                    2
+                  )}\n\nPrevious context: ${JSON.stringify(
+                    previousContext || {}
+                  )}`
+                : `${enhancedQuestion}\n\nPrevious context: ${JSON.stringify(
+                    previousContext || {}
+                  )}`,
+            },
+          ],
+          temperature: 0,
+        }),
+      ]);
+
+    // Extract content from both completions
+    const contentClassifierContent =
+      contentClassifierCompletion.choices[0].message.content;
+    const actionClassifierContent =
+      actionClassifierCompletion.choices[0].message.content;
+
+    if (!contentClassifierContent || !actionClassifierContent) {
+      throw new Error("No content returned from classification models");
     }
 
-    const classification = JSON.parse(content) as QuestionClassification;
+    // Parse both responses
+    const contentClassification = JSON.parse(contentClassifierContent);
+    const actionClassification = JSON.parse(actionClassifierContent);
+
+    // Combine the results from both classifiers
+    const classification = {
+      // Content classification results
+      type: contentClassification.type,
+      category: contentClassification.category,
+      "sub-category": contentClassification["sub-category"],
+      interaction_type: contentClassification.interaction_type,
+
+      // Action classification results
+      action_intent: actionClassification.action_intent,
+      context_dependency: actionClassification.context_dependency,
+      language: actionClassification.language,
+      content_targets: actionClassification.content_targets || {},
+    } as QuestionClassification;
+
+    console.log("Content classification:", contentClassification);
+    console.log("Action classification:", actionClassification);
 
     // If context_dependency isn't provided by the model, infer it based on ambiguous references
     if (!classification.context_dependency) {
@@ -1966,6 +1965,7 @@ export async function POST(request: NextRequest) {
     accessKey?: string;
     threadId?: string;
     type: "text" | "voice";
+    interactionType?: string;
     pastContext?: PreviousContext[];
     currentPageUrl?: string;
     pageData?: {
@@ -2007,7 +2007,10 @@ export async function POST(request: NextRequest) {
       pastContext,
       currentPageUrl,
       pageData,
+      interactionType,
     } = body;
+
+    console.log("Received interaction type:", interactionType);
 
     console.log("Past Context:", pastContext);
 
@@ -2056,6 +2059,7 @@ export async function POST(request: NextRequest) {
           allowAutoLogout: true,
           allowAutoLogin: true,
           allowAutoGenerateImage: true,
+          newAiSynced: true,
           stripeSubscriptionId: true,
           stripeSubscriptionItemId: true,
         },
@@ -2089,6 +2093,7 @@ export async function POST(request: NextRequest) {
           allowAutoLogout: true,
           allowAutoLogin: true,
           allowAutoGenerateImage: true,
+          newAiSynced: true,
           stripeSubscriptionId: true,
           stripeSubscriptionItemId: true,
         },
@@ -2558,20 +2563,6 @@ export async function POST(request: NextRequest) {
       })) as ThreadWithMessages;
     }
 
-    // Get namespaces from VectorDbConfig
-    let mainNamespace = website.id;
-    let qaNamespace = `${website.id}-qa`;
-
-    // Try to get configured namespaces from DB if available
-    const vectorDbConfig = await prisma.vectorDbConfig.findUnique({
-      where: { websiteId: website.id },
-    });
-
-    if (vectorDbConfig) {
-      mainNamespace = vectorDbConfig.MainNamespace;
-      qaNamespace = vectorDbConfig.QANamespace;
-    }
-
     // Get the previous context
     const previousContext =
       pastContext && pastContext.length > 0
@@ -2598,6 +2589,132 @@ export async function POST(request: NextRequest) {
         previousContext.answer.action
       ) {
         previousAction = previousContext.answer.action;
+      }
+
+      // Create enhanced context object with action information
+      enhancedPreviousContext = {
+        ...previousContext,
+        previousAction,
+        isConversationContinuation: true,
+      };
+
+      // Check if previous action was disabled in settings - this code will run later
+    }
+
+    // Get namespaces from VectorDbConfig, incorporating interaction type
+    let mainNamespace = website.id;
+    let qaNamespace = `${website.id}-qa`;
+    let useAllNamespaces = false;
+
+    // Classify the question first to determine interaction type
+    const classification = await classifyQuestion(
+      message,
+      enhancedPreviousContext,
+      pageData
+    );
+    if (!classification) {
+      return cors(
+        request,
+        NextResponse.json(
+          { error: "Failed to classify question" },
+          { status: 500 }
+        )
+      );
+    }
+
+    console.log("Question Classification:", classification);
+    console.log(
+      "Website newAiSynced status:",
+      website.newAiSynced ? "true" : "false"
+    );
+
+    // Check if we should use the new AI synced behavior or fall back to querying all namespaces
+    if (!website.newAiSynced) {
+      // If newAiSynced is false, set flag to search all namespaces regardless of interaction type
+      // Keep using original namespaces (websiteId and websiteId-qa) but also search all interaction types
+      useAllNamespaces = true;
+      mainNamespace = website.id;
+      qaNamespace = `${website.id}-qa`;
+      console.log(
+        "newAiSynced is false, will use original namespaces and search across all interaction types"
+      );
+      console.log(
+        `Using original namespaces: ${mainNamespace}, ${qaNamespace}`
+      );
+    }
+
+    // Determine which interaction type to use - prefer classifier's determination if available
+    let effectiveInteractionType = interactionType;
+
+    if (classification.interaction_type) {
+      // If the classifier provided an interaction type, use that instead
+      effectiveInteractionType = classification.interaction_type;
+      console.log(
+        `Using classifier-determined interaction type: ${effectiveInteractionType}`
+      );
+    } else if (!effectiveInteractionType) {
+      // Default to "general" if no interaction type is provided
+      effectiveInteractionType = "general";
+      console.log("No interaction type specified, defaulting to 'general'");
+    }
+
+    console.log(
+      `Original interaction type from request: ${interactionType || "none"}`
+    );
+    console.log(
+      `Final effective interaction type: ${effectiveInteractionType}`
+    );
+    console.log(
+      `Classification determined interaction type: ${
+        classification.interaction_type || "none"
+      }`
+    );
+    console.log(
+      `Classification type/category: ${classification.type}/${classification.category}`
+    );
+
+    if (effectiveInteractionType && !useAllNamespaces) {
+      // Use interaction type for namespace: websiteId-sales, websiteId-support, etc.
+      mainNamespace = `${website.id}-${effectiveInteractionType}`;
+      qaNamespace = `${website.id}-${effectiveInteractionType}-qa`;
+      console.log(
+        `Using interaction-specific namespaces: ${mainNamespace}, ${qaNamespace}`
+      );
+    } else {
+      if (useAllNamespaces) {
+        console.log(
+          "Will ignore dynamic namespaces and search across all interaction types"
+        );
+        // We'll keep the default namespaces but use the search-all logic later
+      } else {
+        // Try to get configured namespaces from DB if available
+        const vectorDbConfig = await prisma.vectorDbConfig.findUnique({
+          where: { websiteId: website.id },
+        });
+
+        if (vectorDbConfig) {
+          mainNamespace = vectorDbConfig.MainNamespace;
+          qaNamespace = vectorDbConfig.QANamespace;
+        }
+      }
+    }
+
+    // Now check for disabled actions from previous context
+    if (previousContext?.answer) {
+      // Get the previous action we extracted earlier
+      const previousAction = enhancedPreviousContext?.previousAction || "none";
+
+      // Check if previous action was disabled in settings
+      if (previousAction === "cancel_order" && !website.allowAutoCancel) {
+        return handleDisabledAction(
+          request,
+          website,
+          message,
+          type,
+          threadId,
+          "cancel orders",
+          "cancel_order"
+        );
       }
 
       // Check if previous action was disabled in settings
@@ -2725,21 +2842,8 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    // Classify the question with the enhanced function that supports page data
-    const classification = await classifyQuestion(
-      message,
-      enhancedPreviousContext,
-      pageData
-    );
-    if (!classification) {
-      return cors(
-        request,
-        NextResponse.json(
-          { error: "Failed to classify question" },
-          { status: 500 }
-        )
-      );
-    }
+    // We've already classified the question above, so no need to do it again
+    // Just check if the action intent is one of the disabled ones
 
     console.log("Question Classification:", classification);
 
@@ -2897,124 +3001,455 @@ export async function POST(request: NextRequest) {
 
     // Define search functions outside the block to avoid strict mode errors
     const performMainSearch = async () => {
-      // Collection query if necessary
-      let collectionSearchResponse = null;
-      // Safe access with null check
-      if (classification && classification.type === "collection") {
-        // Use the actual query terms for collection search
-        const collectionQuery = `${message} ${classification.type}`;
-        const collectionEmbedding = await embeddings.embedQuery(
-          collectionQuery
-        );
-        const collectionSparseVectors = await generateSparseVectors(
-          collectionQuery,
-          classification
+      // Special handling for "noneSpecified" interaction type or useAllNamespaces flag - search across all namespaces
+      if (interactionType === "noneSpecified" || useAllNamespaces) {
+        console.log(
+          useAllNamespaces
+            ? "Using all namespaces search strategy for non-AIsynced website"
+            : "Using noneSpecified search strategy - searching across all interaction types"
         );
 
-        collectionSearchResponse = await pinecone
+        // Define the interaction types to search across
+        const interactionTypes = ["sales", "support", "general"];
+        console.log(
+          `Vectorization strategy: searching across multiple namespaces: ${interactionTypes.join(
+            ", "
+          )}`
+        );
+
+        // Collect results from all interaction types
+        const allResults = [];
+
+        for (const type of interactionTypes) {
+          // Ensure website is not null before accessing its properties
+          if (!website) {
+            console.error("Website is null, cannot create namespace");
+            continue;
+          }
+          const typeNamespace = `${website.id}-${type}`;
+          console.log(`Searching namespace: ${typeNamespace}`);
+
+          try {
+            // Collection query if necessary
+            if (classification && classification.type === "collection") {
+              // Use the actual query terms for collection search
+              const collectionQuery = `${message} ${classification.type}`;
+              const collectionEmbedding = await embeddings.embedQuery(
+                collectionQuery
+              );
+              const collectionSparseVectors = await generateSparseVectors(
+                collectionQuery,
+                classification
+              );
+
+              const collectionSearchResponse = await pinecone
+                .index("voicero-hybrid")
+                .namespace(typeNamespace)
+                .query({
+                  vector: collectionEmbedding,
+                  sparseVector: collectionSparseVectors,
+                  topK: 7, // Reduced to get top results from each namespace
+                  includeMetadata: true,
+                });
+
+              // Add results if they exist
+              if (collectionSearchResponse?.matches?.length > 0) {
+                allResults.push(...collectionSearchResponse.matches);
+              }
+            }
+
+            // Perform hybrid search in this namespace
+            const searchResponse = await pinecone
+              .index("voicero-hybrid")
+              .namespace(typeNamespace)
+              .query({
+                vector: queryEmbedding,
+                sparseVector: sparseVectors,
+                topK: 7, // Reduced to get top results from each namespace
+                includeMetadata: true,
+              });
+
+            // Add results if they exist
+            if (searchResponse?.matches?.length > 0) {
+              console.log(
+                `Found ${searchResponse.matches.length} results in namespace ${typeNamespace}`
+              );
+              // Log the first 2 results for debugging
+              if (searchResponse.matches.length > 0) {
+                console.log(`First result from ${typeNamespace}:`, {
+                  id: searchResponse.matches[0].id,
+                  score: searchResponse.matches[0].score,
+                  type: searchResponse.matches[0].metadata?.type,
+                  title:
+                    searchResponse.matches[0].metadata?.title ||
+                    searchResponse.matches[0].metadata?.question,
+                });
+
+                if (searchResponse.matches.length > 1) {
+                  console.log(`Second result from ${typeNamespace}:`, {
+                    id: searchResponse.matches[1].id,
+                    score: searchResponse.matches[1].score,
+                    type: searchResponse.matches[1].metadata?.type,
+                    title:
+                      searchResponse.matches[1].metadata?.title ||
+                      searchResponse.matches[1].metadata?.question,
+                  });
+                }
+              }
+              allResults.push(...searchResponse.matches);
+            }
+          } catch (error) {
+            console.error(`Error searching namespace ${typeNamespace}:`, error);
+            // Continue with other namespaces even if one fails
+          }
+        }
+
+        // Deduplicate by ID
+        const uniqueResults = [];
+        const seenIds = new Set();
+
+        for (const result of allResults) {
+          if (!seenIds.has(result.id)) {
+            seenIds.add(result.id);
+            uniqueResults.push(result);
+          }
+        }
+
+        console.log(
+          `Combined ${allResults.length} results into ${uniqueResults.length} unique results`
+        );
+
+        // Ensure classification is not null before calling rerankMainResults
+        if (!classification) {
+          // Fall back to raw results if no classification
+          return uniqueResults.map((result) => ({
+            ...result,
+            rerankScore: result.score || 0,
+            classificationMatch: "0/3",
+          }));
+        }
+
+        // Rerank combined results with classification
+        return rerankMainResults(
+          uniqueResults,
+          classification,
+          message,
+          previousContext
+        );
+      } else {
+        // Standard search when interaction type is specified
+        console.log(
+          `Vectorization strategy: using specific namespace: ${mainNamespace}`
+        );
+
+        // Collection query if necessary
+        let collectionSearchResponse = null;
+        // Safe access with null check
+        if (classification && classification.type === "collection") {
+          // Use the actual query terms for collection search
+          const collectionQuery = `${message} ${classification.type}`;
+          const collectionEmbedding = await embeddings.embedQuery(
+            collectionQuery
+          );
+          const collectionSparseVectors = await generateSparseVectors(
+            collectionQuery,
+            classification
+          );
+
+          collectionSearchResponse = await pinecone
+            .index("voicero-hybrid")
+            .namespace(mainNamespace)
+            .query({
+              vector: collectionEmbedding,
+              sparseVector: collectionSparseVectors,
+              topK: 20,
+              includeMetadata: true,
+            });
+        }
+
+        // Perform hybrid search in main namespace
+        const mainSearchResponse = await pinecone
           .index("voicero-hybrid")
           .namespace(mainNamespace)
           .query({
-            vector: collectionEmbedding,
-            sparseVector: collectionSparseVectors,
+            vector: queryEmbedding,
+            sparseVector: sparseVectors,
             topK: 20,
             includeMetadata: true,
           });
-      }
 
-      // Perform hybrid search in main namespace
-      const mainSearchResponse = await pinecone
-        .index("voicero-hybrid")
-        .namespace(mainNamespace)
-        .query({
-          vector: queryEmbedding,
-          sparseVector: sparseVectors,
-          topK: 20,
-          includeMetadata: true,
-        });
+        // Log the results from main namespace
+        if (mainSearchResponse?.matches?.length > 0) {
+          console.log(
+            `Found ${mainSearchResponse.matches.length} results in main namespace ${mainNamespace}`
+          );
+          // Log the first 2 results for debugging
+          if (mainSearchResponse.matches.length > 0) {
+            console.log(`First result from ${mainNamespace}:`, {
+              id: mainSearchResponse.matches[0].id,
+              score: mainSearchResponse.matches[0].score,
+              type: mainSearchResponse.matches[0].metadata?.type,
+              title:
+                mainSearchResponse.matches[0].metadata?.title ||
+                mainSearchResponse.matches[0].metadata?.question,
+            });
 
-      // If we have collection results, merge them with main results for final response
-      let finalMainResults = [...mainSearchResponse.matches];
-      if (collectionSearchResponse) {
-        collectionSearchResponse.matches.forEach((collectionResult) => {
-          // Only add if not already present
-          if (!finalMainResults.some((r) => r.id === collectionResult.id)) {
-            finalMainResults.push(collectionResult);
+            if (mainSearchResponse.matches.length > 1) {
+              console.log(`Second result from ${mainNamespace}:`, {
+                id: mainSearchResponse.matches[1].id,
+                score: mainSearchResponse.matches[1].score,
+                type: mainSearchResponse.matches[1].metadata?.type,
+                title:
+                  mainSearchResponse.matches[1].metadata?.title ||
+                  mainSearchResponse.matches[1].metadata?.question,
+              });
+            }
           }
-        });
-      }
+        }
 
-      // Ensure classification is not null before calling rerankMainResults
-      if (!classification) {
-        // Fall back to raw results if no classification
-        return finalMainResults.map((result) => ({
-          ...result,
-          rerankScore: result.score || 0,
-          classificationMatch: "0/3",
-        }));
-      }
+        // If we have collection results, merge them with main results for final response
+        let finalMainResults = [...mainSearchResponse.matches];
+        if (collectionSearchResponse) {
+          console.log(
+            `Found ${collectionSearchResponse.matches.length} collection-specific results in namespace ${mainNamespace}`
+          );
 
-      // Rerank main results with classification
-      return rerankMainResults(
-        finalMainResults,
-        classification, // Now safe to pass as non-null
-        message,
-        previousContext
-      );
+          collectionSearchResponse.matches.forEach((collectionResult) => {
+            // Only add if not already present
+            if (!finalMainResults.some((r) => r.id === collectionResult.id)) {
+              finalMainResults.push(collectionResult);
+            }
+          });
+        }
+
+        // Ensure classification is not null before calling rerankMainResults
+        if (!classification) {
+          // Fall back to raw results if no classification
+          return finalMainResults.map((result) => ({
+            ...result,
+            rerankScore: result.score || 0,
+            classificationMatch: "0/3",
+          }));
+        }
+
+        // Rerank main results with classification
+        return rerankMainResults(
+          finalMainResults,
+          classification, // Now safe to pass as non-null
+          message,
+          previousContext
+        );
+      }
     };
 
     const performQASearch = async () => {
-      // Perform hybrid search in QA namespace with enhanced query
-      const qaSearchResponse = await pinecone
-        .index("voicero-hybrid")
-        .namespace(qaNamespace)
-        .query({
-          vector: enhancedEmbedding,
-          sparseVector: enhancedSparseVectors,
-          topK: 20,
-          includeMetadata: true,
+      // Special handling for "noneSpecified" interaction type or useAllNamespaces flag - search across all namespaces
+      if (interactionType === "noneSpecified" || useAllNamespaces) {
+        console.log(
+          useAllNamespaces
+            ? "Using all QA namespaces search strategy for non-AIsynced website"
+            : "Using noneSpecified search strategy for QA - searching across all interaction types"
+        );
+
+        // Define the interaction types to search across
+        const interactionTypes = ["sales", "support", "general"];
+        console.log(
+          `QA Vectorization strategy: searching across multiple QA namespaces: ${interactionTypes.join(
+            ", "
+          )}`
+        );
+
+        // Collect results from all interaction types
+        const allResults = [];
+
+        for (const type of interactionTypes) {
+          // Ensure website is not null before accessing its properties
+          if (!website) {
+            console.error("Website is null, cannot create QA namespace");
+            continue;
+          }
+          const typeQaNamespace = `${website.id}-${type}-qa`;
+          console.log(`Searching QA namespace: ${typeQaNamespace}`);
+
+          try {
+            // Perform hybrid search in this QA namespace
+            const qaSearchResponse = await pinecone
+              .index("voicero-hybrid")
+              .namespace(typeQaNamespace)
+              .query({
+                vector: enhancedEmbedding,
+                sparseVector: enhancedSparseVectors,
+                topK: 7, // Reduced to get top results from each namespace
+                includeMetadata: true,
+              });
+
+            // Add results if they exist
+            if (qaSearchResponse?.matches?.length > 0) {
+              console.log(
+                `Found ${qaSearchResponse.matches.length} QA results in namespace ${typeQaNamespace}`
+              );
+              // Log the first 2 results for debugging
+              if (qaSearchResponse.matches.length > 0) {
+                console.log(`First QA result from ${typeQaNamespace}:`, {
+                  id: qaSearchResponse.matches[0].id,
+                  score: qaSearchResponse.matches[0].score,
+                  question: qaSearchResponse.matches[0].metadata?.question,
+                });
+
+                if (qaSearchResponse.matches.length > 1) {
+                  console.log(`Second QA result from ${typeQaNamespace}:`, {
+                    id: qaSearchResponse.matches[1].id,
+                    score: qaSearchResponse.matches[1].score,
+                    question: qaSearchResponse.matches[1].metadata?.question,
+                  });
+                }
+              }
+              allResults.push(...qaSearchResponse.matches);
+            }
+          } catch (error) {
+            console.error(
+              `Error searching QA namespace ${typeQaNamespace}:`,
+              error
+            );
+            // Continue with other namespaces even if one fails
+          }
+        }
+
+        // Deduplicate by question text if available
+        const uniqueResults = [];
+        const seenQuestions = new Set();
+
+        for (const result of allResults) {
+          const questionText = result.metadata?.question || result.id;
+          if (!seenQuestions.has(questionText)) {
+            seenQuestions.add(questionText);
+            uniqueResults.push(result);
+          }
+        }
+
+        console.log(
+          `Combined ${allResults.length} QA results into ${uniqueResults.length} unique results`
+        );
+
+        // Add default classification to QA results before reranking
+        uniqueResults.forEach((result) => {
+          if (!result.metadata) {
+            result.metadata = {};
+          }
+
+          // Safely access classification fields with null check
+          if (classification) {
+            // Force the classification to match the query
+            result.metadata.type = classification.type;
+            result.metadata.category = classification.category;
+            result.metadata["sub-category"] =
+              classification["sub-category"] || "general";
+          } else {
+            // Fallback values if classification is null
+            result.metadata.type = "unknown";
+            result.metadata.category = "unknown";
+            result.metadata["sub-category"] = "general";
+          }
         });
 
-      // Add default classification to QA results before reranking
-      qaSearchResponse.matches = qaSearchResponse.matches.map((result) => {
-        if (!result.metadata) {
-          result.metadata = {};
+        // Ensure classification is not null before calling rerankQAResults
+        if (!classification) {
+          // Fall back to raw results if no classification
+          return uniqueResults.map((result) => ({
+            ...result,
+            rerankScore: result.score || 0,
+            classificationMatch: "0/3",
+          }));
         }
 
-        // Safely access classification fields with null check
-        if (classification) {
-          // Force the classification to match the query
-          result.metadata.type = classification.type;
-          result.metadata.category = classification.category;
-          result.metadata["sub-category"] =
-            classification["sub-category"] || "general";
-        } else {
-          // Fallback values if classification is null
-          result.metadata.type = "unknown";
-          result.metadata.category = "unknown";
-          result.metadata["sub-category"] = "general";
+        // Rerank QA results with classification
+        return rerankQAResults(
+          uniqueResults,
+          classification,
+          message,
+          previousContext
+        );
+      } else {
+        // Standard search when interaction type is specified
+        console.log(
+          `QA Vectorization strategy: using specific QA namespace: ${qaNamespace}`
+        );
+
+        // Perform hybrid search in QA namespace with enhanced query
+        const qaSearchResponse = await pinecone
+          .index("voicero-hybrid")
+          .namespace(qaNamespace)
+          .query({
+            vector: enhancedEmbedding,
+            sparseVector: enhancedSparseVectors,
+            topK: 20,
+            includeMetadata: true,
+          });
+
+        // Add default classification to QA results before reranking
+        qaSearchResponse.matches = qaSearchResponse.matches.map((result) => {
+          if (!result.metadata) {
+            result.metadata = {};
+          }
+
+          // Safely access classification fields with null check
+          if (classification) {
+            // Force the classification to match the query
+            result.metadata.type = classification.type;
+            result.metadata.category = classification.category;
+            result.metadata["sub-category"] =
+              classification["sub-category"] || "general";
+          } else {
+            // Fallback values if classification is null
+            result.metadata.type = "unknown";
+            result.metadata.category = "unknown";
+            result.metadata["sub-category"] = "general";
+          }
+
+          return result;
+        });
+
+        // Log the QA results
+        if (qaSearchResponse?.matches?.length > 0) {
+          console.log(
+            `Found ${qaSearchResponse.matches.length} QA results in namespace ${qaNamespace}`
+          );
+          // Log the first 2 results for debugging
+          if (qaSearchResponse.matches.length > 0) {
+            console.log(`First QA result from ${qaNamespace}:`, {
+              id: qaSearchResponse.matches[0].id,
+              score: qaSearchResponse.matches[0].score,
+              question: qaSearchResponse.matches[0].metadata?.question,
+            });
+
+            if (qaSearchResponse.matches.length > 1) {
+              console.log(`Second QA result from ${qaNamespace}:`, {
+                id: qaSearchResponse.matches[1].id,
+                score: qaSearchResponse.matches[1].score,
+                question: qaSearchResponse.matches[1].metadata?.question,
+              });
+            }
+          }
         }
 
-        return result;
-      });
+        // Ensure classification is not null before calling rerankQAResults
+        if (!classification) {
+          // Fall back to raw results if no classification
+          return qaSearchResponse.matches.map((result) => ({
+            ...result,
+            rerankScore: result.score || 0,
+            classificationMatch: "0/3",
+          }));
+        }
 
-      // Ensure classification is not null before calling rerankQAResults
-      if (!classification) {
-        // Fall back to raw results if no classification
-        return qaSearchResponse.matches.map((result) => ({
-          ...result,
-          rerankScore: result.score || 0,
-          classificationMatch: "0/3",
-        }));
+        // Rerank QA results with classification
+        return rerankQAResults(
+          qaSearchResponse.matches,
+          classification, // Now safe to pass as non-null
+          message,
+          previousContext
+        );
       }
-
-      // Rerank QA results with classification
-      return rerankQAResults(
-        qaSearchResponse.matches,
-        classification, // Now safe to pass as non-null
-        message,
-        previousContext
-      );
     };
 
     // Execute both search operations in parallel
@@ -3273,6 +3708,7 @@ export async function POST(request: NextRequest) {
 
     // Try to parse JSON response
     try {
+      // First attempt to parse as is
       parsedResponse = JSON.parse(aiResponse);
 
       // Ensure action_context is always an object
@@ -3420,21 +3856,75 @@ export async function POST(request: NextRequest) {
       // ... rest of the existing parsedResponse processing
     } catch (e) {
       console.warn(
-        "Failed to parse GPT's response as JSON, using plain text instead:",
+        "Failed to parse GPT's response as JSON, attempting to fix:",
         e
       );
-      parsedResponse = {
-        answer: aiResponse,
-        action: null,
-        url: null,
-        action_context: {},
-      };
+
+      // Check if the response looks like JSON (starts with { and ends with })
+      if (
+        aiResponse.trim().startsWith("{") &&
+        aiResponse.trim().endsWith("}")
+      ) {
+        try {
+          // Try to clean the JSON by handling common issues
+          // Replace any unescaped quotes in JSON strings
+          const cleanedJson = aiResponse
+            .replace(/:\s*"([^"\\]*(\\.[^"\\]*)*)"\s*([,}])/g, ': "$1"$3') // Fix potential quote issues
+            .replace(/([a-zA-Z0-9_]+)(\s*:)/g, '"$1"$2'); // Ensure all keys are properly quoted
+
+          parsedResponse = JSON.parse(cleanedJson);
+
+          // Ensure action_context is always an object
+          if (
+            !parsedResponse.action_context ||
+            typeof parsedResponse.action_context !== "object"
+          ) {
+            parsedResponse.action_context = {};
+          }
+
+          console.log("Successfully fixed and parsed JSON");
+        } catch (innerError) {
+          // If cleaning fails, create a properly formatted JSON response
+          console.warn("Failed to fix JSON, creating fallback response");
+
+          // Extract content between first { and last } to try to preserve the structure
+          const contentMatch = aiResponse.match(/\{([\s\S]*)\}/);
+          let extractedAnswer =
+            "I apologize, but I couldn't process your request correctly.";
+
+          if (contentMatch && contentMatch[0]) {
+            // Try to extract the answer field if it exists
+            const answerMatch = aiResponse.match(
+              /"answer"\s*:\s*"([^"\\]*(\\.[^"\\]*)*)"/
+            );
+            if (answerMatch && answerMatch[1]) {
+              extractedAnswer = answerMatch[1];
+            }
+          }
+
+          // Create a valid parsedResponse
+          parsedResponse = {
+            answer: extractedAnswer,
+            action: "none" as "none",
+            url: null,
+            action_context: {},
+          };
+        }
+      } else {
+        // If not JSON-like at all, create a plain text response
+        parsedResponse = {
+          answer: aiResponse,
+          action: "none" as "none",
+          url: null,
+          action_context: {},
+        };
+      }
     }
 
     // Format response
     const formattedResponse: FormattedResponse = {
-      action: "none",
-      answer: aiResponse,
+      action: (parsedResponse.action as any) || "none",
+      answer: parsedResponse.answer || aiResponse,
       category: "discovery",
       pageId: "chat",
       pageTitle: "Chat",
@@ -3443,6 +3933,7 @@ export async function POST(request: NextRequest) {
       subcategory: "content_overview",
       type: type,
       url: website.url,
+      action_context: parsedResponse.action_context || {},
     };
 
     // If aiResponse is a JSON string, parse it and update the response

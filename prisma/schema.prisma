@@ -621,15 +621,7 @@ model Session {
   id                String           @id @default(uuid())
   websiteId         String
   createdAt         DateTime         @default(now())
-  coreOpen          Boolean          @default(false)
-  chooserOpen       Boolean          @default(false)
   textOpen          Boolean          @default(false)
-  voiceOpen         Boolean          @default(false)
-  voiceOpenWindowUp Boolean          @default(false)
-  textOpenWindowUp  Boolean          @default(false)
-  autoMic           Boolean          @default(false)
-  textWelcome       Boolean          @default(false)
-  voiceWelcome      Boolean          @default(false)
   shopifyCustomerId String?
   website           Website          @relation(fields: [websiteId], references: [id], onDelete: Cascade)
   threads           AiThread[]
