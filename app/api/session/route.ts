@@ -16,6 +16,12 @@ export async function POST(request: NextRequest) {
   // Create a brand-new session (with a thread) when given a websiteId
   try {
     console.log("Session POST received at:", new Date().toISOString());
+    console.log("POST Request URL:", request.url);
+    console.log("POST Request method:", request.method);
+    console.log(
+      "POST Request headers:",
+      Object.fromEntries(request.headers.entries())
+    );
 
     // Clone the request before reading it so we can log the raw body
     const clonedRequest = request.clone();
@@ -112,11 +118,18 @@ export async function POST(request: NextRequest) {
 
     // Return both session and its initial thread
     const thread = session.threads[0];
+
+    // Include both id and threadId for clarity
+    console.log(
+      `Returning thread with id: ${thread.id} and threadId: ${thread.threadId}`
+    );
+
     return cors(
       request,
       NextResponse.json({
         session,
         thread,
+        threadId: thread.threadId, // Explicitly include threadId at the top level
         shopifyCustomerLinked: !!finalShopifyCustomerId,
       })
     );
@@ -133,6 +146,12 @@ export async function GET(request: NextRequest) {
   // Support fetching by sessionId OR by websiteId (most recent session)
   try {
     console.log("Session GET received at:", new Date().toISOString());
+    console.log("GET Request URL:", request.url);
+    console.log("GET Request method:", request.method);
+    console.log(
+      "GET Request headers:",
+      Object.fromEntries(request.headers.entries())
+    );
 
     const { searchParams } = new URL(request.url);
     const sessionId = searchParams.get("sessionId");
@@ -232,11 +251,17 @@ export async function GET(request: NextRequest) {
             console.log(`Created new thread with ID: ${threadToUse.threadId}`);
           }
 
+          // Include both id and threadId for clarity
+          console.log(
+            `Returning thread with id: ${threadToUse.id} and threadId: ${threadToUse.threadId}`
+          );
+
           return cors(
             request,
             NextResponse.json({
               session: customerSession,
               thread: threadToUse,
+              threadId: threadToUse.threadId, // Explicitly include threadId at the top level
               shopifyCustomerLinked: true,
             })
           );
@@ -302,11 +327,17 @@ export async function GET(request: NextRequest) {
         console.log(`Created new thread with ID: ${threadToUse.threadId}`);
       }
 
+      // Include both id and threadId for clarity
+      console.log(
+        `Returning thread with id: ${threadToUse.id} and threadId: ${threadToUse.threadId}`
+      );
+
       return cors(
         request,
         NextResponse.json({
           session,
           thread: threadToUse,
+          threadId: threadToUse.threadId, // Explicitly include threadId at the top level
           shopifyCustomerLinked: !!session.shopifyCustomerId,
         })
       );
@@ -375,11 +406,17 @@ export async function GET(request: NextRequest) {
       console.log(`Created new thread with ID: ${threadToUse.threadId}`);
     }
 
+    // Include both id and threadId for clarity
+    console.log(
+      `Returning thread with id: ${threadToUse.id} and threadId: ${threadToUse.threadId}`
+    );
+
     return cors(
       request,
       NextResponse.json({
         session,
         thread: threadToUse,
+        threadId: threadToUse.threadId, // Explicitly include threadId at the top level
         shopifyCustomerLinked: !!session.shopifyCustomerId,
       })
     );

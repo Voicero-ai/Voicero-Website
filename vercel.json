@@ -66,9 +66,6 @@
     "app/api/cron/reset-queries/route.ts": {
       "maxDuration": 300
     },
-    "app/api/cron/refresh-threads/route.ts": {
-      "maxDuration": 300
-    },
     "app/api/cron/reminder-unread-contacts/route.ts": {
       "maxDuration": 300
     }
@@ -83,12 +80,8 @@
       "schedule": "0 0 * * *"
     },
     {
-      "path": "/api/cron/refresh-threads",
-      "schedule": "0 * * * *"
-    },
-    {
       "path": "/api/cron/cleanup-empty-threads",
-      "schedule": "0 3 * * *"
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/cron/reminder-unread-contacts",
