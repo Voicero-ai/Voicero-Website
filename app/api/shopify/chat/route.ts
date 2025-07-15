@@ -23,9 +23,10 @@ import {
   RETURN_ORDERS_PROMPT,
 } from "@/lib/systemPrompts";
 import Stripe from "stripe";
+import prisma from "@/lib/prisma"; // Import the default export from prisma.ts
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
+// Use the imported prisma client instead of creating a new one
 const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY!,
 });
@@ -419,9 +420,13 @@ async function classifyQuestion(
   if (previousContext?.answer) {
     // Try to extract action from previous answer if it's in JSON format
     let previousAction = "none";
+    // Handle both string and object answers for JSON parsing
+    const answerText =
+      typeof previousContext.answer === "string" ? previousContext.answer : "";
+
     if (
       typeof previousContext.answer === "string" &&
-      previousContext.answer.startsWith("{")
+      answerText.startsWith("{")
     ) {
       try {
         const parsedAnswer = JSON.parse(previousContext.answer);
@@ -848,8 +853,14 @@ function rerankMainResults(
   // If we have previous context, extract the product name from it
   let previousProductName = null;
   if (previousContext?.answer) {
+    // Handle both string and object answers
+    const answerText =
+      typeof previousContext.answer === "string"
+        ? previousContext.answer
+        : previousContext.answer.answer || "";
+
     // Check for product name without using a specific regex that could be null
-    const match = previousContext.answer.match(/The 3p Fulfilled Snowboard/i);
+    const match = answerText.match(/The 3p Fulfilled Snowboard/i);
     if (match && match[0]) {
       previousProductName = match[0];
     }
@@ -960,7 +971,14 @@ function rerankQAResults(
   // If we have previous context, extract the product name from it
   let previousProductName = null;
   if (previousContext?.answer) {
-    const match = previousContext.answer.match(/The 3p Fulfilled Snowboard/i);
+    // Handle both string and object answers
+    const answerText =
+      typeof previousContext.answer === "string"
+        ? previousContext.answer
+        : previousContext.answer.answer || "";
+
+    // Check for product name without using a specific regex that could be null
+    const match = answerText.match(/The 3p Fulfilled Snowboard/i);
     if (match && match[0]) {
       previousProductName = match[0];
     }
@@ -1959,6 +1977,14 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  console.log("Shopify chat POST received at:", new Date().toISOString());
+  console.log("POST Request URL:", request.url);
+  console.log("POST Request method:", request.method);
+  console.log(
+    "POST Request headers:",
+    Object.fromEntries(request.headers.entries())
+  );
+
   let body: {
     message: string;
     websiteId?: string;
@@ -1991,6 +2017,16 @@ export async function POST(request: NextRequest) {
   let website: WebsiteWithAutoSettings | null = null;
 
   try {
+    // Clone the request before reading it so we can log the raw body
+    const clonedRequest = request.clone();
+    let rawBody = "";
+    try {
+      rawBody = await clonedRequest.text();
+      console.log("Raw request body:", rawBody);
+    } catch (e) {
+      console.error("Error reading raw body:", e);
+    }
+
     // Parse request body
     const parsedBody = await request.json();
     body = {
@@ -2036,68 +2072,82 @@ export async function POST(request: NextRequest) {
     }
 
     // Get website either by ID or access key with plan, query info, and auto-allow settings
-    if (websiteId) {
-      website = await prisma.website.findUnique({
-        where: { id: websiteId },
-        select: {
-          id: true,
-          url: true,
-          plan: true,
-          monthlyQueries: true,
-          customInstructions: true,
-          allowAutoCancel: true,
-          allowAutoReturn: true,
-          allowAutoExchange: true,
-          allowAutoClick: true,
-          allowAutoScroll: true,
-          allowAutoHighlight: true,
-          allowAutoRedirect: true,
-          allowAutoGetUserOrders: true,
-          allowAutoUpdateUserInfo: true,
-          allowAutoFillForm: true,
-          allowAutoTrackOrder: true,
-          allowAutoLogout: true,
-          allowAutoLogin: true,
-          allowAutoGenerateImage: true,
-          newAiSynced: true,
-          stripeSubscriptionId: true,
-          stripeSubscriptionItemId: true,
-        },
-      });
-    } else if (accessKey) {
-      website = await prisma.website.findFirst({
-        where: {
-          accessKeys: {
-            some: {
-              key: accessKey,
+    try {
+      if (websiteId) {
+        website = await prisma.website.findUnique({
+          where: { id: websiteId },
+          select: {
+            id: true,
+            url: true,
+            plan: true,
+            monthlyQueries: true,
+            customInstructions: true,
+            allowAutoCancel: true,
+            allowAutoReturn: true,
+            allowAutoExchange: true,
+            allowAutoClick: true,
+            allowAutoScroll: true,
+            allowAutoHighlight: true,
+            allowAutoRedirect: true,
+            allowAutoGetUserOrders: true,
+            allowAutoUpdateUserInfo: true,
+            allowAutoFillForm: true,
+            allowAutoTrackOrder: true,
+            allowAutoLogout: true,
+            allowAutoLogin: true,
+            allowAutoGenerateImage: true,
+            newAiSynced: true,
+            stripeSubscriptionId: true,
+            stripeSubscriptionItemId: true,
+          },
+        });
+      } else if (accessKey) {
+        website = await prisma.website.findFirst({
+          where: {
+            accessKeys: {
+              some: {
+                key: accessKey,
+              },
             },
           },
-        },
-        select: {
-          id: true,
-          url: true,
-          plan: true,
-          monthlyQueries: true,
-          customInstructions: true,
-          allowAutoCancel: true,
-          allowAutoReturn: true,
-          allowAutoExchange: true,
-          allowAutoClick: true,
-          allowAutoScroll: true,
-          allowAutoHighlight: true,
-          allowAutoRedirect: true,
-          allowAutoGetUserOrders: true,
-          allowAutoUpdateUserInfo: true,
-          allowAutoFillForm: true,
-          allowAutoTrackOrder: true,
-          allowAutoLogout: true,
-          allowAutoLogin: true,
-          allowAutoGenerateImage: true,
-          newAiSynced: true,
-          stripeSubscriptionId: true,
-          stripeSubscriptionItemId: true,
-        },
-      });
+          select: {
+            id: true,
+            url: true,
+            plan: true,
+            monthlyQueries: true,
+            customInstructions: true,
+            allowAutoCancel: true,
+            allowAutoReturn: true,
+            allowAutoExchange: true,
+            allowAutoClick: true,
+            allowAutoScroll: true,
+            allowAutoHighlight: true,
+            allowAutoRedirect: true,
+            allowAutoGetUserOrders: true,
+            allowAutoUpdateUserInfo: true,
+            allowAutoFillForm: true,
+            allowAutoTrackOrder: true,
+            allowAutoLogout: true,
+            allowAutoLogin: true,
+            allowAutoGenerateImage: true,
+            newAiSynced: true,
+            stripeSubscriptionId: true,
+            stripeSubscriptionItemId: true,
+          },
+        });
+      }
+    } catch (error) {
+      console.error("Database connection error:", error);
+      return cors(
+        request,
+        NextResponse.json(
+          {
+            error: "Database connection error. Please try again.",
+            details: error instanceof Error ? error.message : "Unknown error",
+          },
+          { status: 503 }
+        )
+      );
     }
 
     if (!website) {
@@ -2526,6 +2576,23 @@ export async function POST(request: NextRequest) {
     // Get or create thread
     let aiThread: ThreadWithMessages;
     if (threadId) {
+      console.log(`Looking for thread with ID: ${threadId}`);
+      console.log(`Website ID: ${website.id}`);
+
+      // First try to find by direct query to debug
+      const threadById = await prisma.aiThread.findFirst({
+        where: { id: threadId },
+      });
+      console.log(`Thread found by id: ${threadById ? "YES" : "NO"}`);
+
+      const threadByThreadId = await prisma.aiThread.findFirst({
+        where: { threadId: threadId },
+      });
+      console.log(
+        `Thread found by threadId: ${threadByThreadId ? "YES" : "NO"}`
+      );
+
+      // Now try the combined query
       aiThread = (await prisma.aiThread.findFirst({
         where: {
           OR: [{ id: threadId }, { threadId: threadId }],
@@ -2541,11 +2608,45 @@ export async function POST(request: NextRequest) {
         },
       })) as ThreadWithMessages;
 
-      if (!aiThread) {
-        return cors(
-          request,
-          NextResponse.json({ error: "Thread not found" }, { status: 404 })
+      console.log(`Combined query found thread: ${aiThread ? "YES" : "NO"}`);
+      if (aiThread) {
+        console.log(
+          `Thread ID: ${aiThread.id}, ThreadId: ${aiThread.threadId}`
         );
+      }
+
+      if (!aiThread) {
+        console.log(`Thread not found with either id or threadId: ${threadId}`);
+        console.log(`Creating new thread instead of returning 404...`);
+
+        // Create new thread with the provided ID
+        try {
+          aiThread = (await prisma.aiThread.create({
+            data: {
+              id: threadId,
+              threadId: crypto.randomUUID(),
+              websiteId: website.id,
+              messages: {
+                create: [], // Empty array for new thread
+              },
+            },
+            include: {
+              messages: true,
+            },
+          })) as ThreadWithMessages;
+          console.log(
+            `Created new thread with ID: ${aiThread.id} and ThreadId: ${aiThread.threadId}`
+          );
+        } catch (error) {
+          console.error(`Error creating thread: ${error}`);
+          return cors(
+            request,
+            NextResponse.json(
+              { error: "Thread not found and could not create new thread" },
+              { status: 404 }
+            )
+          );
+        }
       }
     } else {
       // Create new thread
@@ -2574,9 +2675,15 @@ export async function POST(request: NextRequest) {
     if (previousContext?.answer) {
       // Try to extract action from previous answer if it's in JSON format
       let previousAction = "none";
+      // Handle both string and object answers for JSON parsing
+      const answerText =
+        typeof previousContext.answer === "string"
+          ? previousContext.answer
+          : "";
+
       if (
         typeof previousContext.answer === "string" &&
-        previousContext.answer.startsWith("{")
+        answerText.startsWith("{")
       ) {
         try {
           const parsedAnswer = JSON.parse(previousContext.answer);
@@ -3506,8 +3613,12 @@ export async function POST(request: NextRequest) {
                 content:
                   message.question ||
                   message.content ||
-                  (message.answer?.startsWith("{")
+                  (typeof message.answer === "string" &&
+                  message.answer?.startsWith("{")
                     ? JSON.parse(message.answer).answer
+                    : typeof message.answer === "object" &&
+                      message.answer?.answer
+                    ? message.answer.answer
                     : message.answer || ""),
               }))
           : [],
@@ -3518,12 +3629,18 @@ export async function POST(request: NextRequest) {
               question:
                 pastContext[pastContext.length - 2].question ||
                 pastContext[pastContext.length - 2].content,
-              answer: pastContext[pastContext.length - 1].answer?.startsWith(
-                "{"
-              )
-                ? JSON.parse(pastContext[pastContext.length - 1].answer).answer
-                : pastContext[pastContext.length - 1].answer ||
-                  pastContext[pastContext.length - 1].content,
+              answer:
+                typeof pastContext[pastContext.length - 1].answer ===
+                  "string" &&
+                pastContext[pastContext.length - 1].answer?.startsWith("{")
+                  ? JSON.parse(pastContext[pastContext.length - 1].answer)
+                      .answer
+                  : typeof pastContext[pastContext.length - 1].answer ===
+                      "object" &&
+                    pastContext[pastContext.length - 1].answer?.answer
+                  ? pastContext[pastContext.length - 1].answer.answer
+                  : pastContext[pastContext.length - 1].answer ||
+                    pastContext[pastContext.length - 1].content,
             }
           : null,
       mainContent: context.mainContent.map((item) => {
@@ -3633,8 +3750,11 @@ export async function POST(request: NextRequest) {
               role: message.role || (message.question ? "user" : "assistant"),
               content: message.question
                 ? message.question
-                : message.answer?.startsWith("{")
+                : typeof message.answer === "string" &&
+                  message.answer?.startsWith("{")
                 ? JSON.parse(message.answer).answer
+                : typeof message.answer === "object" && message.answer?.answer
+                ? message.answer.answer
                 : message.answer,
             }))
         : [];
@@ -3644,9 +3764,15 @@ export async function POST(request: NextRequest) {
       pastContext && pastContext.length >= 2
         ? {
             question: pastContext[pastContext.length - 2].question,
-            answer: pastContext[pastContext.length - 1].answer?.startsWith("{")
-              ? JSON.parse(pastContext[pastContext.length - 1].answer).answer
-              : pastContext[pastContext.length - 1].answer,
+            answer:
+              typeof pastContext[pastContext.length - 1].answer === "string" &&
+              pastContext[pastContext.length - 1].answer?.startsWith("{")
+                ? JSON.parse(pastContext[pastContext.length - 1].answer).answer
+                : typeof pastContext[pastContext.length - 1].answer ===
+                    "object" &&
+                  pastContext[pastContext.length - 1].answer?.answer
+                ? pastContext[pastContext.length - 1].answer.answer
+                : pastContext[pastContext.length - 1].answer,
           }
         : null;
 

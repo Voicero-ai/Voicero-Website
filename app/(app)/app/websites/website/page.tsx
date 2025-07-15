@@ -2182,88 +2182,13 @@ export default function WebsiteSettings() {
                   <input
                     type="text"
                     value={question.question}
-                    onChange={async (e) => {
-                      const newQuestions = [
-                        ...(websiteData?.popUpQuestions || []),
-                      ];
-                      newQuestions[index] = {
-                        ...question,
-                        question: e.target.value,
-                      };
-
-                      // Optimistically update
-                      setWebsiteData({
-                        ...websiteData!,
-                        popUpQuestions: newQuestions,
-                      } as WebsiteData);
-
-                      // Update in database
-                      try {
-                        const response = await fetch(
-                          "/api/websites/update-question",
-                          {
-                            method: "POST",
-                            headers: {
-                              "Content-Type": "application/json",
-                            },
-                            body: JSON.stringify({
-                              questionId: question.id,
-                              question: e.target.value,
-                            }),
-                          }
-                        );
-
-                        if (!response.ok)
-                          throw new Error("Failed to update question");
-                      } catch (error) {
-                        console.error("Error updating question:", error);
-                        // Revert on error
-                        setWebsiteData({
-                          ...websiteData!,
-                          popUpQuestions: websiteData?.popUpQuestions,
-                        } as WebsiteData);
-                      }
-                    }}
+                    disabled={true}
                     className="flex-1 p-2 rounded-lg border border-brand-lavender-light/20 
                              focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-100 text-black"
                   />
                   <button
-                    onClick={async () => {
-                      // Optimistically update
-                      setWebsiteData({
-                        ...websiteData!,
-                        popUpQuestions: websiteData?.popUpQuestions?.filter(
-                          (q) => q.id !== question.id
-                        ),
-                      } as WebsiteData);
-
-                      // Delete from database
-                      try {
-                        const response = await fetch(
-                          "/api/websites/delete-question",
-                          {
-                            method: "POST",
-                            headers: {
-                              "Content-Type": "application/json",
-                            },
-                            body: JSON.stringify({
-                              questionId: question.id,
-                            }),
-                          }
-                        );
-
-                        if (!response.ok)
-                          throw new Error("Failed to delete question");
-                      } catch (error) {
-                        console.error("Error deleting question:", error);
-                        // Revert on error
-                        setWebsiteData({
-                          ...websiteData!,
-                          popUpQuestions: websiteData?.popUpQuestions,
-                        } as WebsiteData);
-                      }
-                    }}
-                    className="p-2 text-red-500 hover:text-red-600 transition-colors"
+                    disabled={true}
+                    className="p-2 text-red-500 opacity-50 cursor-not-allowed"
                   >
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
@@ -2283,41 +2208,9 @@ export default function WebsiteSettings() {
 
               {(websiteData?.popUpQuestions?.length || 0) < 3 && (
                 <button
-                  onClick={async () => {
-                    try {
-                      const response = await fetch(
-                        "/api/websites/add-question",
-                        {
-                          method: "POST",
-                          headers: {
-                            "Content-Type": "application/json",
-                          },
-                          body: JSON.stringify({
-                            websiteId: websiteData?.id,
-                            question: "New Question",
-                          }),
-                        }
-                      );
-
-                      if (!response.ok)
-                        throw new Error("Failed to add question");
-
-                      const newQuestion = await response.json();
-
-                      setWebsiteData({
-                        ...websiteData!,
-                        popUpQuestions: [
-                          ...(websiteData?.popUpQuestions || []),
-                          newQuestion,
-                        ],
-                      } as WebsiteData);
-                    } catch (error) {
-                      console.error("Error adding question:", error);
-                    }
-                  }}
+                  disabled={true}
                   className="w-full p-2 border-2 border-dashed border-brand-lavender-light/20 
-                             rounded-lg text-brand-text-secondary hover:text-brand-accent 
-                             hover:border-brand-accent/20 transition-colors"
+                             rounded-lg text-brand-text-secondary opacity-50 cursor-not-allowed"
                 >
                   + Add Question
                 </button>
@@ -2423,7 +2316,10 @@ export default function WebsiteSettings() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Multiple AI Reviews</h5>
+                      <h5 className="font-medium text-black">
+                        Multiple AI Reviews
+                      </h5>
+
                       <p className="text-sm text-brand-text-secondary">
                         Allow users to see multiple AI summaries per day instead
                         of just one
@@ -2449,7 +2345,7 @@ export default function WebsiteSettings() {
 
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Redirect</h5>
+                      <h5 className="font-medium text-black">Auto Redirect</h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to automatically redirect users to relevant
                         pages
@@ -2484,7 +2380,7 @@ export default function WebsiteSettings() {
 
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Scroll</h5>
+                      <h5 className="font-medium text-black">Auto Scroll</h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to scroll to relevant sections on the page
                       </p>
@@ -2518,7 +2414,7 @@ export default function WebsiteSettings() {
 
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Highlight</h5>
+                      <h5 className="font-medium text-black">Auto Highlight</h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to highlight important elements on the page
                       </p>
@@ -2551,7 +2447,7 @@ export default function WebsiteSettings() {
                   </div>
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Click</h5>
+                      <h5 className="font-medium text-black">Auto Click</h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to click buttons and links on behalf of users
                       </p>
@@ -2575,7 +2471,7 @@ export default function WebsiteSettings() {
                   </div>
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Fill Forms</h5>
+                      <h5 className="font-medium text-black">Auto Fill Forms</h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to fill out forms on behalf of users
                       </p>
@@ -2609,7 +2505,7 @@ export default function WebsiteSettings() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Cancel</h5>
+                      <h5 className="font-medium text-black">Auto Cancel</h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to help users cancel orders
                       </p>
@@ -2634,7 +2530,7 @@ export default function WebsiteSettings() {
 
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Return</h5>
+                      <h5 className="font-medium text-black">Auto Return</h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to help users return products
                       </p>
@@ -2656,7 +2552,7 @@ export default function WebsiteSettings() {
 
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Exchange</h5>
+                      <h5 className="font-medium text-black">Auto Exchange</h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to help users exchange products
                       </p>
@@ -2676,7 +2572,9 @@ export default function WebsiteSettings() {
                   </div>
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Get User Orders</h5>
+                      <h5 className="font-medium text-black">
+                        Auto Get User Orders
+                      </h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to fetch and display user order history
                       </p>
@@ -2700,7 +2598,9 @@ export default function WebsiteSettings() {
                   </div>
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Track Orders</h5>
+                      <h5 className="font-medium text-black">
+                        Auto Track Orders
+                      </h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to help users track their order status
                       </p>
@@ -2734,7 +2634,9 @@ export default function WebsiteSettings() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Update User Info</h5>
+                      <h5 className="font-medium text-black">
+                        Auto Update User Info
+                      </h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to help users update their account information
                       </p>
@@ -2758,7 +2660,7 @@ export default function WebsiteSettings() {
                   </div>
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Login</h5>
+                      <h5 className="font-medium text-black">Auto Login</h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to help users log into their accounts
                       </p>
@@ -2783,7 +2685,7 @@ export default function WebsiteSettings() {
 
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Logout</h5>
+                      <h5 className="font-medium text-black">Auto Logout</h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to help users log out of their accounts
                       </p>
@@ -2817,7 +2719,9 @@ export default function WebsiteSettings() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium">Auto Generate Images</h5>
+                      <h5 className="font-medium text-black">
+                        Auto Generate Images
+                      </h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to generate custom images based on user
                         requests
