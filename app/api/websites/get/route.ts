@@ -118,21 +118,6 @@ export async function GET(request: NextRequest) {
       `Valid thread count: ${validThreadCount}, Current monthlyQueries: ${website.monthlyQueries}`
     );
 
-    // Force update the monthly queries count to exactly match valid threads count
-    try {
-      // Always update to ensure the count is accurate
-      await prisma.website.update({
-        where: { id: websiteId },
-        data: { monthlyQueries: validThreadCount },
-      });
-
-      // Update in-memory website object as well
-      website.monthlyQueries = validThreadCount;
-      console.log(`Updated monthlyQueries to ${validThreadCount}`);
-    } catch (error) {
-      console.error("Failed to update monthlyQueries count:", error);
-    }
-
     // Process threads and calculate stats
     processThreadsAndMessages(validThreads, stats);
 
