@@ -312,88 +312,174 @@ export async function POST(request: NextRequest) {
       const processedHandles = new Map<string, number>();
 
       for (const page of pages) {
-        let pageShopifyId = page.shopifyId;
-        if (pageShopifyId === 0 || pageShopifyId?.toString() === "0") {
-          pageShopifyId = Number(generateRandomShopifyId());
-        }
+        try {
+          let pageShopifyId = page.shopifyId;
+          if (pageShopifyId === 0 || pageShopifyId?.toString() === "0") {
+            pageShopifyId = Number(generateRandomShopifyId());
+          }
 
-        // Check if this handle already exists for a different page
-        let handle = page.handle || "";
+          // Check if this handle already exists for a different page
+          let handle = page.handle || "";
+          let uniqueHandleFound = false;
+          let attemptCount = 0;
 
-        // Check if the handle already exists in the database but with a different shopifyId
-        const existingPageWithSameHandle =
-          await prismaWithPool.shopifyPage.findFirst({
+          // Keep trying until we find a unique handle or hit max attempts
+          while (!uniqueHandleFound && attemptCount < 10) {
+            // If this isn't the first attempt, modify the handle
+            if (attemptCount > 0) {
+              handle = `${page.handle || ""}-${attemptCount}`;
+            }
+
+            // Check if the handle exists in the database
+            const existingPageWithSameHandle =
+              await prismaWithPool.shopifyPage.findFirst({
+                where: {
+                  websiteId: website.id,
+                  handle: handle,
+                  NOT: {
+                    shopifyId: BigInt(pageShopifyId),
+                  },
+                },
+              });
+
+            if (!existingPageWithSameHandle) {
+              uniqueHandleFound = true;
+            } else {
+              attemptCount++;
+            }
+          }
+
+          if (attemptCount > 0) {
+            console.log(
+              `Handle collision resolved. Using handle: ${handle} after ${attemptCount} attempts`
+            );
+          }
+
+          const existingPage = await prismaWithPool.shopifyPage.findFirst({
             where: {
-              websiteId: website.id,
-              handle: handle,
-              NOT: {
-                shopifyId: BigInt(pageShopifyId),
-              },
-            },
-          });
-
-        // If we found a page with the same handle but different ID, make this handle unique
-        if (existingPageWithSameHandle) {
-          const count = processedHandles.get(handle) || 1;
-          handle = `${handle}-${count}`;
-          processedHandles.set(page.handle || "", count + 1);
-          console.log(
-            `Handle collision detected. Modified handle to: ${handle}`
-          );
-        }
-
-        const existingPage = await prismaWithPool.shopifyPage.findFirst({
-          where: {
-            websiteId: website.id,
-            shopifyId: BigInt(pageShopifyId),
-          },
-        });
-
-        const needsUpdate =
-          !existingPage ||
-          existingPage.title !== (page.title || "") ||
-          existingPage.handle !== handle ||
-          existingPage.content !== (page.content || "") ||
-          existingPage.bodySummary !== (page.bodySummary || null) ||
-          existingPage.isPublished !== (page.isPublished || null) ||
-          existingPage.templateSuffix !== (page.templateSuffix || null);
-
-        if (needsUpdate) {
-          await prismaWithPool.shopifyPage.upsert({
-            where: {
-              websiteId_shopifyId: {
-                websiteId: website.id,
-                shopifyId: BigInt(pageShopifyId),
-              },
-            },
-            create: {
               websiteId: website.id,
               shopifyId: BigInt(pageShopifyId),
-              title: page.title || "",
-              handle: handle,
-              content: page.content || "",
-              bodySummary: page.bodySummary || null,
-              publishedAt: page.publishedAt ? new Date(page.publishedAt) : null,
-              isPublished: page.isPublished || null,
-              templateSuffix: page.templateSuffix || null,
-              trained: false,
-            },
-            update: {
-              title: page.title || undefined,
-              handle: handle,
-              content: page.content || undefined,
-              bodySummary: page.bodySummary || undefined,
-              publishedAt: page.publishedAt
-                ? new Date(page.publishedAt)
-                : undefined,
-              isPublished: page.isPublished || undefined,
-              templateSuffix: page.templateSuffix || undefined,
-              trained: false,
             },
           });
 
-          changedItems.pages.push(`${page.title} (${handle})`);
-          console.log(`Updated page: ${page.title} (${handle})`);
+          const needsUpdate =
+            !existingPage ||
+            existingPage.title !== (page.title || "") ||
+            existingPage.handle !== handle ||
+            existingPage.content !== (page.content || "") ||
+            existingPage.bodySummary !== (page.bodySummary || null) ||
+            existingPage.isPublished !== (page.isPublished || null) ||
+            existingPage.templateSuffix !== (page.templateSuffix || null);
+
+          if (needsUpdate) {
+            await prismaWithPool.shopifyPage.upsert({
+              where: {
+                websiteId_shopifyId: {
+                  websiteId: website.id,
+                  shopifyId: BigInt(pageShopifyId),
+                },
+              },
+              create: {
+                websiteId: website.id,
+                shopifyId: BigInt(pageShopifyId),
+                title: page.title || "",
+                handle: handle,
+                content: page.content || "",
+                bodySummary: page.bodySummary || null,
+                publishedAt: page.publishedAt
+                  ? new Date(page.publishedAt)
+                  : null,
+                isPublished: page.isPublished || null,
+                templateSuffix: page.templateSuffix || null,
+                trained: false,
+              },
+              update: {
+                title: page.title || undefined,
+                handle: handle,
+                content: page.content || undefined,
+                bodySummary: page.bodySummary || undefined,
+                publishedAt: page.publishedAt
+                  ? new Date(page.publishedAt)
+                  : undefined,
+                isPublished: page.isPublished || undefined,
+                templateSuffix: page.templateSuffix || undefined,
+                trained: false,
+              },
+            });
+
+            changedItems.pages.push(`${page.title} (${handle})`);
+            console.log(`Updated page: ${page.title} (${handle})`);
+          }
+        } catch (error: any) {
+          console.error(`Error processing page ${page.title || "unknown"}:`, {
+            message: error.message,
+            code: error.code,
+          });
+
+          // Generate a completely random handle as a last resort
+          if (
+            error.code === "P2002" &&
+            error.message.includes("ShopifyPage_websiteId_handle_key")
+          ) {
+            try {
+              const randomHandle = `${
+                page.handle || "page"
+              }-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+              console.log(
+                `Attempting recovery with random handle: ${randomHandle}`
+              );
+
+              await prismaWithPool.shopifyPage.upsert({
+                where: {
+                  websiteId_shopifyId: {
+                    websiteId: website.id,
+                    shopifyId: BigInt(page.shopifyId),
+                  },
+                },
+                create: {
+                  websiteId: website.id,
+                  shopifyId: BigInt(page.shopifyId),
+                  title: page.title || "",
+                  handle: randomHandle,
+                  content: page.content || "",
+                  bodySummary: page.bodySummary || null,
+                  publishedAt: page.publishedAt
+                    ? new Date(page.publishedAt)
+                    : null,
+                  isPublished: page.isPublished || null,
+                  templateSuffix: page.templateSuffix || null,
+                  trained: false,
+                },
+                update: {
+                  title: page.title || undefined,
+                  handle: randomHandle,
+                  content: page.content || undefined,
+                  bodySummary: page.bodySummary || undefined,
+                  publishedAt: page.publishedAt
+                    ? new Date(page.publishedAt)
+                    : undefined,
+                  isPublished: page.isPublished || undefined,
+                  templateSuffix: page.templateSuffix || undefined,
+                  trained: false,
+                },
+              });
+
+              changedItems.pages.push(`${page.title} (${randomHandle})`);
+              console.log(
+                `Recovery successful: Updated page with random handle: ${page.title} (${randomHandle})`
+              );
+            } catch (recoveryError) {
+              console.error(
+                `Recovery failed for page ${page.title || "unknown"}:`,
+                recoveryError
+              );
+            }
+          } else {
+            // For other errors, just log and continue
+            console.error(
+              `Skipping page due to error: ${page.title || "unknown"}`
+            );
+          }
         }
       }
     }
