@@ -226,7 +226,67 @@ export async function POST(request: NextRequest) {
       blogs: [] as string[],
       collections: [] as string[],
       discounts: [] as string[],
+      deleted: [] as string[], // Track deleted items
     };
+
+    // Get existing items before processing to detect deletions
+    const existingProducts = await prismaWithPool.shopifyProduct.findMany({
+      where: { websiteId: website.id },
+      select: { shopifyId: true, title: true, handle: true },
+    });
+
+    const existingPages = await prismaWithPool.shopifyPage.findMany({
+      where: { websiteId: website.id },
+      select: { shopifyId: true, title: true, handle: true },
+    });
+
+    const existingCollections = await prismaWithPool.shopifyCollection.findMany(
+      {
+        where: { websiteId: website.id },
+        select: { shopifyId: true, title: true, handle: true },
+      }
+    );
+
+    // Create sets of incoming IDs for quick lookup
+    const incomingProductIds = new Set(
+      products.map((p) => p.shopifyId.toString())
+    );
+    const incomingPageIds = new Set(pages.map((p) => p.shopifyId.toString()));
+    const incomingCollectionIds = new Set(
+      collections.map((c) => c.shopifyId.toString())
+    );
+
+    // Check for deleted products
+    for (const product of existingProducts) {
+      if (!incomingProductIds.has(product.shopifyId.toString())) {
+        console.log(
+          `Detected deleted product: ${product.title} (${product.handle})`
+        );
+        changedItems.deleted.push(
+          `Product: ${product.title} (${product.handle})`
+        );
+      }
+    }
+
+    // Check for deleted pages
+    for (const page of existingPages) {
+      if (!incomingPageIds.has(page.shopifyId.toString())) {
+        console.log(`Detected deleted page: ${page.title} (${page.handle})`);
+        changedItems.deleted.push(`Page: ${page.title} (${page.handle})`);
+      }
+    }
+
+    // Check for deleted collections
+    for (const collection of existingCollections) {
+      if (!incomingCollectionIds.has(collection.shopifyId.toString())) {
+        console.log(
+          `Detected deleted collection: ${collection.title} (${collection.handle})`
+        );
+        changedItems.deleted.push(
+          `Collection: ${collection.title} (${collection.handle})`
+        );
+      }
+    }
 
     // Process Products
     if (products.length > 0) {
@@ -278,6 +338,7 @@ export async function POST(request: NextRequest) {
               priceRange: product.priceRange || null,
               totalInventory: product.totalInventory || null,
               trained: false,
+              type: "general", // Set a default type for new products
             },
             update: {
               title: product.title || undefined,
@@ -295,6 +356,8 @@ export async function POST(request: NextRequest) {
               priceRange: product.priceRange || undefined,
               totalInventory: product.totalInventory || undefined,
               trained: false,
+              // Don't update type field
+              // type: "general",
             },
           });
 
@@ -411,6 +474,7 @@ export async function POST(request: NextRequest) {
                 isPublished: page.isPublished || null,
                 templateSuffix: page.templateSuffix || null,
                 trained: false,
+                type: "general", // Set a default type for new pages
               },
               update: {
                 title: page.title || undefined,
@@ -423,6 +487,8 @@ export async function POST(request: NextRequest) {
                 isPublished: page.isPublished || undefined,
                 templateSuffix: page.templateSuffix || undefined,
                 trained: false,
+                // Don't update type field
+                // type: "general",
               },
             });
 
@@ -555,6 +621,7 @@ export async function POST(request: NextRequest) {
                     templateSuffix: post.templateSuffix || null,
                     blogId: blogRecord.id,
                     trained: false,
+                    type: "general", // Set a default type for new blog posts
                   },
                   update: {
                     title: post.title || undefined,
@@ -570,6 +637,8 @@ export async function POST(request: NextRequest) {
                     tags: post.tags || undefined,
                     templateSuffix: post.templateSuffix || undefined,
                     trained: false,
+                    // Don't update type field
+                    // type: "general",
                   },
                 });
 
@@ -635,6 +704,7 @@ export async function POST(request: NextRequest) {
                 ? new Date(collection.updatedAt)
                 : null,
               trained: false,
+              type: "general", // Set a default type for new collections
             },
             update: {
               title: collection.title || undefined,
@@ -647,6 +717,8 @@ export async function POST(request: NextRequest) {
                 ? new Date(collection.updatedAt)
                 : undefined,
               trained: false,
+              // Don't update type field
+              // type: "general",
             },
           });
 
@@ -745,14 +817,15 @@ export async function POST(request: NextRequest) {
             needsUpdate = true;
           }
 
-          if (existingDiscount.type !== (discount.type || "")) {
-            console.log(
-              `  Type changed: "${existingDiscount.type}" → "${
-                discount.type || ""
-              }"`
-            );
-            needsUpdate = true;
-          }
+          // Remove type comparison completely - we don't want to update based on type changes
+          // if (existingDiscount.type !== (discount.type || "")) {
+          //   console.log(
+          //     `  Type changed: "${existingDiscount.type}" → "${
+          //       discount.type || ""
+          //     }"`
+          //   );
+          //   needsUpdate = true;
+          // }
 
           if (existingDiscount.value !== (discount.value || "")) {
             console.log(
@@ -847,7 +920,8 @@ export async function POST(request: NextRequest) {
               code: isCodeDiscount
                 ? (discount as any).code || undefined
                 : undefined,
-              type: discount.type || undefined,
+              // Don't update the type field when updating existing records
+              // type: discount.type || undefined,
               value: discount.value || undefined,
               appliesTo: discount.appliesTo || undefined,
               // Always set dates consistently
@@ -897,49 +971,57 @@ export async function POST(request: NextRequest) {
       changedItems.discounts.forEach((item) => console.log(`  - ${item}`));
     }
 
+    console.log(`Items detected as deleted: ${changedItems.deleted.length}`);
+    if (changedItems.deleted.length > 0) {
+      changedItems.deleted.forEach((item) => console.log(`  - ${item}`));
+    }
+
     // If there were any changes, trigger vectorization
     const totalChanges =
       changedItems.products.length +
       changedItems.pages.length +
       changedItems.blogs.length +
       changedItems.collections.length +
-      changedItems.discounts.length;
+      changedItems.discounts.length +
+      changedItems.deleted.length; // Include deleted items in the count
 
-    if (totalChanges > 0) {
-      console.log("Changes detected, triggering vectorization...");
+    // Always trigger vectorization to ensure deleted content is handled
+    console.log(
+      `Total changes: ${totalChanges} (including ${changedItems.deleted.length} deletions)`
+    );
+    console.log("Triggering vectorization...");
 
-      // Get access key for the website
-      const accessKey = await prismaWithPool.accessKey.findFirst({
-        where: { websiteId: website.id },
-        select: { key: true },
-      });
+    // Get access key for the website
+    const accessKey = await prismaWithPool.accessKey.findFirst({
+      where: { websiteId: website.id },
+      select: { key: true },
+    });
 
-      if (accessKey) {
-        // Fire and forget - don't wait for response
-        try {
-          fetch(`https://train.voicero.ai/api/shopify/vectorize`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-              Authorization: `Bearer ${accessKey.key}`,
-            },
-            body: JSON.stringify({ websiteId: website.id }),
-          }).catch((error) => {
-            console.error("Vectorization request error:", error);
-            // Continue with the process even if there's an error
-          });
+    if (accessKey) {
+      // Fire and forget - don't wait for response
+      try {
+        fetch(`https://train.voicero.ai/api/shopify/vectorize`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            Authorization: `Bearer ${accessKey.key}`,
+          },
+          body: JSON.stringify({ websiteId: website.id }),
+        }).catch((error) => {
+          console.error("Vectorization request error:", error);
+          // Continue with the process even if there's an error
+        });
 
-          console.log(
-            "Vectorization request sent, continuing without waiting for response"
-          );
-        } catch (error) {
-          console.error("Failed to send vectorization request:", error);
-          // Continue regardless of errors
-        }
-      } else {
-        console.log("No access key found for website, skipping vectorization");
+        console.log(
+          "Vectorization request sent, continuing without waiting for response"
+        );
+      } catch (error) {
+        console.error("Failed to send vectorization request:", error);
+        // Continue regardless of errors
       }
+    } else {
+      console.log("No access key found for website, skipping vectorization");
     }
 
     console.log("=== AutoSync Complete ===");
