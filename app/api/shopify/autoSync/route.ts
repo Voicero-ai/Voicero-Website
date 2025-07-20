@@ -772,6 +772,51 @@ export async function POST(request: NextRequest) {
       changedItems.discounts.forEach((item) => console.log(`  - ${item}`));
     }
 
+    // If there were any changes, trigger vectorization
+    const totalChanges =
+      changedItems.products.length +
+      changedItems.pages.length +
+      changedItems.blogs.length +
+      changedItems.collections.length +
+      changedItems.discounts.length;
+
+    if (totalChanges > 0) {
+      console.log("Changes detected, triggering vectorization...");
+
+      // Get access key for the website
+      const accessKey = await prismaWithPool.accessKey.findFirst({
+        where: { websiteId: website.id },
+        select: { key: true },
+      });
+
+      if (accessKey) {
+        // Fire and forget - don't wait for response
+        try {
+          fetch(`https://train.voicero.ai/api/shopify/vectorize`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              Authorization: `Bearer ${accessKey.key}`,
+            },
+            body: JSON.stringify({ websiteId: website.id }),
+          }).catch((error) => {
+            console.error("Vectorization request error:", error);
+            // Continue with the process even if there's an error
+          });
+
+          console.log(
+            "Vectorization request sent, continuing without waiting for response"
+          );
+        } catch (error) {
+          console.error("Failed to send vectorization request:", error);
+          // Continue regardless of errors
+        }
+      } else {
+        console.log("No access key found for website, skipping vectorization");
+      }
+    }
+
     console.log("=== AutoSync Complete ===");
 
     return cors(
@@ -780,12 +825,7 @@ export async function POST(request: NextRequest) {
         success: true,
         message: "AutoSync completed successfully",
         changes: changedItems,
-        totalChanges:
-          changedItems.products.length +
-          changedItems.pages.length +
-          changedItems.blogs.length +
-          changedItems.collections.length +
-          changedItems.discounts.length,
+        totalChanges: totalChanges,
       })
     );
   } catch (error: any) {
