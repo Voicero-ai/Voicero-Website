@@ -15,6 +15,8 @@ import {
   FaRobot,
   FaComments,
   FaExclamationTriangle,
+  FaTrash,
+  FaPercent,
 } from "react-icons/fa";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -143,7 +145,7 @@ interface ContentItem {
   id: string;
   title: string;
   url: string;
-  type: "product" | "post" | "page" | "collection";
+  type: "product" | "post" | "page" | "collection" | "discount";
   lastUpdated: string;
   aiRedirects: number;
   description?: string;
@@ -210,6 +212,7 @@ interface WebsiteData {
     products: ContentItem[];
     blogPosts: ContentItem[];
     pages: ContentItem[];
+    discounts?: ContentItem[];
     collections?: Array<{
       id: string;
       title: string;
@@ -288,7 +291,7 @@ export default function WebsiteSettings() {
 
   // Active tab
   const [activeTab, setActiveTab] = useState<
-    "products" | "posts" | "pages" | "collections"
+    "products" | "posts" | "pages" | "collections" | "discounts"
   >("products");
 
   const [showSetupModal, setShowSetupModal] = useState(false);
@@ -323,6 +326,11 @@ export default function WebsiteSettings() {
   );
   const [showFeatureWarning, setShowFeatureWarning] = useState(false);
   const [pendingFeatureChanges, setPendingFeatureChanges] = useState<any>(null);
+
+  const [isDeletingContent, setIsDeletingContent] = useState<
+    Record<string, boolean>
+  >({});
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const setupInstructions: SetupInstructions = {
     wordpress: {
@@ -798,7 +806,7 @@ export default function WebsiteSettings() {
   } = websiteData;
 
   // For convenience in the tab content
-  const { products, blogPosts, pages } = content;
+  const { products, blogPosts, pages, discounts = [] } = content;
 
   // 5) We reuse your ContentList component for each tab
   const ContentList = ({ items }: { items: ContentItem[] }) => {
@@ -811,6 +819,24 @@ export default function WebsiteSettings() {
       {}
     );
     const [showImages, setShowImages] = useState<Record<string, boolean>>({});
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState<
+      Record<string, boolean>
+    >({});
+
+    // Validate items have proper type
+    useEffect(() => {
+      console.log("ContentList items:", items);
+      const invalidItems = items.filter(
+        (item) =>
+          !item.type ||
+          !["product", "post", "page", "collection", "discount"].includes(
+            item.type
+          )
+      );
+      if (invalidItems.length > 0) {
+        console.error("Invalid content items detected:", invalidItems);
+      }
+    }, [items]);
 
     const toggleExpand = (itemId: string) => {
       setExpandedItems((prev) =>
@@ -836,342 +862,519 @@ export default function WebsiteSettings() {
       setShowImages((prev) => ({ ...prev, [itemId]: !prev[itemId] }));
     };
 
+    const handleDeleteContent = async (item: ContentItem) => {
+      if (!websiteData) return;
+
+      // Set deleting state for this item
+      setIsDeletingContent((prev) => ({ ...prev, [item.id]: true }));
+      setDeleteError(null);
+
+      // Validate that item has a valid type before proceeding
+      if (
+        !item.type ||
+        !["product", "post", "page", "collection", "discount"].includes(
+          item.type
+        )
+      ) {
+        setDeleteError(`Invalid content type: ${item.type || "undefined"}`);
+        setIsDeletingContent((prev) => ({ ...prev, [item.id]: false }));
+        return;
+      }
+
+      console.log(`Deleting ${item.type} with ID ${item.id}`);
+
+      try {
+        const response = await fetch("/api/websites/delete-content", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            websiteId: websiteData.id,
+            contentId: item.id,
+            contentType: item.type,
+          }),
+        });
+
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || `Failed to delete ${item.type}`);
+        }
+
+        // Remove item from local state
+        if (item.type === "product") {
+          setWebsiteData({
+            ...websiteData,
+            content: {
+              ...websiteData.content,
+              products: websiteData.content.products.filter(
+                (p) => p.id !== item.id
+              ),
+            },
+          } as WebsiteData);
+        } else if (item.type === "post") {
+          setWebsiteData({
+            ...websiteData,
+            content: {
+              ...websiteData.content,
+              blogPosts: websiteData.content.blogPosts.filter(
+                (p) => p.id !== item.id
+              ),
+            },
+          } as WebsiteData);
+        } else if (item.type === "page") {
+          setWebsiteData({
+            ...websiteData,
+            content: {
+              ...websiteData.content,
+              pages: websiteData.content.pages.filter((p) => p.id !== item.id),
+            },
+          } as WebsiteData);
+        } else if (
+          item.type === "collection" &&
+          websiteData.content.collections
+        ) {
+          setWebsiteData({
+            ...websiteData,
+            content: {
+              ...websiteData.content,
+              collections: websiteData.content.collections.filter(
+                (c) => c.id !== item.id
+              ),
+            },
+          } as WebsiteData);
+        } else if (item.type === "discount" && websiteData.content.discounts) {
+          setWebsiteData({
+            ...websiteData,
+            content: {
+              ...websiteData.content,
+              discounts: websiteData.content.discounts.filter(
+                (d) => d.id !== item.id
+              ),
+            },
+          } as WebsiteData);
+        }
+
+        // Close delete confirmation
+        setShowDeleteConfirm((prev) => ({ ...prev, [item.id]: false }));
+      } catch (error) {
+        console.error(`Error deleting ${item.type}:`, error);
+        setDeleteError(
+          error instanceof Error
+            ? error.message
+            : `Failed to delete ${item.type}`
+        );
+      } finally {
+        setIsDeletingContent((prev) => ({ ...prev, [item.id]: false }));
+      }
+    };
+
     return (
       <div className="space-y-4">
-        {items.map((item) => (
-          <div
-            key={item.id}
-            className="p-4 bg-white rounded-lg border border-brand-lavender-light/20"
-          >
-            {/* Header */}
-            <div className="flex justify-between items-start mb-3">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <h3 className="font-medium text-brand-text-primary">
-                    {item.title}
-                  </h3>
-                  {item.type === "collection" &&
-                    item.productsCount !== undefined && (
-                      <span className="text-sm text-brand-text-secondary">
-                        ({item.productsCount} products)
+        {deleteError && (
+          <div className="p-3 bg-red-100 text-red-700 rounded-lg mb-4">
+            {deleteError}
+          </div>
+        )}
+        {items.length === 0 ? (
+          <div className="p-4 bg-gray-50 text-gray-500 rounded-lg text-center">
+            No items found
+          </div>
+        ) : (
+          items.map((item) => (
+            <div
+              key={item.id}
+              className="p-4 bg-white rounded-lg border border-brand-lavender-light/20"
+            >
+              {/* Header */}
+              <div className="flex justify-between items-start mb-3">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="font-medium text-brand-text-primary">
+                      {item.title}
+                    </h3>
+                    {item.type === "collection" &&
+                      item.productsCount !== undefined && (
+                        <span className="text-sm text-brand-text-secondary">
+                          ({item.productsCount} products)
+                        </span>
+                      )}
+                  </div>
+                  <p className="text-sm text-brand-text-secondary">
+                    {domain}
+                    {item.url}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`${domain}${item.url}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 text-brand-text-secondary hover:text-brand-accent 
+                             transition-colors rounded-lg hover:bg-brand-lavender-light/5"
+                  >
+                    <FaExternalLinkAlt className="w-4 h-4" />
+                  </a>
+                  <button
+                    onClick={() =>
+                      setShowDeleteConfirm((prev) => ({
+                        ...prev,
+                        [item.id]: true,
+                      }))
+                    }
+                    className="p-2 text-red-500 hover:text-red-700 
+                             transition-colors rounded-lg hover:bg-red-50"
+                    disabled={isDeletingContent[item.id]}
+                  >
+                    <FaTrash className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Delete Confirmation */}
+              {showDeleteConfirm[item.id] && (
+                <div className="mb-4 p-3 bg-red-50 rounded-lg border border-red-200">
+                  <p className="text-sm text-red-700 mb-2">
+                    Are you sure you want to delete{" "}
+                    <strong>{item.title}</strong>? This action cannot be undone.
+                  </p>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() =>
+                        setShowDeleteConfirm((prev) => ({
+                          ...prev,
+                          [item.id]: false,
+                        }))
+                      }
+                      className="px-3 py-1 text-sm bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                      disabled={isDeletingContent[item.id]}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleDeleteContent(item)}
+                      className="px-3 py-1 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600"
+                      disabled={isDeletingContent[item.id]}
+                    >
+                      {isDeletingContent[item.id] ? (
+                        <>
+                          <FaSync className="inline-block mr-1 animate-spin" />
+                          Deleting...
+                        </>
+                      ) : (
+                        "Delete"
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Collection-specific information */}
+              {item.type === "collection" && (
+                <div className="mb-3 space-y-2">
+                  {item.description && (
+                    <div className="text-sm text-brand-text-secondary">
+                      <p
+                        className={
+                          expandedItems.includes(item.id) ? "" : "line-clamp-2"
+                        }
+                      >
+                        {item.description}
+                      </p>
+                      {item.description.length > 100 && (
+                        <button
+                          onClick={() => toggleExpand(item.id)}
+                          className="text-brand-accent hover:text-brand-accent/80 transition-colors mt-1"
+                        >
+                          {expandedItems.includes(item.id)
+                            ? "Show less"
+                            : "Read more..."}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {item.sortOrder && (
+                    <div className="text-sm text-brand-text-secondary">
+                      Sort order: {item.sortOrder}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Categories and Tags */}
+              {((item.categories?.length ?? 0) > 0 ||
+                (item.tags?.length ?? 0) > 0) && (
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {item.categories?.map((cat) => (
+                    <span
+                      key={cat.id}
+                      className="px-2 py-1 text-xs bg-brand-lavender-light/10 rounded-full"
+                    >
+                      {cat.name}
+                    </span>
+                  ))}
+                  {item.tags?.map((tag) => (
+                    <span
+                      key={tag.id}
+                      className="px-2 py-1 text-xs bg-brand-accent/10 rounded-full"
+                    >
+                      #{tag.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Product-specific information */}
+              {item.type === "product" && (
+                <div className="mb-3 space-y-2">
+                  <div className="flex items-center gap-4 text-brand-text-secondary">
+                    {item.price && (
+                      <span className="text-lg font-semibold text-brand-accent">
+                        ${item.price}
                       </span>
                     )}
-                </div>
-                <p className="text-sm text-brand-text-secondary">
-                  {domain}
-                  {item.url}
-                </p>
-              </div>
-              <a
-                href={`${domain}${item.url}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="p-2 text-brand-text-secondary hover:text-brand-accent 
-                           transition-colors rounded-lg hover:bg-brand-lavender-light/5"
-              >
-                <FaExternalLinkAlt className="w-4 h-4" />
-              </a>
-            </div>
+                    {item.salePrice && item.regularPrice && (
+                      <span className="text-sm text-brand-text-secondary line-through">
+                        ${item.regularPrice}
+                      </span>
+                    )}
+                    {item.stockQuantity !== undefined && (
+                      <span className="text-sm text-brand-text-secondary">
+                        Stock: {item.stockQuantity}
+                      </span>
+                    )}
+                    {item.vendor && (
+                      <span className="text-sm text-brand-text-secondary">
+                        Vendor: {item.vendor}
+                      </span>
+                    )}
+                    {item.productType && (
+                      <span className="text-sm text-brand-text-secondary">
+                        Type: {item.productType}
+                      </span>
+                    )}
+                  </div>
 
-            {/* Collection-specific information */}
-            {item.type === "collection" && (
-              <div className="mb-3 space-y-2">
-                {item.description && (
-                  <div className="text-sm text-brand-text-secondary">
-                    <p
-                      className={
-                        expandedItems.includes(item.id) ? "" : "line-clamp-2"
-                      }
-                    >
-                      {item.description}
-                    </p>
-                    {item.description.length > 100 && (
+                  {/* Product Variants */}
+                  {item.variants && item.variants.length > 0 && (
+                    <div className="mt-4">
                       <button
-                        onClick={() => toggleExpand(item.id)}
-                        className="text-brand-accent hover:text-brand-accent/80 transition-colors mt-1"
+                        onClick={() => toggleVariants(item.id)}
+                        className="text-brand-accent hover:text-brand-accent/80 transition-colors"
                       >
-                        {expandedItems.includes(item.id)
-                          ? "Show less"
-                          : "Read more..."}
+                        {showVariants[item.id]
+                          ? "Hide Variants"
+                          : `Show Variants (${item.variants.length})`}
                       </button>
-                    )}
-                  </div>
-                )}
-                {item.sortOrder && (
-                  <div className="text-sm text-brand-text-secondary">
-                    Sort order: {item.sortOrder}
-                  </div>
-                )}
-              </div>
-            )}
+                      {showVariants[item.id] && (
+                        <div className="mt-2 grid gap-2">
+                          {item.variants.map((variant: any) => (
+                            <div
+                              key={variant.id}
+                              className="p-2 bg-brand-lavender-light/5 rounded-lg"
+                            >
+                              <div className="flex justify-between items-center">
+                                <span className="font-medium">
+                                  {variant.title}
+                                </span>
+                                <span className="text-brand-accent">
+                                  ${variant.price}
+                                </span>
+                              </div>
+                              {variant.sku && (
+                                <span className="text-sm text-brand-text-secondary">
+                                  SKU: {variant.sku}
+                                </span>
+                              )}
+                              {variant.inventory !== null && (
+                                <span className="text-sm text-brand-text-secondary ml-4">
+                                  Stock: {variant.inventory}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
-            {/* Categories and Tags */}
-            {((item.categories?.length ?? 0) > 0 ||
-              (item.tags?.length ?? 0) > 0) && (
-              <div className="flex flex-wrap gap-2 mb-3">
-                {item.categories?.map((cat) => (
-                  <span
-                    key={cat.id}
-                    className="px-2 py-1 text-xs bg-brand-lavender-light/10 rounded-full"
-                  >
-                    {cat.name}
-                  </span>
-                ))}
-                {item.tags?.map((tag) => (
-                  <span
-                    key={tag.id}
-                    className="px-2 py-1 text-xs bg-brand-accent/10 rounded-full"
-                  >
-                    #{tag.name}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {/* Product-specific information */}
-            {item.type === "product" && (
-              <div className="mb-3 space-y-2">
-                <div className="flex items-center gap-4 text-brand-text-secondary">
-                  {item.price && (
-                    <span className="text-lg font-semibold text-brand-accent">
-                      ${item.price}
-                    </span>
-                  )}
-                  {item.salePrice && item.regularPrice && (
-                    <span className="text-sm text-brand-text-secondary line-through">
-                      ${item.regularPrice}
-                    </span>
-                  )}
-                  {item.stockQuantity !== undefined && (
-                    <span className="text-sm text-brand-text-secondary">
-                      Stock: {item.stockQuantity}
-                    </span>
-                  )}
-                  {item.vendor && (
-                    <span className="text-sm text-brand-text-secondary">
-                      Vendor: {item.vendor}
-                    </span>
-                  )}
-                  {item.productType && (
-                    <span className="text-sm text-brand-text-secondary">
-                      Type: {item.productType}
-                    </span>
+                  {/* Product Images */}
+                  {item.images && item.images.length > 0 && (
+                    <div className="mt-4">
+                      <button
+                        onClick={() => toggleImages(item.id)}
+                        className="text-brand-accent hover:text-brand-accent/80 transition-colors"
+                      >
+                        {showImages[item.id]
+                          ? "Hide Images"
+                          : `Show Images (${item.images.length})`}
+                      </button>
+                      {showImages[item.id] && (
+                        <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-2">
+                          {item.images.map((image: any) => (
+                            <div
+                              key={image.id}
+                              className="relative aspect-square rounded-lg overflow-hidden"
+                            >
+                              <img
+                                src={image.url}
+                                alt={image.altText || item.title}
+                                className="object-cover w-full h-full"
+                              />
+                              {image.caption && (
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white p-1 text-xs">
+                                  {image.caption}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
+              )}
 
-                {/* Product Variants */}
-                {item.variants && item.variants.length > 0 && (
-                  <div className="mt-4">
-                    <button
-                      onClick={() => toggleVariants(item.id)}
-                      className="text-brand-accent hover:text-brand-accent/80 transition-colors"
-                    >
-                      {showVariants[item.id]
-                        ? "Hide Variants"
-                        : `Show Variants (${item.variants.length})`}
-                    </button>
-                    {showVariants[item.id] && (
-                      <div className="mt-2 grid gap-2">
-                        {item.variants.map((variant: any) => (
-                          <div
-                            key={variant.id}
-                            className="p-2 bg-brand-lavender-light/5 rounded-lg"
-                          >
-                            <div className="flex justify-between items-center">
-                              <span className="font-medium">
-                                {variant.title}
-                              </span>
-                              <span className="text-brand-accent">
-                                ${variant.price}
-                              </span>
-                            </div>
-                            {variant.sku && (
-                              <span className="text-sm text-brand-text-secondary">
-                                SKU: {variant.sku}
-                              </span>
-                            )}
-                            {variant.inventory !== null && (
-                              <span className="text-sm text-brand-text-secondary ml-4">
-                                Stock: {variant.inventory}
-                              </span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
+              {/* Blog post specific information */}
+              {item.type === "post" && item.blog && (
+                <div className="mb-2 text-sm text-brand-text-secondary">
+                  <span>Blog: {item.blog.title}</span>
+                  {item.image && (
+                    <img
+                      src={item.image}
+                      alt={item.title}
+                      className="mt-2 rounded-lg max-h-48 object-cover"
+                    />
+                  )}
+                </div>
+              )}
 
-                {/* Product Images */}
-                {item.images && item.images.length > 0 && (
-                  <div className="mt-4">
-                    <button
-                      onClick={() => toggleImages(item.id)}
-                      className="text-brand-accent hover:text-brand-accent/80 transition-colors"
-                    >
-                      {showImages[item.id]
-                        ? "Hide Images"
-                        : `Show Images (${item.images.length})`}
-                    </button>
-                    {showImages[item.id] && (
-                      <div className="mt-2 grid grid-cols-2 md:grid-cols-3 gap-2">
-                        {item.images.map((image: any) => (
-                          <div
-                            key={image.id}
-                            className="relative aspect-square rounded-lg overflow-hidden"
-                          >
-                            <img
-                              src={image.url}
-                              alt={image.altText || item.title}
-                              className="object-cover w-full h-full"
-                            />
-                            {image.caption && (
-                              <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white p-1 text-xs">
-                                {image.caption}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Blog post specific information */}
-            {item.type === "post" && item.blog && (
-              <div className="mb-2 text-sm text-brand-text-secondary">
-                <span>Blog: {item.blog.title}</span>
-                {item.image && (
-                  <img
-                    src={item.image}
-                    alt={item.title}
-                    className="mt-2 rounded-lg max-h-48 object-cover"
-                  />
-                )}
-              </div>
-            )}
-
-            {/* Description / content snippet */}
-            <div className="text-sm !text-black mb-3">
-              <p
-                style={{
-                  color: "black",
-                }}
-                className={
-                  expandedItems.includes(item.id) ? "" : "line-clamp-2"
-                }
-              >
-                {item.content ?? item.description}
-              </p>
-              <button
-                onClick={() => toggleExpand(item.id)}
-                className="text-brand-accent hover:text-brand-accent/80 transition-colors mt-1"
-              >
-                {expandedItems.includes(item.id) ? "Show less" : "Read more..."}
-              </button>
-            </div>
-
-            {/* Reviews section for products */}
-            {item.type === "product" && (item.reviews?.length ?? 0) > 0 && (
-              <div className="mt-4 border-t border-brand-lavender-light/20 pt-4">
-                <button
-                  onClick={() => toggleReviews(item.id)}
-                  className="text-brand-accent hover:text-brand-accent/80 transition-colors"
+              {/* Description / content snippet */}
+              <div className="text-sm !text-black mb-3">
+                <p
+                  style={{
+                    color: "black",
+                  }}
+                  className={
+                    expandedItems.includes(item.id) ? "" : "line-clamp-2"
+                  }
                 >
-                  {showReviews[item.id]
-                    ? "Hide Reviews"
-                    : `Show Reviews (${item.reviews?.length ?? 0})`}
+                  {item.content ?? item.description}
+                </p>
+                <button
+                  onClick={() => toggleExpand(item.id)}
+                  className="text-brand-accent hover:text-brand-accent/80 transition-colors mt-1"
+                >
+                  {expandedItems.includes(item.id)
+                    ? "Show less"
+                    : "Read more..."}
                 </button>
+              </div>
 
-                {showReviews[item.id] && (
-                  <div className="mt-3 space-y-3">
-                    {item.reviews?.map((review) => (
-                      <div
-                        key={review.id}
-                        className="p-3 bg-brand-lavender-light/5 rounded-lg"
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="font-medium">{review.reviewer}</span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-yellow-400">
-                              {"★".repeat(review.rating)}
-                              {"☆".repeat(5 - review.rating)}
+              {/* Reviews section for products */}
+              {item.type === "product" && (item.reviews?.length ?? 0) > 0 && (
+                <div className="mt-4 border-t border-brand-lavender-light/20 pt-4">
+                  <button
+                    onClick={() => toggleReviews(item.id)}
+                    className="text-brand-accent hover:text-brand-accent/80 transition-colors"
+                  >
+                    {showReviews[item.id]
+                      ? "Hide Reviews"
+                      : `Show Reviews (${item.reviews?.length ?? 0})`}
+                  </button>
+
+                  {showReviews[item.id] && (
+                    <div className="mt-3 space-y-3">
+                      {item.reviews?.map((review) => (
+                        <div
+                          key={review.id}
+                          className="p-3 bg-brand-lavender-light/5 rounded-lg"
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-medium">
+                              {review.reviewer}
                             </span>
-                            {review.verified && (
-                              <span className="text-xs text-green-500">
-                                Verified Purchase
+                            <div className="flex items-center gap-2">
+                              <span className="text-yellow-400">
+                                {"★".repeat(review.rating)}
+                                {"☆".repeat(5 - review.rating)}
                               </span>
-                            )}
+                              {review.verified && (
+                                <span className="text-xs text-green-500">
+                                  Verified Purchase
+                                </span>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                        <p className="text-sm">{review.review}</p>
-                        <span className="text-xs text-brand-text-secondary mt-2 block">
-                          {new Date(review.date).toLocaleDateString()}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Comments section for posts */}
-            {item.type === "post" && (item.comments?.length ?? 0) > 0 && (
-              <div className="mt-4 border-t border-brand-lavender-light/20 pt-4">
-                <button
-                  onClick={() => toggleComments(item.id)}
-                  className="text-brand-accent hover:text-brand-accent/80 transition-colors"
-                >
-                  {showComments[item.id]
-                    ? "Hide Comments"
-                    : `Show Comments (${item.comments?.length ?? 0})`}
-                </button>
-
-                {showComments[item.id] && (
-                  <div className="mt-3 space-y-3">
-                    {item.comments?.map((comment) => (
-                      <div
-                        key={comment.id}
-                        className={`p-3 bg-brand-lavender-light/5 rounded-lg ${
-                          comment.parentId ? "ml-8" : ""
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="font-medium">{comment.author}</span>
-                          <span className="text-xs text-brand-text-secondary">
-                            {new Date(comment.date).toLocaleDateString()}
+                          <p className="text-sm">{review.review}</p>
+                          <span className="text-xs text-brand-text-secondary mt-2 block">
+                            {new Date(review.date).toLocaleDateString()}
                           </span>
                         </div>
-                        <p className="text-sm">{comment.content}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
-            {/* Footer */}
-            <div className="flex items-center justify-between text-xs text-brand-text-secondary border-t border-brand-lavender-light/20 pt-3">
-              <div className="flex items-center gap-4">
-                <span>
-                  Last updated:{" "}
-                  {new Date(item.lastUpdated).toLocaleDateString()}
-                </span>
-                {item.type === "product" && item.price && (
-                  <span className="font-medium">${item.price}</span>
-                )}
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="font-medium text-brand-accent">
-                  {(item.aiRedirects ?? 0).toLocaleString()}
-                </span>
-                <span>AI redirects</span>
+              {/* Comments section for posts */}
+              {item.type === "post" && (item.comments?.length ?? 0) > 0 && (
+                <div className="mt-4 border-t border-brand-lavender-light/20 pt-4">
+                  <button
+                    onClick={() => toggleComments(item.id)}
+                    className="text-brand-accent hover:text-brand-accent/80 transition-colors"
+                  >
+                    {showComments[item.id]
+                      ? "Hide Comments"
+                      : `Show Comments (${item.comments?.length ?? 0})`}
+                  </button>
+
+                  {showComments[item.id] && (
+                    <div className="mt-3 space-y-3">
+                      {item.comments?.map((comment) => (
+                        <div
+                          key={comment.id}
+                          className={`p-3 bg-brand-lavender-light/5 rounded-lg ${
+                            comment.parentId ? "ml-8" : ""
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-medium">
+                              {comment.author}
+                            </span>
+                            <span className="text-xs text-brand-text-secondary">
+                              {new Date(comment.date).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <p className="text-sm">{comment.content}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Footer */}
+              <div className="flex items-center justify-between text-xs text-brand-text-secondary border-t border-brand-lavender-light/20 pt-3">
+                <div className="flex items-center gap-4">
+                  <span>
+                    Last updated:{" "}
+                    {new Date(item.lastUpdated).toLocaleDateString()}
+                  </span>
+                  {item.type === "product" && item.price && (
+                    <span className="font-medium">${item.price}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="font-medium text-brand-accent">
+                    {(item.aiRedirects ?? 0).toLocaleString()}
+                  </span>
+                  <span>AI redirects</span>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          ))
+        )}
       </div>
     );
   };
@@ -2471,7 +2674,9 @@ export default function WebsiteSettings() {
                   </div>
                   <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
                     <div>
-                      <h5 className="font-medium text-black">Auto Fill Forms</h5>
+                      <h5 className="font-medium text-black">
+                        Auto Fill Forms
+                      </h5>
                       <p className="text-sm text-brand-text-secondary">
                         Allow AI to fill out forms on behalf of users
                       </p>
@@ -2845,24 +3050,44 @@ export default function WebsiteSettings() {
               )}
             </button>
             {type.toLowerCase() === "shopify" && (
-              <button
-                onClick={() => setActiveTab("collections")}
-                className={`px-6 py-4 text-sm font-medium transition-colors relative
-                  ${
-                    activeTab === "collections"
-                      ? "text-brand-accent"
-                      : "text-brand-text-secondary"
-                  }`}
-              >
-                <FaLayerGroup className="inline-block mr-2" />
-                Collections
-                {activeTab === "collections" && (
-                  <motion.div
-                    layoutId="activeTab"
-                    className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent"
-                  />
-                )}
-              </button>
+              <>
+                <button
+                  onClick={() => setActiveTab("collections")}
+                  className={`px-6 py-4 text-sm font-medium transition-colors relative
+                    ${
+                      activeTab === "collections"
+                        ? "text-brand-accent"
+                        : "text-brand-text-secondary"
+                    }`}
+                >
+                  <FaLayerGroup className="inline-block mr-2" />
+                  Collections
+                  {activeTab === "collections" && (
+                    <motion.div
+                      layoutId="activeTab"
+                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent"
+                    />
+                  )}
+                </button>
+                <button
+                  onClick={() => setActiveTab("discounts")}
+                  className={`px-6 py-4 text-sm font-medium transition-colors relative
+                    ${
+                      activeTab === "discounts"
+                        ? "text-brand-accent"
+                        : "text-brand-text-secondary"
+                    }`}
+                >
+                  <FaPercent className="inline-block mr-2" />
+                  Discounts
+                  {activeTab === "discounts" && (
+                    <motion.div
+                      layoutId="activeTab"
+                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent"
+                    />
+                  )}
+                </button>
+              </>
             )}
             <button
               onClick={() => setActiveTab("pages")}
@@ -2887,12 +3112,29 @@ export default function WebsiteSettings() {
 
         <div className="p-6">
           {activeTab === "products" && type.toLowerCase() !== "custom" && (
-            <ContentList items={products} />
+            <ContentList
+              items={products.map((product) => ({
+                ...product,
+                type: product.type || "product", // Ensure type is set for products
+              }))}
+            />
           )}
           {activeTab === "posts" && type.toLowerCase() !== "custom" && (
-            <ContentList items={blogPosts} />
+            <ContentList
+              items={blogPosts.map((post) => ({
+                ...post,
+                type: post.type || "post", // Ensure type is set for posts
+              }))}
+            />
           )}
-          {activeTab === "pages" && <ContentList items={pages} />}
+          {activeTab === "pages" && (
+            <ContentList
+              items={pages.map((page) => ({
+                ...page,
+                type: page.type || "page", // Ensure type is set for pages
+              }))}
+            />
+          )}
           {activeTab === "collections" && type.toLowerCase() === "shopify" && (
             <ContentList
               items={
@@ -2914,6 +3156,15 @@ export default function WebsiteSettings() {
                   productsCount: collection.products?.length || 0,
                 })) || []
               }
+            />
+          )}
+          {activeTab === "discounts" && type.toLowerCase() === "shopify" && (
+            <ContentList
+              items={discounts.map((discount: any) => ({
+                ...discount,
+                type: "discount" as const, // Use a fixed string instead of discount.type which might be something else
+                discountType: discount.type, // Preserve the original discount type in a different field
+              }))}
             />
           )}
         </div>

@@ -687,16 +687,140 @@ export async function POST(request: NextRequest) {
         // Check if this is a code discount (has code property)
         const isCodeDiscount = "code" in discount;
 
-        const needsUpdate =
-          !existingDiscount ||
-          existingDiscount.title !== (discount.title || "") ||
-          (isCodeDiscount &&
-            existingDiscount.code !== (discount.code || null)) ||
-          existingDiscount.type !== (discount.type || "") ||
-          existingDiscount.value !== (discount.value || "") ||
-          existingDiscount.appliesTo !== (discount.appliesTo || null) ||
-          existingDiscount.status !== (discount.status || "ACTIVE");
+        // Add debug logging to help identify comparison issues
+        console.log(`Comparing discount: ${discount.title} (${discount.type})`);
+        if (existingDiscount) {
+          console.log(
+            `  Existing: ${JSON.stringify({
+              title: existingDiscount.title,
+              code: existingDiscount.code,
+              type: existingDiscount.type,
+              value: existingDiscount.value,
+              appliesTo: existingDiscount.appliesTo,
+              status: existingDiscount.status,
+              startsAt: existingDiscount.startsAt?.toISOString(),
+              endsAt: existingDiscount.endsAt?.toISOString(),
+            })}`
+          );
+          console.log(
+            `  New: ${JSON.stringify({
+              title: discount.title || "",
+              code: isCodeDiscount ? (discount as any).code || null : null,
+              type: discount.type || "",
+              value: discount.value || "",
+              appliesTo: discount.appliesTo || null,
+              status: discount.status || "ACTIVE",
+              startsAt: discount.startsAt,
+              endsAt: discount.endsAt || null,
+            })}`
+          );
+        }
 
+        // Determine if an update is needed by comparing fields
+        let needsUpdate = false;
+
+        if (!existingDiscount) {
+          needsUpdate = true;
+          console.log(`  No existing discount found - creating new`);
+        } else {
+          // Compare each field individually and log the specific differences
+          if (existingDiscount.title !== (discount.title || "")) {
+            console.log(
+              `  Title changed: "${existingDiscount.title}" → "${
+                discount.title || ""
+              }"`
+            );
+            needsUpdate = true;
+          }
+
+          if (
+            isCodeDiscount &&
+            existingDiscount.code !== (discount.code || null)
+          ) {
+            console.log(
+              `  Code changed: "${existingDiscount.code}" → "${
+                (discount as any).code || null
+              }"`
+            );
+            needsUpdate = true;
+          }
+
+          if (existingDiscount.type !== (discount.type || "")) {
+            console.log(
+              `  Type changed: "${existingDiscount.type}" → "${
+                discount.type || ""
+              }"`
+            );
+            needsUpdate = true;
+          }
+
+          if (existingDiscount.value !== (discount.value || "")) {
+            console.log(
+              `  Value changed: "${existingDiscount.value}" → "${
+                discount.value || ""
+              }"`
+            );
+            needsUpdate = true;
+          }
+
+          if (existingDiscount.appliesTo !== (discount.appliesTo || null)) {
+            console.log(
+              `  AppliesTo changed: "${existingDiscount.appliesTo}" → "${
+                discount.appliesTo || null
+              }"`
+            );
+            needsUpdate = true;
+          }
+
+          // Compare dates with proper formatting to avoid timezone/format issues
+          const existingStartsAt = existingDiscount.startsAt
+            ?.toISOString()
+            .split("T")[0];
+          const newStartsAt = new Date(discount.startsAt)
+            .toISOString()
+            .split("T")[0];
+
+          if (existingStartsAt !== newStartsAt) {
+            console.log(
+              `  StartsAt date changed: "${existingStartsAt}" → "${newStartsAt}"`
+            );
+            needsUpdate = true;
+          }
+
+          // Handle null/undefined endsAt dates properly
+          const existingEndsAt = existingDiscount.endsAt
+            ?.toISOString()
+            .split("T")[0];
+          const newEndsAt = discount.endsAt
+            ? new Date(discount.endsAt).toISOString().split("T")[0]
+            : null;
+
+          if ((existingEndsAt || null) !== (newEndsAt || null)) {
+            console.log(
+              `  EndsAt date changed: "${existingEndsAt}" → "${newEndsAt}"`
+            );
+            needsUpdate = true;
+          }
+
+          // Compare status with proper default handling
+          const existingStatus = existingDiscount.status || "ACTIVE";
+          const newStatus = discount.status || "ACTIVE";
+
+          if (existingStatus !== newStatus) {
+            console.log(
+              `  Status changed: "${existingStatus}" → "${newStatus}"`
+            );
+            needsUpdate = true;
+          }
+        }
+
+        if (!needsUpdate) {
+          console.log(
+            `  No changes detected for discount: ${discount.title} - skipping update`
+          );
+        }
+
+        // Only perform database operations if something actually changed
         if (needsUpdate) {
           await prismaWithPool.shopifyDiscount.upsert({
             where: {
@@ -726,8 +850,9 @@ export async function POST(request: NextRequest) {
               type: discount.type || undefined,
               value: discount.value || undefined,
               appliesTo: discount.appliesTo || undefined,
+              // Always set dates consistently
               startsAt: new Date(discount.startsAt),
-              endsAt: discount.endsAt ? new Date(discount.endsAt) : undefined,
+              endsAt: discount.endsAt ? new Date(discount.endsAt) : null,
               status: discount.status || undefined,
               trained: false,
             },
