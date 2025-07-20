@@ -310,15 +310,28 @@ ${context.currentContent ? "Page content available" : "No page content"}`;
       },
     });
 
-    // After successful AI response, increment the monthly queries counter
-    await prisma.website.update({
-      where: { id: website.id },
-      data: {
-        monthlyQueries: {
-          increment: 1,
-        },
-      },
+    // After successful AI response, increment the monthly queries counter only for first message in thread
+    const existingUserMessages = await prisma.aiMessage.count({
+      where: {
+        threadId: aiThread.id,
+        role: "user"
+      }
     });
+
+    // Only bill if this is the first user message in the thread (per-thread billing)
+    if (existingUserMessages === 0) {
+      await prisma.website.update({
+        where: { id: website.id },
+        data: {
+          monthlyQueries: {
+            increment: 1,
+          },
+        },
+      });
+      console.log(`💰 Billing: First message in thread ${aiThread.id} - incrementing monthly queries`);
+    } else {
+      console.log(`💰 Billing: Follow-up message in thread ${aiThread.id} - no additional charge (${existingUserMessages} existing user messages)`);
+    }
 
     // After getting the AI response, stream it back
     const responseData = {

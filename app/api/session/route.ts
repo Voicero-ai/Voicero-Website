@@ -104,7 +104,6 @@ export async function POST(request: NextRequest) {
         ...(finalShopifyCustomerId ? { customer: true } : {}),
       },
     });
-    console.log(`Session created with ID: ${session.id}`);
 
     // Log pageUrl, but don't create UrlMovement record anymore
     if (pageUrl) {
@@ -119,10 +118,7 @@ export async function POST(request: NextRequest) {
     // Return both session and its initial thread
     const thread = session.threads[0];
 
-    // Include both id and threadId for clarity
-    console.log(
-      `Returning thread with id: ${thread.id} and threadId: ${thread.threadId}`
-    );
+
 
     return cors(
       request,
@@ -145,13 +141,7 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   // Support fetching by sessionId OR by websiteId (most recent session)
   try {
-    console.log("Session GET received at:", new Date().toISOString());
-    console.log("GET Request URL:", request.url);
-    console.log("GET Request method:", request.method);
-    console.log(
-      "GET Request headers:",
-      Object.fromEntries(request.headers.entries())
-    );
+
 
     const { searchParams } = new URL(request.url);
     const sessionId = searchParams.get("sessionId");
@@ -159,13 +149,6 @@ export async function GET(request: NextRequest) {
     const shopifyId = searchParams.get("shopifyId");
     const pageUrl = searchParams.get("pageUrl");
 
-    console.log("Session GET request params:", {
-      sessionId,
-      websiteId,
-      shopifyId,
-      pageUrl,
-      url: request.url,
-    });
 
     // Log URL but don't create UrlMovement record
     if (sessionId && pageUrl) {

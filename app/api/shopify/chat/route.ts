@@ -9,6 +9,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import {
   FINAL_MAIN_PROMPT,
   MAIN_PROMPT,
+  SHOPIFY_SALES_PROMPT,
+  SHOPIFY_SUPPORT_PROMPT,
+  SHOPIFY_GENERAL_PROMPT,
   PAGE_BLOG_PROMPT,
   PRODUCT_COLLECTION_PROMPT,
   DISCOUNT_PROMPT,
@@ -46,6 +49,25 @@ const opensearch = new Client({
     rejectUnauthorized: true,
   },
 });
+
+// Helper function to check if this is the first user message in thread (for per-thread billing)
+async function isFirstUserMessageInThread(threadId: string): Promise<boolean> {
+  console.log(
+    `🔍 isFirstUserMessageInThread - Checking messages for thread ID: ${threadId}`
+  );
+
+  const existingUserMessages = await prisma.aiMessage.count({
+    where: {
+      threadId: threadId,
+      role: "user",
+    },
+  });
+
+  console.log(
+    `🔍 isFirstUserMessageInThread - Found ${existingUserMessages} existing user messages`
+  );
+  return existingUserMessages === 0;
+}
 
 // Add type for thread with messages
 type ThreadWithMessages = AiThread & {
@@ -1109,10 +1131,32 @@ const buildSystemPrompt = (
   classification: QuestionClassification | null,
   websiteCustomInstructions?: string | null
 ) => {
-  // Always start with the main prompt
-  let prompt = MAIN_PROMPT + "\n\n";
+  // Start with interaction-type based prompt instead of generic MAIN_PROMPT
+  let prompt = "";
 
-  // Add type-specific prompts based on classification
+  if (classification?.interaction_type) {
+    // Use specialized system prompts based on interaction type
+    switch (classification.interaction_type) {
+      case "sales":
+        prompt = SHOPIFY_SALES_PROMPT + "\n\n";
+        break;
+      case "support":
+        prompt = SHOPIFY_SUPPORT_PROMPT + "\n\n";
+        break;
+      case "general":
+        prompt = SHOPIFY_GENERAL_PROMPT + "\n\n";
+        break;
+      default:
+        // Fallback to main prompt for noneSpecified or unknown types
+        prompt = MAIN_PROMPT + "\n\n";
+        break;
+    }
+  } else {
+    // Fallback to main prompt if no interaction type is classified
+    prompt = MAIN_PROMPT + "\n\n";
+  }
+
+  // Add type-specific prompts based on classification (still needed for specialized content handling)
   if (classification) {
     // Add page/post specific prompt
     if (classification.type === "page" || classification.type === "post") {
@@ -1792,6 +1836,357 @@ function hasUrlInPageData(urlToFind: string, availableData: any): boolean {
 }
 
 // Helper function to extract handles from available data
+// Enhanced function to extract all available handles from available data
+function getAllAvailableHandles(data: any): {
+  collections: string[];
+  products: string[];
+  pages: string[];
+  posts: string[];
+  blogs: string[];
+} {
+  const handles = {
+    collections: [] as string[],
+    products: [] as string[],
+    pages: [] as string[],
+    posts: [] as string[],
+    blogs: [] as string[],
+  };
+
+  if (!data) return handles;
+
+  // Extract from mainContent if available
+  if (data.mainContent && Array.isArray(data.mainContent)) {
+    data.mainContent.forEach((item: any) => {
+      if (item.handle) {
+        switch (item.type) {
+          case "collection":
+            if (!handles.collections.includes(item.handle)) {
+              handles.collections.push(item.handle);
+            }
+            break;
+          case "product":
+            if (!handles.products.includes(item.handle)) {
+              handles.products.push(item.handle);
+            }
+            break;
+          case "page":
+            if (!handles.pages.includes(item.handle)) {
+              handles.pages.push(item.handle);
+            }
+            break;
+          case "post":
+            if (!handles.posts.includes(item.handle)) {
+              handles.posts.push(item.handle);
+            }
+            break;
+        }
+      }
+    });
+  }
+
+  // Extract from relevantQAs if available
+  if (data.relevantQAs && Array.isArray(data.relevantQAs)) {
+    data.relevantQAs.forEach((item: any) => {
+      if (item.url) {
+        const urlParts = item.url.split("/");
+        for (let i = 0; i < urlParts.length - 1; i++) {
+          const segment = urlParts[i];
+          const handle = urlParts[i + 1];
+          if (handle && segment) {
+            switch (segment) {
+              case "collections":
+                if (!handles.collections.includes(handle)) {
+                  handles.collections.push(handle);
+                }
+                break;
+              case "products":
+                if (!handles.products.includes(handle)) {
+                  handles.products.push(handle);
+                }
+                break;
+              case "pages":
+                if (!handles.pages.includes(handle)) {
+                  handles.pages.push(handle);
+                }
+                break;
+              case "blogs":
+                // For blogs, the handle after /blogs/ is the blog handle, not post handle
+                if (!handles.blogs.includes(handle)) {
+                  handles.blogs.push(handle);
+                }
+                // If there's a third segment after /blogs/bloghandle/, that's the post handle
+                if (
+                  urlParts[i + 2] &&
+                  !handles.posts.includes(urlParts[i + 2])
+                ) {
+                  handles.posts.push(urlParts[i + 2]);
+                }
+                break;
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // Extract from pageData if available
+  if (data.pageData && data.pageData.full_text) {
+    // Look for URLs in the form of /collections/handle, /products/handle, etc.
+    const urlPatterns = [
+      { regex: /\/collections\/([a-z0-9-]+)/g, type: "collections" },
+      { regex: /\/products\/([a-z0-9-]+)/g, type: "products" },
+      { regex: /\/pages\/([a-z0-9-]+)/g, type: "pages" },
+      { regex: /\/blogs\/([a-z0-9-]+)\/([a-z0-9-]+)/g, type: "blogs_posts" },
+      { regex: /\/blogs\/([a-z0-9-]+)/g, type: "blogs" },
+    ];
+
+    urlPatterns.forEach(({ regex, type }) => {
+      let match;
+      while ((match = regex.exec(data.pageData.full_text)) !== null) {
+        if (type === "blogs_posts" && match[1] && match[2]) {
+          // Blog handle is match[1], post handle is match[2]
+          if (!handles.blogs.includes(match[1])) {
+            handles.blogs.push(match[1]);
+          }
+          if (!handles.posts.includes(match[2])) {
+            handles.posts.push(match[2]);
+          }
+        } else if (match[1] && type !== "blogs_posts") {
+          const handleArray = handles[type as keyof typeof handles];
+          if (Array.isArray(handleArray) && !handleArray.includes(match[1])) {
+            handleArray.push(match[1]);
+          }
+        }
+      }
+    });
+  }
+
+  return handles;
+}
+
+// Simple fuzzy matching function to find closest handle
+function findClosestHandle(
+  target: string,
+  handles: string[]
+): { handle: string; score: number } | null {
+  if (!target || handles.length === 0) return null;
+
+  let bestMatch = null;
+  let bestScore = 0;
+
+  const targetLower = target.toLowerCase();
+
+  for (const handle of handles) {
+    const handleLower = handle.toLowerCase();
+
+    // Exact match gets highest score
+    if (targetLower === handleLower) {
+      return { handle, score: 1.0 };
+    }
+
+    // Calculate similarity score
+    let score = 0;
+
+    // Check if target is contained in handle or vice versa
+    if (handleLower.includes(targetLower)) {
+      score = (targetLower.length / handleLower.length) * 0.8;
+    } else if (targetLower.includes(handleLower)) {
+      score = (handleLower.length / targetLower.length) * 0.8;
+    } else {
+      // Calculate simple character overlap
+      const targetChars = new Set(targetLower.split(""));
+      const handleChars = new Set(handleLower.split(""));
+      const intersection = new Set(
+        Array.from(targetChars).filter((x) => handleChars.has(x))
+      );
+      score =
+        (intersection.size / Math.max(targetChars.size, handleChars.size)) *
+        0.5;
+    }
+
+    // Boost score if words match
+    const targetWords = targetLower.split(/[-_\s]+/);
+    const handleWords = handleLower.split(/[-_\s]+/);
+    const wordMatches = targetWords.filter((word) =>
+      handleWords.some((hw) => hw.includes(word) || word.includes(hw))
+    );
+    if (wordMatches.length > 0) {
+      score += (wordMatches.length / targetWords.length) * 0.3;
+    }
+
+    if (score > bestScore && score > 0.3) {
+      // Minimum threshold
+      bestScore = score;
+      bestMatch = handle;
+    }
+  }
+
+  return bestMatch ? { handle: bestMatch, score: bestScore } : null;
+}
+
+// Enhanced URL validation function
+function validateAndFixUrl(
+  url: string,
+  queryText: string,
+  classification: QuestionClassification | null,
+  availableData: any
+): string {
+  if (!url || !availableData) return "";
+
+  const allHandles = getAllAvailableHandles(availableData);
+  const queryLower = queryText.toLowerCase();
+
+  // Extract the intended handle from the URL
+  let intendedHandle = "";
+  let urlType = "";
+
+  // Parse the URL to understand what the AI is trying to redirect to
+  if (url.startsWith("/collections/")) {
+    urlType = "collection";
+    intendedHandle = url.split("/collections/")[1]?.split("/")[0] || "";
+  } else if (url.startsWith("/products/")) {
+    urlType = "product";
+    intendedHandle = url.split("/products/")[1]?.split("/")[0] || "";
+  } else if (url.startsWith("/pages/")) {
+    urlType = "page";
+    intendedHandle = url.split("/pages/")[1]?.split("/")[0] || "";
+  } else if (url.startsWith("/blogs/")) {
+    const parts = url.split("/blogs/")[1]?.split("/") || [];
+    if (parts.length === 1) {
+      // Just /blogs/handle - this is a blog main page
+      urlType = "blog";
+      intendedHandle = parts[0];
+    } else if (parts.length >= 2) {
+      // /blogs/bloghandle/posthandle - this is a blog post
+      urlType = "post";
+      intendedHandle = parts[1]; // The post handle
+    }
+  } else if (url.startsWith("/policies/")) {
+    // Policies don't have dynamic handles, so validate against known policy terms
+    const policyTerms = [
+      "privacy-policy",
+      "return-policy",
+      "refund-policy",
+      "contact-information",
+      "terms-of-service",
+      "shipping-policy",
+    ];
+    const handle = url.split("/policies/")[1]?.split("/")[0] || "";
+    if (policyTerms.some((term) => handle.includes(term))) {
+      return url; // Valid policy URL
+    }
+    return ""; // Invalid policy URL
+  } else {
+    // Handle other formats or extract handle from end
+    const urlParts = url.split("/").filter(Boolean);
+    intendedHandle = urlParts[urlParts.length - 1] || "";
+
+    // Try to infer type from query or classification
+    if (queryLower.includes("product") || classification?.type === "product") {
+      urlType = "product";
+    } else if (
+      queryLower.includes("collection") ||
+      classification?.type === "collection"
+    ) {
+      urlType = "collection";
+    } else if (queryLower.includes("blog") || classification?.type === "post") {
+      urlType = "post";
+    } else if (classification?.type) {
+      urlType = classification.type;
+    }
+  }
+
+  if (!intendedHandle) {
+    console.log("No handle extracted from URL:", url);
+    return "";
+  }
+
+  // Find the best matching handle based on the intended type
+  let availableHandlesForType: string[] = [];
+  let correctUrlPrefix = "";
+
+  switch (urlType) {
+    case "collection":
+      availableHandlesForType = allHandles.collections;
+      correctUrlPrefix = "/collections/";
+      break;
+    case "product":
+      availableHandlesForType = allHandles.products;
+      correctUrlPrefix = "/products/";
+      break;
+    case "page":
+      availableHandlesForType = allHandles.pages;
+      correctUrlPrefix = "/pages/";
+      break;
+    case "blog":
+      availableHandlesForType = allHandles.blogs;
+      correctUrlPrefix = "/blogs/";
+      break;
+    case "post":
+      availableHandlesForType = allHandles.posts;
+      // For posts, we need to find the blog handle too
+      break;
+    default:
+      // Try all types to find a match
+      const allAvailableHandles = [
+        ...allHandles.collections,
+        ...allHandles.products,
+        ...allHandles.pages,
+        ...allHandles.posts,
+        ...allHandles.blogs,
+      ];
+      availableHandlesForType = allAvailableHandles;
+  }
+
+  // Find the closest matching handle
+  const match = findClosestHandle(intendedHandle, availableHandlesForType);
+
+  if (!match) {
+    console.log(
+      `No matching handle found for "${intendedHandle}" of type "${urlType}"`
+    );
+    return "";
+  }
+
+  console.log(
+    `Found matching handle "${match.handle}" for "${intendedHandle}" with score ${match.score}`
+  );
+
+  // If we don't have a specific type determined yet, figure out what type the matched handle is
+  if (!correctUrlPrefix) {
+    if (allHandles.collections.includes(match.handle)) {
+      correctUrlPrefix = "/collections/";
+    } else if (allHandles.products.includes(match.handle)) {
+      correctUrlPrefix = "/products/";
+    } else if (allHandles.pages.includes(match.handle)) {
+      correctUrlPrefix = "/pages/";
+    } else if (allHandles.blogs.includes(match.handle)) {
+      correctUrlPrefix = "/blogs/";
+    } else if (allHandles.posts.includes(match.handle)) {
+      // For posts, we need to find the associated blog handle
+      const blogHandle = findBlogHandleForPost(availableData, match.handle);
+      if (blogHandle) {
+        return `/blogs/${blogHandle}/${match.handle}`;
+      }
+      console.log(`Could not find blog handle for post "${match.handle}"`);
+      return "";
+    }
+  }
+
+  // Handle special case for blog posts
+  if (urlType === "post") {
+    const blogHandle = findBlogHandleForPost(availableData, match.handle);
+    if (blogHandle) {
+      return `/blogs/${blogHandle}/${match.handle}`;
+    }
+    console.log(`Could not find blog handle for post "${match.handle}"`);
+    return "";
+  }
+
+  // Return the corrected URL
+  return `${correctUrlPrefix}${match.handle}`;
+}
+
 function extractHandles(data: any, type: string): string[] {
   const handles: string[] = [];
 
@@ -2160,13 +2555,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Special handling for Beta plan - just increment queries and skip other checks
+    // Billing will be handled after thread creation (helper function moved to top level)
+
+    // Special handling for Beta plan - billing will be done after thread creation
     if (website.plan === "Beta") {
-      // Increment monthly queries
-      await prisma.website.update({
-        where: { id: website.id },
-        data: { monthlyQueries: { increment: 1 } },
-      });
+      // Beta plan billing will be handled after thread creation
     } else {
       // Check query limits based on plan
       const queryLimit = 100; // Starter plan limit is now 100 queries
@@ -2493,43 +2886,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Increment monthly queries if not already done for Beta plan
-    if (website.plan !== "Beta") {
-      await prisma.website.update({
-        where: { id: website.id },
-        data: { monthlyQueries: { increment: 1 } },
-      });
-    }
+    // Billing will be handled after thread creation
 
-    // Check if website is on Enterprise plan or needs upgrade
-    if (website.plan === "Enterprise") {
-      // Track usage in Stripe for Enterprise plan
-      try {
-        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-        // Get user ID for customer mapping
-        const user = await prisma.user.findFirst({
-          where: { id: website.userId },
-          select: { stripeCustomerId: true },
-        });
-
-        if (user?.stripeCustomerId) {
-          // Create billing meter event with customer_id instead of subscription_item
-          const meterEvent = await stripe.billing.meterEvents.create({
-            event_name: "api_requests", // EXACTLY the meter name configured in your Stripe Dashboard
-            payload: {
-              stripe_customer_id: user.stripeCustomerId,
-              value: "1", // Quantity of usage to record
-            },
-            timestamp: Math.floor(Date.now() / 1000), // Unix timestamp in seconds
-            // Optionally: identifier: "your-unique-id-1234",
-          });
-
-          console.log("Successfully recorded meter event:", meterEvent);
-        }
-      } catch (error) {
-        console.error("Failed to record Enterprise usage:", error);
-      }
-    } else if (website.monthlyQueries >= 1000) {
+    // Enterprise billing will be handled after thread creation
+    if (website.monthlyQueries >= 1000) {
       // Auto-upgrade to Enterprise plan
       try {
         const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
@@ -2662,6 +3022,239 @@ export async function POST(request: NextRequest) {
           messages: true,
         },
       })) as ThreadWithMessages;
+    }
+
+    // Per-thread billing: Check if this is the first user message in the thread
+    const isFirstMessage = await isFirstUserMessageInThread(aiThread.id);
+    let shouldBillForStripe = false;
+
+    console.log(`🔍 Billing Debug - Thread ID: ${aiThread.id}`);
+    console.log(`🔍 Billing Debug - Website ID: ${website.id}`);
+    console.log(`🔍 Billing Debug - Website Plan: ${website.plan}`);
+    console.log(`🔍 Billing Debug - Is First Message: ${isFirstMessage}`);
+    console.log(
+      `🔍 Billing Debug - Current Monthly Queries: ${website.monthlyQueries}`
+    );
+
+    if (website.plan === "Beta") {
+      // Beta plan uses per-thread billing
+      if (isFirstMessage) {
+        console.log(
+          `🔍 Billing Debug - About to increment monthly queries for Beta plan`
+        );
+        const updatedWebsite = await prisma.website.update({
+          where: { id: website.id },
+          data: { monthlyQueries: { increment: 1 } },
+        });
+        console.log(
+          `🔍 Billing Debug - After update, monthly queries: ${updatedWebsite.monthlyQueries}`
+        );
+        shouldBillForStripe = true;
+        console.log(
+          `💰 Billing (Beta): First message in thread ${aiThread.id} - incrementing monthly queries`
+        );
+      } else {
+        console.log(
+          `💰 Billing (Beta): Follow-up message in thread ${aiThread.id} - no additional charge`
+        );
+      }
+    } else {
+      // Non-Beta plans also use per-thread billing
+      if (isFirstMessage) {
+        console.log(
+          `🔍 Billing Debug - About to increment monthly queries for ${website.plan} plan`
+        );
+        const updatedWebsite = await prisma.website.update({
+          where: { id: website.id },
+          data: { monthlyQueries: { increment: 1 } },
+        });
+        console.log(
+          `🔍 Billing Debug - After update, monthly queries: ${updatedWebsite.monthlyQueries}`
+        );
+        shouldBillForStripe = true;
+        console.log(
+          `💰 Billing: First message in thread ${aiThread.id} - incrementing monthly queries`
+        );
+      } else {
+        console.log(
+          `💰 Billing: Follow-up message in thread ${aiThread.id} - no additional charge`
+        );
+      }
+    }
+
+    // Stripe billing for all plans with subscription IDs
+    console.log(
+      `🔍 Stripe Debug - Plan: ${website.plan}, Should Bill: ${shouldBillForStripe}`
+    );
+    console.log(
+      `🔍 Stripe Debug - Has Sub ID: ${!!website.stripeSubscriptionId}`
+    );
+    console.log(
+      `🔍 Stripe Debug - Has Sub Item ID: ${!!website.stripeSubscriptionItemId}`
+    );
+
+    // Check if we should bill for any plan with subscription IDs
+    if (
+      shouldBillForStripe &&
+      website.stripeSubscriptionId &&
+      website.stripeSubscriptionItemId
+    ) {
+      try {
+        console.log(
+          `🔍 Stripe Debug - Attempting to bill for ${website.plan} plan`
+        );
+        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+        // Get user ID for customer mapping
+        const user = await prisma.user.findFirst({
+          where: { id: website.userId },
+          select: { id: true, stripeCustomerId: true, email: true },
+        });
+
+        let stripeCustomerId = user?.stripeCustomerId;
+
+        // If no customer ID found, try to find it from subscription
+        if (!stripeCustomerId && website.stripeSubscriptionId) {
+          try {
+            console.log(
+              `🔍 Stripe Debug - Trying to get customer ID from subscription`
+            );
+            const subscription = await stripe.subscriptions.retrieve(
+              website.stripeSubscriptionId
+            );
+            if (subscription?.customer) {
+              stripeCustomerId =
+                typeof subscription.customer === "string"
+                  ? subscription.customer
+                  : subscription.customer.id;
+              console.log(
+                `🔍 Stripe Debug - Found customer ID from subscription: ${stripeCustomerId.substring(
+                  0,
+                  8
+                )}...`
+              );
+            }
+          } catch (error) {
+            console.error("Error retrieving subscription for billing:", error);
+          }
+        }
+
+        if (stripeCustomerId) {
+          // Create billing meter event with customer_id instead of subscription_item
+          const meterEvent = await stripe.billing.meterEvents.create({
+            event_name: "api_requests", // EXACTLY the meter name configured in your Stripe Dashboard
+            payload: {
+              stripe_customer_id: stripeCustomerId,
+              value: "1", // Quantity of usage to record
+            },
+            timestamp: Math.floor(Date.now() / 1000), // Unix timestamp in seconds
+          });
+
+          console.log(
+            `💰 Stripe: Successfully recorded meter event for ${website.plan} plan:`,
+            meterEvent
+          );
+
+          // If we found the customer ID from subscription but user doesn't have it, update the user
+          if (!user?.stripeCustomerId && user?.id && stripeCustomerId) {
+            console.log(
+              `🔍 Stripe Debug - Updating user with stripeCustomerId`
+            );
+            await prisma.user.update({
+              where: { id: user.id },
+              data: { stripeCustomerId },
+            });
+          }
+        } else {
+          console.log(
+            `🔍 Stripe Debug - No stripeCustomerId found for ${website.plan} user`
+          );
+        }
+      } catch (error) {
+        console.error(`Failed to record ${website.plan} plan usage:`, error);
+      }
+    } else if (website.plan === "Enterprise" && shouldBillForStripe) {
+      try {
+        console.log(
+          `🔍 Stripe Debug - Attempting to bill for Enterprise plan using meter events`
+        );
+        const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+        // Get user ID for customer mapping
+        const user = await prisma.user.findFirst({
+          where: { id: website.userId },
+          select: { id: true, stripeCustomerId: true, email: true },
+        });
+
+        let stripeCustomerId = user?.stripeCustomerId;
+
+        // If no customer ID found, try to find it from subscription
+        if (!stripeCustomerId && website.stripeSubscriptionId) {
+          try {
+            console.log(
+              `🔍 Stripe Debug - Trying to get customer ID from subscription`
+            );
+            const subscription = await stripe.subscriptions.retrieve(
+              website.stripeSubscriptionId
+            );
+            if (subscription?.customer) {
+              stripeCustomerId =
+                typeof subscription.customer === "string"
+                  ? subscription.customer
+                  : subscription.customer.id;
+              console.log(
+                `🔍 Stripe Debug - Found customer ID from subscription: ${stripeCustomerId.substring(
+                  0,
+                  8
+                )}...`
+              );
+            }
+          } catch (error) {
+            console.error("Error retrieving subscription for billing:", error);
+          }
+        }
+
+        if (stripeCustomerId) {
+          // Create billing meter event with customer_id instead of subscription_item
+          const meterEvent = await stripe.billing.meterEvents.create({
+            event_name: "api_requests", // EXACTLY the meter name configured in your Stripe Dashboard
+            payload: {
+              stripe_customer_id: stripeCustomerId,
+              value: "1", // Quantity of usage to record
+            },
+            timestamp: Math.floor(Date.now() / 1000), // Unix timestamp in seconds
+          });
+
+          console.log(
+            "Successfully recorded Stripe meter event (per-thread billing):",
+            meterEvent
+          );
+
+          // If we found the customer ID from subscription but user doesn't have it, update the user
+          if (!user?.stripeCustomerId && user?.id && stripeCustomerId) {
+            console.log(
+              `🔍 Stripe Debug - Updating user with stripeCustomerId`
+            );
+            await prisma.user.update({
+              where: { id: user.id },
+              data: { stripeCustomerId },
+            });
+          }
+        } else {
+          console.log(
+            `🔍 Stripe Debug - No stripeCustomerId found for Enterprise user`
+          );
+        }
+      } catch (error) {
+        console.error("Failed to record Enterprise usage:", error);
+      }
+    } else if (!shouldBillForStripe) {
+      console.log(
+        `💰 Stripe: Not billing for follow-up message in thread ${aiThread.id}`
+      );
+    } else {
+      console.log(
+        `💰 Stripe: Not billing - missing subscription IDs or not eligible plan`
+      );
     }
 
     // Get the previous context
@@ -3976,6 +4569,45 @@ export async function POST(request: NextRequest) {
           parsedResponse.action_context = {};
           parsedResponse.answer =
             "I'm sorry, address updates are not currently supported through the chat assistant. You can only update your name, phone number, and email here. Please go to your account settings to update your address information.";
+        }
+      }
+
+      // URL validation: Validate and fix redirect URLs if needed
+      if (
+        parsedResponse.action === "redirect" &&
+        parsedResponse.action_context?.url
+      ) {
+        const availableData = {
+          mainContent: context.mainContent || [],
+          relevantQAs: context.relevantQAs || [],
+          pageData: null, // We don't have access to pageData in this scope
+        };
+
+        const validatedUrl = validateAndFixUrl(
+          parsedResponse.action_context.url,
+          message,
+          classification,
+          availableData
+        );
+
+        // If validation failed (returned empty string), prevent redirect
+        if (!validatedUrl) {
+          console.log(
+            `❌ URL validation failed for: ${parsedResponse.action_context.url}`
+          );
+          parsedResponse.action = "none";
+          parsedResponse.action_context = {};
+          // Keep the original answer but add a note about the page not being found
+          parsedResponse.answer =
+            parsedResponse.answer +
+            " (Note: The specific page you're looking for wasn't found, but I hope this information helps!)";
+        } else if (validatedUrl !== parsedResponse.action_context.url) {
+          console.log(
+            `✅ URL corrected from: ${parsedResponse.action_context.url} to: ${validatedUrl}`
+          );
+          parsedResponse.action_context.url = validatedUrl;
+        } else {
+          console.log(`✅ URL validated successfully: ${validatedUrl}`);
         }
       }
 
