@@ -985,43 +985,53 @@ export async function POST(request: NextRequest) {
       changedItems.discounts.length +
       changedItems.deleted.length; // Include deleted items in the count
 
-    // Always trigger vectorization to ensure deleted content is handled
+    // Only trigger vectorization if there are actual changes
     console.log(
       `Total changes: ${totalChanges} (including ${changedItems.deleted.length} deletions)`
     );
-    console.log("Triggering vectorization...");
 
-    // Get access key for the website
-    const accessKey = await prismaWithPool.accessKey.findFirst({
-      where: { websiteId: website.id },
-      select: { key: true },
-    });
+    if (totalChanges > 0) {
+      console.log("Changes detected, triggering vectorization...");
 
-    if (accessKey) {
-      // Fire and forget - don't wait for response
-      try {
-        fetch(`https://train.voicero.ai/api/shopify/vectorize`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            Authorization: `Bearer ${accessKey.key}`,
-          },
-          body: JSON.stringify({ websiteId: website.id }),
-        }).catch((error) => {
-          console.error("Vectorization request error:", error);
-          // Continue with the process even if there's an error
-        });
+      // Get access key for the website
+      const accessKey = await prismaWithPool.accessKey.findFirst({
+        where: { websiteId: website.id },
+        select: { key: true },
+      });
 
-        console.log(
-          "Vectorization request sent, continuing without waiting for response"
-        );
-      } catch (error) {
-        console.error("Failed to send vectorization request:", error);
-        // Continue regardless of errors
+      if (accessKey) {
+        // True fire-and-forget - just initiate the request and move on
+        try {
+          console.log(
+            "Initiating vectorization request to train.voicero.ai..."
+          );
+
+          // Make the request but don't wait for it at all
+          fetch(`https://train.voicero.ai/api/shopify/vectorize`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              Authorization: `Bearer ${accessKey.key}`,
+            },
+            body: JSON.stringify({
+              websiteId: website.id,
+            }),
+          });
+
+          // Don't attach any handlers, don't await, just let it run
+          console.log(
+            "Vectorization request initiated - continuing immediately"
+          );
+        } catch (error) {
+          console.error("Failed to initiate vectorization request:", error);
+          // Continue regardless of errors
+        }
+      } else {
+        console.log("No access key found for website, skipping vectorization");
       }
     } else {
-      console.log("No access key found for website, skipping vectorization");
+      console.log("No changes detected, skipping vectorization");
     }
 
     console.log("=== AutoSync Complete ===");
