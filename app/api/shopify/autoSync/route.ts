@@ -308,10 +308,38 @@ export async function POST(request: NextRequest) {
     if (pages.length > 0) {
       console.log(`Processing ${pages.length} page(s) for changes`);
 
+      // Create a map to track handles that have been processed
+      const processedHandles = new Map<string, number>();
+
       for (const page of pages) {
         let pageShopifyId = page.shopifyId;
         if (pageShopifyId === 0 || pageShopifyId?.toString() === "0") {
           pageShopifyId = Number(generateRandomShopifyId());
+        }
+
+        // Check if this handle already exists for a different page
+        let handle = page.handle || "";
+
+        // Check if the handle already exists in the database but with a different shopifyId
+        const existingPageWithSameHandle =
+          await prismaWithPool.shopifyPage.findFirst({
+            where: {
+              websiteId: website.id,
+              handle: handle,
+              NOT: {
+                shopifyId: BigInt(pageShopifyId),
+              },
+            },
+          });
+
+        // If we found a page with the same handle but different ID, make this handle unique
+        if (existingPageWithSameHandle) {
+          const count = processedHandles.get(handle) || 1;
+          handle = `${handle}-${count}`;
+          processedHandles.set(page.handle || "", count + 1);
+          console.log(
+            `Handle collision detected. Modified handle to: ${handle}`
+          );
         }
 
         const existingPage = await prismaWithPool.shopifyPage.findFirst({
@@ -324,7 +352,7 @@ export async function POST(request: NextRequest) {
         const needsUpdate =
           !existingPage ||
           existingPage.title !== (page.title || "") ||
-          existingPage.handle !== (page.handle || "") ||
+          existingPage.handle !== handle ||
           existingPage.content !== (page.content || "") ||
           existingPage.bodySummary !== (page.bodySummary || null) ||
           existingPage.isPublished !== (page.isPublished || null) ||
@@ -342,7 +370,7 @@ export async function POST(request: NextRequest) {
               websiteId: website.id,
               shopifyId: BigInt(pageShopifyId),
               title: page.title || "",
-              handle: page.handle || "",
+              handle: handle,
               content: page.content || "",
               bodySummary: page.bodySummary || null,
               publishedAt: page.publishedAt ? new Date(page.publishedAt) : null,
@@ -352,7 +380,7 @@ export async function POST(request: NextRequest) {
             },
             update: {
               title: page.title || undefined,
-              handle: page.handle || undefined,
+              handle: handle,
               content: page.content || undefined,
               bodySummary: page.bodySummary || undefined,
               publishedAt: page.publishedAt
@@ -364,8 +392,8 @@ export async function POST(request: NextRequest) {
             },
           });
 
-          changedItems.pages.push(`${page.title} (${page.handle})`);
-          console.log(`Updated page: ${page.title} (${page.handle})`);
+          changedItems.pages.push(`${page.title} (${handle})`);
+          console.log(`Updated page: ${page.title} (${handle})`);
         }
       }
     }
