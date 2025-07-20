@@ -308,8 +308,8 @@ export async function POST(request: NextRequest) {
     if (pages.length > 0) {
       console.log(`Processing ${pages.length} page(s) for changes`);
 
-      // Create a map to track handles that have been processed
-      const processedHandles = new Map<string, number>();
+      // Track which pages we've processed by handle to avoid duplicates
+      const processedHandles = new Map<string, boolean>();
 
       for (const page of pages) {
         try {
@@ -318,60 +318,79 @@ export async function POST(request: NextRequest) {
             pageShopifyId = Number(generateRandomShopifyId());
           }
 
-          // Check if this handle already exists for a different page
-          let handle = page.handle || "";
-          let uniqueHandleFound = false;
-          let attemptCount = 0;
-
-          // Keep trying until we find a unique handle or hit max attempts
-          while (!uniqueHandleFound && attemptCount < 10) {
-            // If this isn't the first attempt, modify the handle
-            if (attemptCount > 0) {
-              handle = `${page.handle || ""}-${attemptCount}`;
-            }
-
-            // Check if the handle exists in the database
-            const existingPageWithSameHandle =
-              await prismaWithPool.shopifyPage.findFirst({
-                where: {
-                  websiteId: website.id,
-                  handle: handle,
-                  NOT: {
-                    shopifyId: BigInt(pageShopifyId),
-                  },
-                },
-              });
-
-            if (!existingPageWithSameHandle) {
-              uniqueHandleFound = true;
-            } else {
-              attemptCount++;
-            }
-          }
-
-          if (attemptCount > 0) {
-            console.log(
-              `Handle collision resolved. Using handle: ${handle} after ${attemptCount} attempts`
-            );
-          }
-
-          const existingPage = await prismaWithPool.shopifyPage.findFirst({
+          // FIRST: Try to find the page by shopifyId (primary identifier)
+          const existingPageById = await prismaWithPool.shopifyPage.findFirst({
             where: {
               websiteId: website.id,
               shopifyId: BigInt(pageShopifyId),
             },
           });
 
-          const needsUpdate =
-            !existingPage ||
-            existingPage.title !== (page.title || "") ||
-            existingPage.handle !== handle ||
-            existingPage.content !== (page.content || "") ||
-            existingPage.bodySummary !== (page.bodySummary || null) ||
-            existingPage.isPublished !== (page.isPublished || null) ||
-            existingPage.templateSuffix !== (page.templateSuffix || null);
+          // SECOND: If not found by ID, try to find by handle (for potential duplicates)
+          const originalHandle = page.handle || "";
+          let existingPageByHandle = null;
 
-          if (needsUpdate) {
+          if (!existingPageById && originalHandle) {
+            existingPageByHandle = await prismaWithPool.shopifyPage.findFirst({
+              where: {
+                websiteId: website.id,
+                handle: originalHandle,
+              },
+            });
+          }
+
+          // Determine the final handle to use
+          let finalHandle = originalHandle;
+
+          // If we found a page with the same handle but different ID, we need to make a decision
+          if (!existingPageById && existingPageByHandle) {
+            console.log(
+              `Found existing page with handle "${originalHandle}" but different ID. Using existing page.`
+            );
+            // Skip this page as we already have one with this handle
+            console.log(
+              `Skipping duplicate page: ${page.title} (${originalHandle})`
+            );
+            continue;
+          }
+
+          // If we already processed a page with this handle in this batch, skip it
+          if (!existingPageById && processedHandles.has(originalHandle)) {
+            console.log(
+              `Already processed a page with handle "${originalHandle}" in this batch. Skipping duplicate.`
+            );
+            continue;
+          }
+
+          // Mark this handle as processed
+          processedHandles.set(originalHandle, true);
+
+          // If we have an existing page by ID, use its current handle to avoid conflicts
+          if (existingPageById) {
+            finalHandle = existingPageById.handle || originalHandle;
+          }
+
+          const needsUpdate =
+            existingPageById &&
+            (existingPageById.title !== (page.title || "") ||
+              existingPageById.content !== (page.content || "") ||
+              existingPageById.bodySummary !== (page.bodySummary || null) ||
+              existingPageById.isPublished !== (page.isPublished || null) ||
+              existingPageById.templateSuffix !==
+                (page.templateSuffix || null));
+
+          // Only create if we don't have an existing page by ID or handle
+          const shouldCreate = !existingPageById && !existingPageByHandle;
+
+          if (shouldCreate || needsUpdate) {
+            if (shouldCreate) {
+              console.log(`Creating new page: ${page.title} (${finalHandle})`);
+            } else {
+              console.log(
+                `Updating existing page: ${page.title} (${finalHandle})`
+              );
+            }
+
             await prismaWithPool.shopifyPage.upsert({
               where: {
                 websiteId_shopifyId: {
@@ -383,7 +402,7 @@ export async function POST(request: NextRequest) {
                 websiteId: website.id,
                 shopifyId: BigInt(pageShopifyId),
                 title: page.title || "",
-                handle: handle,
+                handle: finalHandle,
                 content: page.content || "",
                 bodySummary: page.bodySummary || null,
                 publishedAt: page.publishedAt
@@ -395,7 +414,7 @@ export async function POST(request: NextRequest) {
               },
               update: {
                 title: page.title || undefined,
-                handle: handle,
+                // Don't update handle for existing pages to avoid conflicts
                 content: page.content || undefined,
                 bodySummary: page.bodySummary || undefined,
                 publishedAt: page.publishedAt
@@ -407,8 +426,11 @@ export async function POST(request: NextRequest) {
               },
             });
 
-            changedItems.pages.push(`${page.title} (${handle})`);
-            console.log(`Updated page: ${page.title} (${handle})`);
+            changedItems.pages.push(`${page.title} (${finalHandle})`);
+          } else {
+            console.log(
+              `No changes needed for page: ${page.title} (${finalHandle})`
+            );
           }
         } catch (error: any) {
           console.error(`Error processing page ${page.title || "unknown"}:`, {
@@ -416,70 +438,10 @@ export async function POST(request: NextRequest) {
             code: error.code,
           });
 
-          // Generate a completely random handle as a last resort
-          if (
-            error.code === "P2002" &&
-            error.message.includes("ShopifyPage_websiteId_handle_key")
-          ) {
-            try {
-              const randomHandle = `${
-                page.handle || "page"
-              }-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-              console.log(
-                `Attempting recovery with random handle: ${randomHandle}`
-              );
-
-              await prismaWithPool.shopifyPage.upsert({
-                where: {
-                  websiteId_shopifyId: {
-                    websiteId: website.id,
-                    shopifyId: BigInt(page.shopifyId),
-                  },
-                },
-                create: {
-                  websiteId: website.id,
-                  shopifyId: BigInt(page.shopifyId),
-                  title: page.title || "",
-                  handle: randomHandle,
-                  content: page.content || "",
-                  bodySummary: page.bodySummary || null,
-                  publishedAt: page.publishedAt
-                    ? new Date(page.publishedAt)
-                    : null,
-                  isPublished: page.isPublished || null,
-                  templateSuffix: page.templateSuffix || null,
-                  trained: false,
-                },
-                update: {
-                  title: page.title || undefined,
-                  handle: randomHandle,
-                  content: page.content || undefined,
-                  bodySummary: page.bodySummary || undefined,
-                  publishedAt: page.publishedAt
-                    ? new Date(page.publishedAt)
-                    : undefined,
-                  isPublished: page.isPublished || undefined,
-                  templateSuffix: page.templateSuffix || undefined,
-                  trained: false,
-                },
-              });
-
-              changedItems.pages.push(`${page.title} (${randomHandle})`);
-              console.log(
-                `Recovery successful: Updated page with random handle: ${page.title} (${randomHandle})`
-              );
-            } catch (recoveryError) {
-              console.error(
-                `Recovery failed for page ${page.title || "unknown"}:`,
-                recoveryError
-              );
-            }
-          } else {
-            // For other errors, just log and continue
-            console.error(
-              `Skipping page due to error: ${page.title || "unknown"}`
-            );
-          }
+          // Skip this page on error instead of trying to create with a random handle
+          console.error(
+            `Skipping page due to error: ${page.title || "unknown"}`
+          );
         }
       }
     }
