@@ -2979,12 +2979,12 @@ export async function POST(request: NextRequest) {
         console.log(`Thread not found with either id or threadId: ${threadId}`);
         console.log(`Creating new thread instead of returning 404...`);
 
-        // Create new thread with the provided ID
+        // Create new thread with a new UUID for id and the provided threadId
         try {
           aiThread = (await prisma.aiThread.create({
             data: {
-              id: threadId,
-              threadId: crypto.randomUUID(),
+              id: crypto.randomUUID(),
+              threadId: threadId,
               websiteId: website.id,
               messages: {
                 create: [], // Empty array for new thread
@@ -4906,8 +4906,8 @@ function handleDisabledAction(
   originalAction: string
 ): NextResponse {
   const disabledResponse: FormattedResponse = {
-    action: "contact",
-    answer: `I'm currently unable to ${actionType} automatically. Please contact the business directly for assistance or go through your account dashboard.`,
+    action: "none",
+    answer: `I'm currently unable to ${actionType} automatically. Please contact the company directly for assistance.`,
     category: "discovery",
     pageId: "error",
     pageTitle: "Error",
@@ -4916,10 +4916,7 @@ function handleDisabledAction(
     subcategory: "content_overview",
     type: type,
     url: website.url,
-    action_context: {
-      contact_help_form: true,
-      message: `User attempted to ${actionType} but this action is disabled. Original action: ${originalAction}`,
-    },
+    action_context: {},
   };
 
   return cors(
