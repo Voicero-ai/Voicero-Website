@@ -4710,29 +4710,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Convert return, exchange, and refund to contact actions
-    if (
-      classification?.action_intent === "return_order" ||
-      classification?.action_intent === "exchange_order" ||
-      (message.toLowerCase().includes("return") &&
-        message.toLowerCase().includes("order")) ||
-      (message.toLowerCase().includes("exchange") &&
-        message.toLowerCase().includes("order"))
-    ) {
-      const actionType =
-        classification?.action_intent === "return_order" ||
-        (message.toLowerCase().includes("return") &&
-          message.toLowerCase().includes("order"))
-          ? "return"
-          : "exchange";
-
-      formattedResponse.action = "contact";
-      formattedResponse.answer = `I'll connect you with our customer service team who can help process your ${actionType} request. Could you provide your order number and any relevant details?`;
-      formattedResponse.action_context = {
-        contact_help_form: true,
-        message: `User is requesting to ${actionType} an order.`,
-      };
-    }
 
     // Check if the action is a disabled image generation type
     if (
@@ -4744,7 +4721,7 @@ export async function POST(request: NextRequest) {
       formattedResponse.action_context = {};
     }
 
-    // Handle return/exchange separately to check for policy pages when auto settings are disabled
+    // Handle return/exchange when auto settings are disabled
     if (
       (formattedResponse.action === "return_order" &&
         !website.allowAutoReturn) ||
@@ -4794,16 +4771,9 @@ export async function POST(request: NextRequest) {
         formattedResponse.answer = `I'm unable to ${actionTypeMap[originalAction]} directly through this chat. Let me show you our policy regarding returns and exchanges.`;
         formattedResponse.action_context = {};
       } else {
-        formattedResponse.action = "contact";
-        formattedResponse.answer = `I'm unable to ${
-          actionTypeMap[originalAction]
-        } automatically. Let me connect you with customer service who can help with your ${
-          originalAction === "return_order" ? "return" : "exchange"
-        } request.`;
-        formattedResponse.action_context = {
-          contact_help_form: true,
-          message: `User requested to ${actionTypeMap[originalAction]} (${originalAction}) but this feature is not enabled.`,
-        };
+        formattedResponse.action = "none";
+        formattedResponse.answer = `I'm currently unable to ${actionTypeMap[originalAction]} automatically. Please contact the company directly for assistance.`;
+        formattedResponse.action_context = {};
       }
     }
 
