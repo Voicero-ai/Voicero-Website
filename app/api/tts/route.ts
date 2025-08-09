@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
     const websites = (await query(
       `SELECT w.id FROM Website w
        JOIN AccessKey ak ON w.id = ak.websiteId
-       WHERE ak.key = ?
+       WHERE ak.\`key\` = ?
        LIMIT 1`,
       [accessKey]
     )) as Website[];

@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
           `SELECT w.userId 
            FROM Website w
            JOIN AccessKey ak ON w.id = ak.websiteId
-           WHERE w.id = ? AND ak.key = ?`,
+           WHERE w.id = ? AND ak.\`key\` = ?`,
           [websiteId, accessKey]
         )) as Website[];
 

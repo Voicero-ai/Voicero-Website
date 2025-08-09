@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
       `SELECT w.id, w.aiAssistantId, w.monthlyQueries, w.queryLimit, w.plan 
        FROM Website w
        JOIN AccessKey ak ON w.id = ak.websiteId
-       WHERE ak.key = ?`,
+       WHERE ak.\`key\` = ?`,
       [accessKey]
     )) as Website[];
 

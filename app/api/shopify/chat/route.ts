@@ -2499,7 +2499,7 @@ export async function POST(request: NextRequest) {
                   w.stripeSubscriptionId, w.stripeSubscriptionItemId
            FROM Website w
            JOIN AccessKey ak ON ak.websiteId = w.id
-           WHERE ak.key = ?
+            WHERE ak.\`key\` = ?
            LIMIT 1`,
           [accessKey]
         )) as any[];

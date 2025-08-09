@@ -66,7 +66,16 @@ const updateUserSchema = z
     }
   );
 
+// Support POST in addition to PUT for clients using POST /api/updateUserSettings
+export async function POST(req: Request) {
+  return handleUpdate(req);
+}
+
 export async function PUT(req: Request) {
+  return handleUpdate(req);
+}
+
+async function handleUpdate(req: Request) {
   try {
     console.time("user-update-route");
     console.log("[USER_UPDATE] Incoming request");

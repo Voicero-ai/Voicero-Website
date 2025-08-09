@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
       `SELECT w.id, w.name, w.url, w.aiAssistantId, w.aiVoiceAssistantId
        FROM Website w
        JOIN AccessKey ak ON w.id = ak.websiteId
-       WHERE ak.key = ?
+       WHERE ak.\`key\` = ?
        LIMIT 1`,
       [accessKey]
     )) as Website[];

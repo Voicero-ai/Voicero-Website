@@ -175,7 +175,7 @@ async function authenticateRequest(
         `SELECT w.id, w.userId
          FROM Website w
          JOIN AccessKey ak ON ak.websiteId = w.id
-         WHERE ak.key = ?
+         WHERE ak.\`key\` = ?
          LIMIT 1`,
         [accessKey]
       )) as { id: string; userId: string }[];

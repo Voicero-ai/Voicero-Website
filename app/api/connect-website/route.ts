@@ -74,7 +74,7 @@ export async function POST(request: Request) {
         // Create a new access key
         const newKey = generateAccessKey();
         const accessKeyResult = await query(
-          "INSERT INTO AccessKey (key, websiteId) VALUES (?, ?)",
+          "INSERT INTO AccessKey (`key`, websiteId) VALUES (?, ?)",
           [newKey, website.id]
         );
 
@@ -106,7 +106,7 @@ export async function POST(request: Request) {
           // Create a new access key
           const newKey = generateAccessKey();
           const accessKeyResult = await query(
-            "INSERT INTO AccessKey (key, websiteId) VALUES (?, ?)",
+            "INSERT INTO AccessKey (`key`, websiteId) VALUES (?, ?)",
             [newKey, website.id]
           );
 
@@ -131,7 +131,7 @@ export async function POST(request: Request) {
         // Create a new access key
         const newKey = generateAccessKey();
         const accessKeyResult = await query(
-          "INSERT INTO AccessKey (key, websiteId) VALUES (?, ?)",
+          "INSERT INTO AccessKey (`key`, websiteId) VALUES (?, ?)",
           [newKey, newWebsiteId]
         );
 

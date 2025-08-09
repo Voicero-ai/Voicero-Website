@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
         `SELECT w.id, w.active
          FROM Website w
          JOIN AccessKey ak ON ak.websiteId = w.id
-         WHERE ak.key = ?
+         WHERE ak.\`key\` = ?
          LIMIT 1`,
         [accessKey]
       )) as { id: string; active: number | boolean }[];

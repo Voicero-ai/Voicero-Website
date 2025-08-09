@@ -145,7 +145,7 @@ export async function GET(request: NextRequest) {
     const websites = (await query(
       `SELECT w.* FROM Website w
        JOIN AccessKey ak ON w.id = ak.websiteId
-       WHERE ak.key = ?`,
+       WHERE ak.\`key\` = ?`,
       [accessKey]
     )) as Website[];
 

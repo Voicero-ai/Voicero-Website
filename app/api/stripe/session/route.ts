@@ -244,7 +244,7 @@ export async function GET(request: Request) {
 
       if (createdWebsiteId) {
         await query(
-          `INSERT INTO AccessKey (id, key, websiteId, createdAt) VALUES (UUID(), ?, ?, NOW())`,
+          `INSERT INTO AccessKey (id, \`key\`, websiteId, createdAt) VALUES (UUID(), ?, ?, NOW())`,
           [websiteData.accessKey, createdWebsiteId]
         );
       }

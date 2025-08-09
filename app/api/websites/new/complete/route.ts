@@ -59,7 +59,7 @@ export async function GET(request: Request) {
 
   if (websiteId) {
     await query(
-      `INSERT INTO AccessKey (id, key, websiteId, createdAt) VALUES (UUID(), ?, ?, NOW())`,
+      `INSERT INTO AccessKey (id, \`key\`, websiteId, createdAt) VALUES (UUID(), ?, ?, NOW())`,
       [websiteData.accessKey, websiteId]
     );
   }

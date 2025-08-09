@@ -117,7 +117,7 @@ export async function POST(request: NextRequest) {
 
     // Check if the access key is valid for this website
     const accessKeyResult = await query(
-      `SELECT websiteId FROM AccessKey WHERE key = ? AND websiteId = ?`,
+      `SELECT websiteId FROM AccessKey WHERE \`key\` = ? AND websiteId = ?`,
       [accessKey, websiteId]
     );
 

@@ -51,10 +51,10 @@ async function handleContacts(
 ) {
   /* ---------- verify token maps to website ---------- */
   const accessKeys = (await query(
-    `SELECT ak.id, ak.key, ak.websiteId, w.id as website_id, w.userId 
+    `SELECT ak.id, ak.\`key\`, ak.websiteId, w.id as website_id, w.userId 
      FROM AccessKey ak
      JOIN Website w ON ak.websiteId = w.id
-     WHERE ak.key = ?`,
+     WHERE ak.\`key\` = ?`,
     [accessToken]
   )) as any[];
 

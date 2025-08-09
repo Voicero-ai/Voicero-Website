@@ -53,18 +53,9 @@ export async function POST(request: NextRequest) {
 
     // Get request body
     const body = await request.json();
-    const { websiteId, name, username, email } = body;
+    const { websiteId: providedWebsiteId, name, username, email } = body;
 
-    // Validate required fields
-    if (!websiteId) {
-      return cors(
-        request,
-        NextResponse.json(
-          { error: "Missing required field: websiteId" },
-          { status: 400 }
-        )
-      );
-    }
+    // websiteId is optional when using access key; we'll infer it below if not provided
 
     // Validate at least one update field is provided
     if (!name && !username && !email) {
@@ -95,8 +86,11 @@ export async function POST(request: NextRequest) {
 
     const accessKeyRecord = accessKeys[0];
 
-    // Verify the website matches the one from the access key
-    if (accessKeyRecord.websiteId !== websiteId) {
+    // Determine target websiteId: prefer provided, fallback to access key's websiteId
+    const websiteId = providedWebsiteId || accessKeyRecord.websiteId;
+
+    // If providedWebsiteId was sent and doesn't match, forbid
+    if (providedWebsiteId && accessKeyRecord.websiteId !== providedWebsiteId) {
       return cors(
         request,
         NextResponse.json(
