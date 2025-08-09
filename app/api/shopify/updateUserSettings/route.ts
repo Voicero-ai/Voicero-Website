@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) {
     const accessKeyRecord = accessKeys[0];
 
     // Determine target websiteId: prefer provided, fallback to access key's websiteId
-    const websiteId = providedWebsiteId || accessKeyRecord.websiteId;
+    let websiteId = providedWebsiteId || accessKeyRecord.websiteId;
 
     // If providedWebsiteId was sent and doesn't match, ensure both websites belong to the same user
     if (providedWebsiteId && accessKeyRecord.websiteId !== providedWebsiteId) {
@@ -104,27 +104,26 @@ export async function POST(request: NextRequest) {
       const providedWebsites = providedWebsiteResult as Website[];
 
       if (providedWebsites.length === 0) {
-        return cors(
-          request,
-          NextResponse.json({ error: "Website not found" }, { status: 404 })
-        );
-      }
+        // If provided website is not found, fallback to the access key's websiteId
+        websiteId = accessKeyRecord.websiteId;
+      } else {
+        // Only enforce same-owner when providedWebsite exists
+        if (accessKeyWebsites.length === 0) {
+          return cors(
+            request,
+            NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+          );
+        }
 
-      if (accessKeyWebsites.length === 0) {
-        return cors(
-          request,
-          NextResponse.json({ error: "Invalid access key" }, { status: 401 })
-        );
-      }
-
-      if (accessKeyWebsites[0].userId !== providedWebsites[0].userId) {
-        return cors(
-          request,
-          NextResponse.json(
-            { error: "Unauthorized to update this website's user" },
-            { status: 403 }
-          )
-        );
+        if (accessKeyWebsites[0].userId !== providedWebsites[0].userId) {
+          return cors(
+            request,
+            NextResponse.json(
+              { error: "Unauthorized to update this website's user" },
+              { status: 403 }
+            )
+          );
+        }
       }
     }
 

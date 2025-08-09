@@ -31,10 +31,14 @@ export async function query(sql: string, params: any[] = []) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
+      // Sanitize undefined values in params to null to avoid mysql2 throwing
+      const sanitizedParams = Array.isArray(params)
+        ? params.map((p) => (p === undefined ? null : p))
+        : params;
       // Pass per-query timeout to abort long-running reads
       const [rows] = await (pool.execute as any)(
         { sql, timeout: 20_000 },
-        params
+        sanitizedParams
       );
       return rows;
     } catch (error: any) {

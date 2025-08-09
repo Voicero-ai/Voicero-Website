@@ -102,6 +102,10 @@ export async function POST(request: NextRequest) {
 
     // Parse popUpQuestions if it's a string
     let parsedPopUpQuestions = [];
+    const popUpQuestionsProvided = Object.prototype.hasOwnProperty.call(
+      body,
+      "popUpQuestions"
+    );
     try {
       parsedPopUpQuestions =
         typeof popUpQuestions === "string"
@@ -134,35 +138,9 @@ export async function POST(request: NextRequest) {
 
     const accessKeyRecord = accessKeyRecords[0];
 
-    console.log("Updating website with data:", {
-      name,
-      url,
-      customInstructions,
-      active,
-      plan,
-      queryLimit,
-      monthlyQueries,
-      renewsOn,
-      syncFrequency,
-      color,
-      popUpQuestions: parsedPopUpQuestions,
-    });
-
-    // Update the website using the found website ID
-    await query(
-      `UPDATE Website SET 
-       name = ?, 
-       url = ?, 
-       customInstructions = ?, 
-       active = ?, 
-       plan = ?, 
-       queryLimit = ?, 
-       monthlyQueries = ?, 
-       renewsOn = ?, 
-       syncFrequency = ?, 
-       color = ?
-       WHERE id = ?`,
-      [
+    console.log(
+      "Updating website with data (only provided fields will be updated):",
+      {
         name,
         url,
         customInstructions,
@@ -170,24 +148,58 @@ export async function POST(request: NextRequest) {
         plan,
         queryLimit,
         monthlyQueries,
-        renewsOn ? new Date(renewsOn) : null,
+        renewsOn,
         syncFrequency,
-        color || null,
-        accessKeyRecord.websiteId,
-      ]
+        color,
+        popUpQuestions: popUpQuestionsProvided
+          ? parsedPopUpQuestions
+          : "<not provided>",
+      }
     );
 
-    // Delete existing pop-up questions
-    await query("DELETE FROM PopUpQuestion WHERE websiteId = ?", [
-      accessKeyRecord.websiteId,
-    ]);
+    // Dynamically build the update statement to avoid passing undefined values
+    const updateFragments: string[] = [];
+    const updateParams: any[] = [];
 
-    // Insert new pop-up questions
-    for (const q of parsedPopUpQuestions) {
-      await query(
-        "INSERT INTO PopUpQuestion (question, websiteId) VALUES (?, ?)",
-        [q.question, accessKeyRecord.websiteId]
-      );
+    const includeField = (field: string, value: any) => {
+      if (Object.prototype.hasOwnProperty.call(body, field)) {
+        updateFragments.push(`${field} = ?`);
+        updateParams.push(value);
+      }
+    };
+
+    includeField("name", name);
+    includeField("url", url);
+    includeField("customInstructions", customInstructions);
+    includeField("active", active);
+    includeField("plan", plan);
+    includeField("queryLimit", queryLimit);
+    includeField("monthlyQueries", monthlyQueries);
+    includeField("renewsOn", renewsOn ? new Date(renewsOn) : null);
+    includeField("syncFrequency", syncFrequency);
+    includeField("color", color ?? null);
+
+    if (updateFragments.length > 0) {
+      const sql = `UPDATE Website SET ${updateFragments.join(
+        ", "
+      )} WHERE id = ?`;
+      updateParams.push(accessKeyRecord.websiteId);
+      await query(sql, updateParams);
+    }
+
+    if (popUpQuestionsProvided) {
+      // Delete existing pop-up questions
+      await query("DELETE FROM PopUpQuestion WHERE websiteId = ?", [
+        accessKeyRecord.websiteId,
+      ]);
+
+      // Insert new pop-up questions
+      for (const q of parsedPopUpQuestions) {
+        await query(
+          "INSERT INTO PopUpQuestion (question, websiteId) VALUES (?, ?)",
+          [q.question, accessKeyRecord.websiteId]
+        );
+      }
     }
 
     // Get the updated website
