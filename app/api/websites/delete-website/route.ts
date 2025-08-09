@@ -1,8 +1,8 @@
-import { PrismaClient } from "@prisma/client";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
+// Using mysql2 via lib/db
 
 export async function DELETE(request: Request) {
   try {
@@ -10,13 +10,11 @@ export async function DELETE(request: Request) {
     console.log(`Deleting website with ID: ${id}`);
 
     // First check if website has an active subscription
-    const website = await prisma.website.findUnique({
-      where: { id },
-      select: {
-        active: true,
-        plan: true,
-      },
-    });
+    const rows = (await query(
+      `SELECT active, plan FROM Website WHERE id = ? LIMIT 1`,
+      [id]
+    )) as { active: number; plan: string | null }[];
+    const website = rows.length > 0 ? rows[0] : null;
 
     // Only allow Free and Beta plans to be deleted
     if (website?.active) {
@@ -40,51 +38,18 @@ export async function DELETE(request: Request) {
 
     try {
       // First transaction: Delete dependent content
-      await prisma.$transaction(
-        async (tx) => {
-          // Delete PopUpQuestions first
-          await tx.popUpQuestion.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted PopUpQuestions");
-
-          // Delete AccessKeys
-          await tx.accessKey.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted AccessKeys");
-
-          // Delete AI related content
-          await tx.aiMessage.deleteMany({
-            where: {
-              thread: {
-                websiteId: id,
-              },
-            },
-          });
-          console.log("Deleted AI Messages");
-
-          await tx.aiThread.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted AI Threads");
-
-          // Delete Session data
-          await tx.session.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted Session data");
-
-          // Delete VectorDbConfig
-          await tx.vectorDbConfig.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted VectorDbConfig");
-        },
-        {
-          timeout: 20000, // 20 second timeout for first transaction
-        }
+      await query(`DELETE FROM PopUpQuestion WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM AccessKey WHERE websiteId = ?`, [id]);
+      await query(
+        `DELETE am FROM AiMessage am
+         JOIN AiThread at ON at.id = am.threadId
+         WHERE at.websiteId = ?`,
+        [id]
       );
+      await query(`DELETE FROM AiThread WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM Session WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM VectorDbConfig WHERE websiteId = ?`, [id]);
+      console.log("Deleted dependent content");
     } catch (err) {
       console.error("Error in first transaction (dependent content):", err);
       throw err;
@@ -92,94 +57,39 @@ export async function DELETE(request: Request) {
 
     try {
       // Second transaction: Delete Shopify content
-      await prisma.$transaction(
-        async (tx) => {
-          // Delete any remaining Shopify content
-          // Comments depend on blog posts
-          await tx.shopifyComment.deleteMany({
-            where: {
-              post: {
-                websiteId: id,
-              },
-            },
-          });
-          console.log("Deleted remaining Shopify comments");
-
-          await tx.shopifyBlogPost.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted remaining Shopify blog posts");
-
-          await tx.shopifyBlog.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted remaining Shopify blogs");
-
-          // Delete product-related content
-          await tx.shopifyReview.deleteMany({
-            where: {
-              product: {
-                websiteId: id,
-              },
-            },
-          });
-          console.log("Deleted remaining Shopify reviews");
-
-          await tx.shopifyMedia.deleteMany({
-            where: {
-              product: {
-                websiteId: id,
-              },
-            },
-          });
-          console.log("Deleted remaining Shopify media");
-
-          await tx.shopifyProductVariant.deleteMany({
-            where: {
-              product: {
-                websiteId: id,
-              },
-            },
-          });
-          console.log("Deleted remaining Shopify product variants");
-
-          // Delete ShopifyCollection (fix for constraint violation error)
-          await tx.shopifyCollection.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted Shopify collections");
-
-          await tx.shopifyProduct.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted remaining Shopify products");
-
-          await tx.shopifyDiscount.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted remaining Shopify discounts");
-
-          await tx.shopifyPage.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted remaining Shopify pages");
-
-          // Delete ShopifyMetafield
-          await tx.shopifyMetafield.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted Shopify metafields");
-
-          // Delete ShopifyReportLink
-          await tx.shopifyReportLink.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted Shopify report links");
-        },
-        {
-          timeout: 20000, // 20 second timeout for second transaction
-        }
+      await query(
+        `DELETE sc FROM ShopifyComment sc
+         JOIN ShopifyBlogPost sbp ON sbp.id = sc.postId
+         WHERE sbp.websiteId = ?`,
+        [id]
       );
+      await query(`DELETE FROM ShopifyBlogPost WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM ShopifyBlog WHERE websiteId = ?`, [id]);
+      await query(
+        `DELETE sr FROM ShopifyReview sr
+         JOIN ShopifyProduct sp ON sp.id = sr.productId
+         WHERE sp.websiteId = ?`,
+        [id]
+      );
+      await query(
+        `DELETE sm FROM ShopifyMedia sm
+         JOIN ShopifyProduct sp ON sp.id = sm.productId
+         WHERE sp.websiteId = ?`,
+        [id]
+      );
+      await query(
+        `DELETE spv FROM ShopifyProductVariant spv
+         JOIN ShopifyProduct sp ON sp.id = spv.productId
+         WHERE sp.websiteId = ?`,
+        [id]
+      );
+      await query(`DELETE FROM ShopifyCollection WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM ShopifyProduct WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM ShopifyDiscount WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM ShopifyPage WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM ShopifyMetafield WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM ShopifyReportLink WHERE websiteId = ?`, [id]);
+      console.log("Deleted Shopify content");
     } catch (err) {
       console.error("Error in second transaction (Shopify content):", err);
       throw err;
@@ -187,66 +97,27 @@ export async function DELETE(request: Request) {
 
     try {
       // Third transaction: Delete WordPress content
-      await prisma.$transaction(
-        async (tx) => {
-          // Get all posts and products
-          const posts = await tx.wordpressPost.findMany({
-            where: { websiteId: id },
-            select: { wpId: true },
-          });
-          const products = await tx.wordpressProduct.findMany({
-            where: { websiteId: id },
-            select: { wpId: true },
-          });
-
-          // First delete comments and reviews
-          await tx.wordpressComment.deleteMany({
-            where: {
-              postId: { in: posts.map((p) => p.wpId) },
-            },
-          });
-          console.log("Deleted WordPress comments");
-
-          await tx.wordpressReview.deleteMany({
-            where: {
-              productId: { in: products.map((p) => p.wpId) },
-            },
-          });
-          console.log("Deleted WordPress reviews");
-
-          // Delete custom fields
-          await tx.wordpressCustomField.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted WordPress custom fields");
-
-          // Delete categories, tags, media, authors
-          await tx.wordpressCategory.deleteMany({ where: { websiteId: id } });
-          console.log("Deleted WordPress categories");
-
-          await tx.wordpressTag.deleteMany({ where: { websiteId: id } });
-          console.log("Deleted WordPress tags");
-
-          await tx.wordpressMedia.deleteMany({ where: { websiteId: id } });
-          console.log("Deleted WordPress media");
-
-          await tx.wordpressAuthor.deleteMany({ where: { websiteId: id } });
-          console.log("Deleted WordPress authors");
-
-          // Now delete the main content
-          await tx.wordpressPost.deleteMany({ where: { websiteId: id } });
-          console.log("Deleted WordPress posts");
-
-          await tx.wordpressPage.deleteMany({ where: { websiteId: id } });
-          console.log("Deleted WordPress pages");
-
-          await tx.wordpressProduct.deleteMany({ where: { websiteId: id } });
-          console.log("Deleted WordPress products");
-        },
-        {
-          timeout: 20000, // 20 second timeout for WordPress content deletion
-        }
+      await query(
+        `DELETE wc FROM WordpressComment wc
+         JOIN WordpressPost wp ON wp.wpId = wc.postId
+         WHERE wp.websiteId = ?`,
+        [id]
       );
+      await query(
+        `DELETE wr FROM WordpressReview wr
+         JOIN WordpressProduct wpp ON wpp.wpId = wr.productId
+         WHERE wpp.websiteId = ?`,
+        [id]
+      );
+      await query(`DELETE FROM WordpressCustomField WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM WordpressCategory WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM WordpressTag WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM WordpressMedia WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM WordpressAuthor WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM WordpressPost WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM WordpressPage WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM WordpressProduct WHERE websiteId = ?`, [id]);
+      console.log("Deleted WordPress content");
     } catch (err) {
       console.error("Error in third transaction (WordPress content):", err);
       throw err;
@@ -254,40 +125,19 @@ export async function DELETE(request: Request) {
 
     try {
       // Final transaction: Delete the website itself
-      await prisma.$transaction(
-        async (tx) => {
-          // First update customers to remove default address references
-          await tx.shopifyCustomer.updateMany({
-            where: { websiteId: id },
-            data: { defaultAddressId: null },
-          });
-          console.log("Removed default address references from customers");
-
-          // Now delete addresses
-          await tx.shopifyCustomerAddress.deleteMany({
-            where: {
-              customer: {
-                websiteId: id,
-              },
-            },
-          });
-          console.log("Deleted Shopify customer addresses");
-
-          // Delete Shopify customers
-          await tx.shopifyCustomer.deleteMany({
-            where: { websiteId: id },
-          });
-          console.log("Deleted Shopify customers");
-
-          await tx.website.delete({
-            where: { id },
-          });
-          console.log("Website deleted successfully");
-        },
-        {
-          timeout: 15000, // 15 second timeout for final transaction
-        }
+      await query(
+        `UPDATE ShopifyCustomer SET defaultAddressId = NULL WHERE websiteId = ?`,
+        [id]
       );
+      await query(
+        `DELETE sca FROM ShopifyCustomerAddress sca
+         JOIN ShopifyCustomer sc ON sc.id = sca.customerId
+         WHERE sc.websiteId = ?`,
+        [id]
+      );
+      await query(`DELETE FROM ShopifyCustomer WHERE websiteId = ?`, [id]);
+      await query(`DELETE FROM Website WHERE id = ?`, [id]);
+      console.log("Website deleted successfully");
     } catch (err) {
       console.error("Error in final website deletion step:", err);
       throw err;

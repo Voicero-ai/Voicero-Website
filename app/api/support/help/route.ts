@@ -1,5 +1,5 @@
 import { NextResponse, NextRequest } from "next/server";
-import prisma from "@/lib/prisma";
+import { query } from "@/lib/db";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { cors } from "@/lib/cors";
 export const dynamic = "force-dynamic";
@@ -29,20 +29,16 @@ async function sendSupportNotificationEmail(
   try {
     // Get the message details
     console.log(`[SUPPORT_EMAIL] Fetching message details from database`);
-    const message = await prisma.aiMessage.findUnique({
-      where: { id: messageId },
-      include: {
-        thread: {
-          include: {
-            messages: {
-              orderBy: {
-                createdAt: "asc",
-              },
-            },
-          },
-        },
-      },
-    });
+    // Fetch message and full thread history
+    const messageRows = (await query(
+      `SELECT m.*, t.id as threadId
+       FROM AiMessage m
+       JOIN AiThread t ON t.id = m.threadId
+       WHERE m.id = ?
+       LIMIT 1`,
+      [messageId]
+    )) as any[];
+    const message = messageRows[0];
 
     if (!message) {
       console.log(`[SUPPORT_EMAIL] Message not found: ${messageId}`);
@@ -53,10 +49,18 @@ async function sendSupportNotificationEmail(
       `[SUPPORT_EMAIL] Found message and thread data. Thread has ${message.thread.messages.length} messages`
     );
 
-    const messageHistory = message.thread.messages
+    const threadMessages = (await query(
+      `SELECT role, content, createdAt
+       FROM AiMessage
+       WHERE threadId = ?
+       ORDER BY createdAt ASC`,
+      [message.threadId]
+    )) as any[];
+
+    const messageHistory = threadMessages
       .map(
         (msg) =>
-          `[${msg.role.toUpperCase()}] ${new Date(
+          `[${String(msg.role).toUpperCase()}] ${new Date(
             msg.createdAt
           ).toLocaleString()}\n${msg.content}\n`
       )
@@ -169,12 +173,11 @@ export async function POST(request: NextRequest) {
     console.log(
       `[SUPPORT_HELP_POST] Creating support record for thread: ${threadId}, message: ${messageId}`
     );
-    const support = await prisma.support.create({
-      data: {
-        threadId,
-        messageId,
-      },
-    });
+    await query(
+      `INSERT INTO Support (id, threadId, messageId, createdAt) VALUES (UUID(), ?, ?, NOW())`,
+      [threadId, messageId]
+    );
+    const support = { threadId, messageId } as any;
     console.log(
       `[SUPPORT_HELP_POST] Created support record:`,
       JSON.stringify(support)

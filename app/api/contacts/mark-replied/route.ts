@@ -1,9 +1,23 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
+
+// Define types
+interface Contact {
+  id: string;
+  email: string;
+  message: string;
+  read: boolean;
+  replied: boolean;
+  threadId: string;
+  createdAt: Date;
+  userId: string;
+  websiteId: string;
+  reminded: boolean;
+}
 
 export async function POST(request: Request) {
   try {
@@ -25,29 +39,28 @@ export async function POST(request: Request) {
     }
 
     // Check if contact belongs to the user
-    const contact = await prisma.contact.findUnique({
-      where: {
-        id: contactId,
-        userId,
-      },
-    });
+    const contacts = (await query(
+      "SELECT * FROM Contact WHERE id = ? AND userId = ?",
+      [contactId, userId]
+    )) as Contact[];
 
-    if (!contact) {
+    if (contacts.length === 0) {
       return NextResponse.json({ error: "Contact not found" }, { status: 404 });
     }
 
     // Mark contact as replied and read
-    const updatedContact = await prisma.contact.update({
-      where: {
-        id: contactId,
-      },
-      data: {
-        replied: true,
-        read: true,
-      },
-    });
+    await query("UPDATE Contact SET replied = ?, `read` = ? WHERE id = ?", [
+      true,
+      true,
+      contactId,
+    ]);
 
-    return NextResponse.json(updatedContact);
+    // Get the updated contact
+    const updatedContacts = (await query("SELECT * FROM Contact WHERE id = ?", [
+      contactId,
+    ])) as Contact[];
+
+    return NextResponse.json(updatedContacts[0]);
   } catch (error) {
     console.error("Error marking contact as replied:", error);
     return NextResponse.json(

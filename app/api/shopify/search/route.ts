@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { query } from "../../../../lib/db";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { Client } from "@opensearch-project/opensearch";
@@ -7,7 +7,11 @@ import { cors } from "../../../../lib/cors";
 import OpenAI from "openai";
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
+interface Website {
+  id: string;
+  url: string;
+}
+
 const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY!,
 });
@@ -153,16 +157,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Get website details
-    const website = await prisma.website.findUnique({
-      where: { id: websiteId },
-    });
+    const websites = (await query("SELECT id, url FROM Website WHERE id = ?", [
+      websiteId,
+    ])) as Website[];
 
-    if (!website) {
+    if (websites.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
+
+    const website = websites[0];
 
     // Initialize embeddings
     const embeddings = new OpenAIEmbeddings({

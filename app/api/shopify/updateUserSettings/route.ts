@@ -1,8 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { cors } from "../../../../lib/cors";
+import { query } from "../../../../lib/db";
+
 export const dynamic = "force-dynamic";
-const prisma = new PrismaClient();
+
+interface AccessKey {
+  id: string;
+  key: string;
+  websiteId: string;
+}
+
+interface Website {
+  id: string;
+  userId: string;
+}
+
+interface User {
+  id: string;
+  name: string | null;
+  username: string;
+  email: string;
+}
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -63,21 +81,19 @@ export async function POST(request: NextRequest) {
     }
 
     // First find the website ID using the access key
-    const accessKeyRecord = await prisma.accessKey.findUnique({
-      where: {
-        key: accessKey,
-      },
-      select: {
-        websiteId: true,
-      },
-    });
+    const accessKeys = (await query(
+      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
+      [accessKey]
+    )) as AccessKey[];
 
-    if (!accessKeyRecord) {
+    if (accessKeys.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Invalid access key" }, { status: 401 })
       );
     }
+
+    const accessKeyRecord = accessKeys[0];
 
     // Verify the website matches the one from the access key
     if (accessKeyRecord.websiteId !== websiteId) {
@@ -91,40 +107,46 @@ export async function POST(request: NextRequest) {
     }
 
     // Find the website and its associated user
-    const website = await prisma.website.findUnique({
-      where: {
-        id: websiteId,
-      },
-      select: {
-        userId: true,
-      },
-    });
+    const websites = (await query("SELECT userId FROM Website WHERE id = ?", [
+      websiteId,
+    ])) as Website[];
 
-    if (!website) {
+    if (websites.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
 
-    // Prepare update data
-    const updateData: any = {};
-    if (name) updateData.name = name;
-    if (email) updateData.email = email;
-    if (username) updateData.username = username;
+    const website = websites[0];
+
+    // Prepare update data fields and values
+    const updateFields = [];
+    const updateValues = [];
+
+    if (name) {
+      updateFields.push("name = ?");
+      updateValues.push(name);
+    }
+
+    if (email) {
+      updateFields.push("email = ?");
+      updateValues.push(email);
+    }
+
+    if (username) {
+      updateFields.push("username = ?");
+      updateValues.push(username);
+    }
 
     // If email is being updated, check if it's already in use
     if (email) {
-      const existingUser = await prisma.user.findUnique({
-        where: {
-          email: email,
-        },
-        select: {
-          id: true,
-        },
-      });
+      const existingUsers = (await query(
+        "SELECT id FROM User WHERE email = ?",
+        [email]
+      )) as { id: string }[];
 
-      if (existingUser && existingUser.id !== website.userId) {
+      if (existingUsers.length > 0 && existingUsers[0].id !== website.userId) {
         return cors(
           request,
           NextResponse.json(
@@ -137,16 +159,12 @@ export async function POST(request: NextRequest) {
 
     // If username is being updated, check if it's already in use
     if (username) {
-      const existingUser = await prisma.user.findUnique({
-        where: {
-          username: username,
-        },
-        select: {
-          id: true,
-        },
-      });
+      const existingUsers = (await query(
+        "SELECT id FROM User WHERE username = ?",
+        [username]
+      )) as { id: string }[];
 
-      if (existingUser && existingUser.id !== website.userId) {
+      if (existingUsers.length > 0 && existingUsers[0].id !== website.userId) {
         return cors(
           request,
           NextResponse.json(
@@ -158,25 +176,25 @@ export async function POST(request: NextRequest) {
     }
 
     // Update the user
-    const updatedUser = await prisma.user.update({
-      where: {
-        id: website.userId,
-      },
-      data: updateData,
-      select: {
-        id: true,
-        name: true,
-        username: true,
-        email: true,
-      },
-    });
+    if (updateFields.length > 0) {
+      await query(`UPDATE User SET ${updateFields.join(", ")} WHERE id = ?`, [
+        ...updateValues,
+        website.userId,
+      ]);
+    }
+
+    // Get the updated user
+    const updatedUsers = (await query(
+      "SELECT id, name, username, email FROM User WHERE id = ?",
+      [website.userId]
+    )) as User[];
 
     return cors(
       request,
       NextResponse.json({
         success: true,
         message: "User settings updated successfully",
-        user: updatedUser,
+        user: updatedUsers[0],
       })
     );
   } catch (error) {

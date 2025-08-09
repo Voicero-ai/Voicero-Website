@@ -1,9 +1,20 @@
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/auth";
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
+
+interface PopUpQuestion {
+  id: string;
+  question: string;
+  websiteId: string;
+}
+
+interface Website {
+  id: string;
+  userId: string;
+}
 
 export async function POST(req: Request) {
   try {
@@ -15,19 +26,15 @@ export async function POST(req: Request) {
     const { questionId, question } = await req.json();
 
     // Verify user owns the website this question belongs to
-    const existingQuestion = await prisma.popUpQuestion.findFirst({
-      where: {
-        id: questionId,
-        Website: {
-          userId: session.user.id,
-        },
-      },
-      include: {
-        Website: true,
-      },
-    });
+    const questions = (await query(
+      `SELECT q.*, w.userId 
+       FROM PopUpQuestion q 
+       JOIN Website w ON q.websiteId = w.id 
+       WHERE q.id = ? AND w.userId = ?`,
+      [questionId, session.user.id]
+    )) as (PopUpQuestion & { userId: string })[];
 
-    if (!existingQuestion) {
+    if (questions.length === 0) {
       return NextResponse.json(
         { error: "Question not found" },
         { status: 404 }
@@ -35,12 +42,18 @@ export async function POST(req: Request) {
     }
 
     // Update question
-    const updatedQuestion = await prisma.popUpQuestion.update({
-      where: { id: questionId },
-      data: { question },
-    });
+    await query("UPDATE PopUpQuestion SET question = ? WHERE id = ?", [
+      question,
+      questionId,
+    ]);
 
-    return NextResponse.json(updatedQuestion);
+    // Get updated question
+    const updatedQuestions = (await query(
+      "SELECT * FROM PopUpQuestion WHERE id = ?",
+      [questionId]
+    )) as PopUpQuestion[];
+
+    return NextResponse.json(updatedQuestions[0]);
   } catch (error) {
     console.error("Error updating question:", error);
     return NextResponse.json(

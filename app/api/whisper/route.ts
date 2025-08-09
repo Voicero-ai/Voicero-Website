@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { cors } from "../../../lib/cors";
 import { NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +14,6 @@ console.log("Environment check:", {
   accessKeyStart: process.env.ACCESS_KEY?.substring(0, 5),
 });
 
-const prisma = new PrismaClient();
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -53,15 +52,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Find the website associated with this access key
-    const website = await prisma.website.findFirst({
-      where: {
-        accessKeys: {
-          some: {
-            key: accessKey,
-          },
-        },
-      },
-    });
+    const websiteRows = (await query(
+      `SELECT w.* FROM Website w
+       JOIN AccessKey ak ON ak.websiteId = w.id
+       WHERE ak.key = ?
+       LIMIT 1`,
+      [accessKey]
+    )) as any[];
+    const website = websiteRows[0];
 
     console.log("Website found:", website ? "yes" : "no"); // Debug log
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import prisma from "../../../lib/prisma";
 import { authOptions } from "../../../lib/auth";
+import { query } from "../../../lib/db";
 export const dynamic = "force-dynamic";
 
 interface WebsiteWithCounts {
@@ -32,6 +32,10 @@ interface TransformedWebsite extends Omit<WebsiteWithCounts, "_count"> {
   status: "active" | "inactive";
 }
 
+interface CountResult {
+  count: number;
+}
+
 export async function GET() {
   try {
     const session = await getServerSession(authOptions);
@@ -40,17 +44,66 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const websites = await prisma.website.findMany({
-      where: {
-        userId: session.user.id,
-      },
-      include: {
-        _count: true,
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
+    // Get all websites for the user
+    const websites = (await query(
+      "SELECT * FROM Website WHERE userId = ? ORDER BY createdAt DESC",
+      [session.user.id]
+    )) as any[];
+
+    // For each website, get the counts of related items
+    for (const website of websites) {
+      website._count = {};
+
+      if (website.type === "WordPress") {
+        // Get WordPress counts
+        const [products, posts, pages] = await Promise.all([
+          query(
+            "SELECT COUNT(*) as count FROM WordpressProduct WHERE websiteId = ?",
+            [website.id]
+          ),
+          query(
+            "SELECT COUNT(*) as count FROM WordpressPost WHERE websiteId = ?",
+            [website.id]
+          ),
+          query(
+            "SELECT COUNT(*) as count FROM WordpressPage WHERE websiteId = ?",
+            [website.id]
+          ),
+        ]);
+
+        const productsResult = products as CountResult[];
+        const postsResult = posts as CountResult[];
+        const pagesResult = pages as CountResult[];
+
+        website._count.products = productsResult[0]?.count || 0;
+        website._count.posts = postsResult[0]?.count || 0;
+        website._count.pages = pagesResult[0]?.count || 0;
+      } else {
+        // Get Shopify counts
+        const [products, blogs, pages] = await Promise.all([
+          query(
+            "SELECT COUNT(*) as count FROM ShopifyProduct WHERE websiteId = ?",
+            [website.id]
+          ),
+          query(
+            "SELECT COUNT(*) as count FROM ShopifyBlog WHERE websiteId = ?",
+            [website.id]
+          ),
+          query(
+            "SELECT COUNT(*) as count FROM ShopifyPage WHERE websiteId = ?",
+            [website.id]
+          ),
+        ]);
+
+        const productsResult = products as CountResult[];
+        const blogsResult = blogs as CountResult[];
+        const pagesResult = pages as CountResult[];
+
+        website._count.shopifyProducts = productsResult[0]?.count || 0;
+        website._count.shopifyBlog = blogsResult[0]?.count || 0;
+        website._count.shopifyPages = pagesResult[0]?.count || 0;
+      }
+    }
 
     const transformedWebsites: TransformedWebsite[] = websites.map(
       (website) => ({

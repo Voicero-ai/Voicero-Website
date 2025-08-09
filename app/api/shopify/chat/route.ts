@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient, AiThread, AiMessage } from "@prisma/client";
+import { AiThread, AiMessage } from "@prisma/client";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { Client } from "@opensearch-project/opensearch";
 import { cors } from "../../../../lib/cors";
 import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
 import {
   FINAL_MAIN_PROMPT,
   MAIN_PROMPT,
@@ -25,8 +24,13 @@ import {
   PURCHASE_PROMPT,
   RETURN_ORDERS_PROMPT,
 } from "@/lib/systemPrompts";
+import {
+  normalizeReturnReason,
+  coerceReturnReasonNote,
+  ALLOWED_RETURN_REASONS,
+} from "@/lib/returns";
 import Stripe from "stripe";
-import prisma from "@/lib/prisma"; // Import the default export from prisma.ts
+import { query } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 // Use the imported prisma client instead of creating a new one
@@ -34,9 +38,6 @@ const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY!,
 });
 const openai = new OpenAI();
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-});
 
 // Initialize OpenSearch client
 const opensearch = new Client({
@@ -56,12 +57,11 @@ async function isFirstUserMessageInThread(threadId: string): Promise<boolean> {
     `🔍 isFirstUserMessageInThread - Checking messages for thread ID: ${threadId}`
   );
 
-  const existingUserMessages = await prisma.aiMessage.count({
-    where: {
-      threadId: threadId,
-      role: "user",
-    },
-  });
+  const countRows = (await query(
+    `SELECT COUNT(*) as cnt FROM AiMessage WHERE threadId = ? AND role = 'user'`,
+    [threadId]
+  )) as { cnt: number }[];
+  const existingUserMessages = countRows[0]?.cnt ?? 0;
 
   console.log(
     `🔍 isFirstUserMessageInThread - Found ${existingUserMessages} existing user messages`
@@ -590,6 +590,15 @@ When a user asks a question, you must respond with a JSON object containing ONLY
 
 Your task is to FOCUS EXCLUSIVELY on determining what ACTION should be taken, not what the question is about.
 
+  MINIMAL ACTIONS POLICY (VERY IMPORTANT):
+  - Default to "none" unless there is an EXPLICIT user request or a clearly necessary multi-step flow.
+  - Prefer simple, friendly answers without actions for basic informational questions.
+  - Only use UI actions when the user clearly asks you to do something (e.g., "highlight", "scroll", "show me", "take me", "go to", "open", "click", "add to cart", "buy", "log in", "log out", "track", "return", "cancel", "exchange").
+  - Do NOT use "scroll" or "highlight_text" unless the user explicitly asks to find/locate/show something on THIS page, or says "where on this page...". Otherwise choose "none".
+  - Use "redirect" ONLY when the user explicitly asks to navigate (e.g., "take me to", "show me the refund policy", "open my orders"). Otherwise choose "none".
+  - Use "purchase" ONLY when the user explicitly asks to buy/add to cart.
+  - Preserve ongoing flows (orders/account/forms) when the user is providing requested details (see continuity rules below).
+
 CONVERSATIONAL CONTEXT AND ACTION CONTINUITY (EXTREMELY CRITICAL):
 - ALWAYS thoroughly analyze the ENTIRE conversation history for context, not just the current message
 - You MUST maintain continuity of user intentions across multiple messages
@@ -613,21 +622,17 @@ CONVERSATIONAL CONTEXT AND ACTION CONTINUITY (EXTREMELY CRITICAL):
 - This action continuity is EXTREMELY important as breaking it creates a poor user experience
 - NEVER lose context between messages in a conversation flow
 
-CRITICAL CLASSIFICATION PRIORITIES:
-1. If the question has the answer on the main content of the page then use "on-page" category
- - then use "highlight_text" or "scroll" action_intent to help the user find the information they need
- - make sure when highlighting or scrolling that you are using the correct exact text from the page data
- - smaller chunks of text are better than larger chunks when inputting it
+  CRITICAL CLASSIFICATION PRIORITIES:
+  1. If the answer is on the current page, ONLY use "highlight_text" or "scroll" when the user explicitly asks you to find/locate/show the information on the page. Otherwise prefer action_intent="none" and reply simply.
+   - When you do highlight/scroll, use exact text from page data and keep the text very short.
 
 CATEGORY AND ACTION INTENT RULES (CRITICAL):
- - For "discovery" category (when answer isn't on current page):
-   * ONLY use "redirect" action_intent - NEVER use "scroll" or "highlight_text"
-   * Use "redirect" to send the user to a page where the answer can be found
-   * If no appropriate URL is available, use "none" action_intent with a helpful response
- - For "on-page" category (when answer is on current page):
-   * Use "scroll" or "highlight_text" action_intent to help users find information
-   * NEVER use "redirect" action_intent for "on-page" category
- - This category-action pairing is MANDATORY - violating it will result in navigation errors
+   - For "discovery" category (when answer isn't on current page):
+     * Consider "redirect" only if the user explicitly asks to navigate; otherwise prefer "none".
+     * NEVER use "scroll" or "highlight_text" for discovery.
+   - For "on-page" category (when answer is on current page):
+     * ONLY use "scroll" or "highlight_text" when explicitly requested; otherwise prefer "none".
+     * NEVER use "redirect" for purely on-page answers.
 
 SCROLL AND HIGHLIGHT TEXT RULES (CRITICAL):
  - When selecting text for highlighting or scrolling:
@@ -726,7 +731,7 @@ GET_ORDERS vs TRACK_ORDER vs ORDER ACTIONS:
       await Promise.all([
         // Content classifier - focuses on what the question is about
         openai.chat.completions.create({
-          model: "gpt-4.1-mini",
+          model: "gpt-5-mini",
           messages: [
             { role: "system", content: CONTENT_CLASSIFIER_PROMPT },
             {
@@ -740,12 +745,11 @@ GET_ORDERS vs TRACK_ORDER vs ORDER ACTIONS:
                 : enhancedQuestion,
             },
           ],
-          temperature: 0,
         }),
 
         // Action classifier - focuses on what action should be taken
         openai.chat.completions.create({
-          model: "gpt-4.1-mini",
+          model: "gpt-5-mini",
           messages: [
             { role: "system", content: ACTION_CLASSIFIER_PROMPT },
             {
@@ -763,7 +767,6 @@ GET_ORDERS vs TRACK_ORDER vs ORDER ACTIONS:
                   )}`,
             },
           ],
-          temperature: 0,
         }),
       ]);
 
@@ -2388,6 +2391,8 @@ export async function POST(request: NextRequest) {
     type: "text" | "voice";
     interactionType?: string;
     pastContext?: PreviousContext[];
+    previousResponseId?: string;
+    responseId?: string;
     currentPageUrl?: string;
     pageData?: {
       url: string;
@@ -2436,6 +2441,8 @@ export async function POST(request: NextRequest) {
       threadId,
       type,
       pastContext,
+      previousResponseId,
+      responseId,
       currentPageUrl,
       pageData,
       interactionType,
@@ -2469,67 +2476,34 @@ export async function POST(request: NextRequest) {
     // Get website either by ID or access key with plan, query info, and auto-allow settings
     try {
       if (websiteId) {
-        website = await prisma.website.findUnique({
-          where: { id: websiteId },
-          select: {
-            id: true,
-            url: true,
-            plan: true,
-            monthlyQueries: true,
-            customInstructions: true,
-            allowAutoCancel: true,
-            allowAutoReturn: true,
-            allowAutoExchange: true,
-            allowAutoClick: true,
-            allowAutoScroll: true,
-            allowAutoHighlight: true,
-            allowAutoRedirect: true,
-            allowAutoGetUserOrders: true,
-            allowAutoUpdateUserInfo: true,
-            allowAutoFillForm: true,
-            allowAutoTrackOrder: true,
-            allowAutoLogout: true,
-            allowAutoLogin: true,
-            allowAutoGenerateImage: true,
-            newAiSynced: true,
-            stripeSubscriptionId: true,
-            stripeSubscriptionItemId: true,
-          },
-        });
+        const rows = (await query(
+          `SELECT id, url, plan, monthlyQueries, customInstructions,
+                  allowAutoCancel, allowAutoReturn, allowAutoExchange,
+                  allowAutoClick, allowAutoScroll, allowAutoHighlight,
+                  allowAutoRedirect, allowAutoGetUserOrders, allowAutoUpdateUserInfo,
+                  allowAutoFillForm, allowAutoTrackOrder, allowAutoLogout,
+                  allowAutoLogin, allowAutoGenerateImage, newAiSynced,
+                  stripeSubscriptionId, stripeSubscriptionItemId
+           FROM Website WHERE id = ? LIMIT 1`,
+          [websiteId]
+        )) as any[];
+        website = rows[0];
       } else if (accessKey) {
-        website = await prisma.website.findFirst({
-          where: {
-            accessKeys: {
-              some: {
-                key: accessKey,
-              },
-            },
-          },
-          select: {
-            id: true,
-            url: true,
-            plan: true,
-            monthlyQueries: true,
-            customInstructions: true,
-            allowAutoCancel: true,
-            allowAutoReturn: true,
-            allowAutoExchange: true,
-            allowAutoClick: true,
-            allowAutoScroll: true,
-            allowAutoHighlight: true,
-            allowAutoRedirect: true,
-            allowAutoGetUserOrders: true,
-            allowAutoUpdateUserInfo: true,
-            allowAutoFillForm: true,
-            allowAutoTrackOrder: true,
-            allowAutoLogout: true,
-            allowAutoLogin: true,
-            allowAutoGenerateImage: true,
-            newAiSynced: true,
-            stripeSubscriptionId: true,
-            stripeSubscriptionItemId: true,
-          },
-        });
+        const rows = (await query(
+          `SELECT w.id, w.url, w.plan, w.monthlyQueries, w.customInstructions,
+                  w.allowAutoCancel, w.allowAutoReturn, w.allowAutoExchange,
+                  w.allowAutoClick, w.allowAutoScroll, w.allowAutoHighlight,
+                  w.allowAutoRedirect, w.allowAutoGetUserOrders, w.allowAutoUpdateUserInfo,
+                  w.allowAutoFillForm, w.allowAutoTrackOrder, w.allowAutoLogout,
+                  w.allowAutoLogin, w.allowAutoGenerateImage, w.newAiSynced,
+                  w.stripeSubscriptionId, w.stripeSubscriptionItemId
+           FROM Website w
+           JOIN AccessKey ak ON ak.websiteId = w.id
+           WHERE ak.key = ?
+           LIMIT 1`,
+          [accessKey]
+        )) as any[];
+        website = rows[0];
       }
     } catch (error) {
       console.error("Database connection error:", error);
@@ -2553,6 +2527,20 @@ export async function POST(request: NextRequest) {
           { status: 404 }
         )
       );
+    }
+
+    // Diagnostic: log auto-action flags to verify runtime values
+    try {
+      console.log("Website auto flags:", {
+        id: (website as any).id,
+        url: (website as any).url,
+        plan: (website as any).plan,
+        allowAutoReturn: (website as any).allowAutoReturn,
+        allowAutoExchange: (website as any).allowAutoExchange,
+        allowAutoCancel: (website as any).allowAutoCancel,
+      });
+    } catch (e) {
+      console.warn("Failed to log website auto flags", e);
     }
 
     // Billing will be handled after thread creation (helper function moved to top level)
@@ -2594,13 +2582,10 @@ export async function POST(request: NextRequest) {
               );
 
               // Update website with Enterprise plan and subscription item ID
-              await prisma.website.update({
-                where: { id: website.id },
-                data: {
-                  plan: "Enterprise",
-                  stripeSubscriptionItemId: updated.items.data[0].id,
-                },
-              });
+              await query(
+                `UPDATE Website SET plan = 'Enterprise', stripeSubscriptionItemId = ? WHERE id = ?`,
+                [updated.items.data[0].id, website.id]
+              );
 
               // Update the website object in memory so rest of request processing works
               website.plan = "Enterprise";
@@ -2704,22 +2689,12 @@ export async function POST(request: NextRequest) {
       message.toLowerCase().includes("generate") &&
       message.toLowerCase().includes("image");
 
-    // Convert return, exchange, and refund to contact actions
-    if (
-      messageHasReturnOrder ||
-      messageHasExchangeOrder ||
-      messageHasRefundRequest
-    ) {
-      let actionType = "return";
-      if (messageHasExchangeOrder) {
-        actionType = "exchange";
-      } else if (messageHasRefundRequest) {
-        actionType = "refund";
-      }
-
+    // Only convert refund requests to contact (per prompt rules)
+    if (messageHasRefundRequest) {
       const response = {
         action: "contact",
-        answer: `I'll connect you with our customer service team who can help process your ${actionType} request. Could you provide your order number and any relevant details?`,
+        answer:
+          "I'll connect you with our customer service team to process your refund request. Could you provide your order number and any relevant details?",
         category: "discovery",
         pageId: "chat",
         pageTitle: "Chat",
@@ -2730,7 +2705,7 @@ export async function POST(request: NextRequest) {
         url: website.url,
         action_context: {
           contact_help_form: true,
-          message: `User is requesting to ${actionType} an order.`,
+          message: `User is requesting a refund for an order.`,
         },
       };
 
@@ -2914,14 +2889,10 @@ export async function POST(request: NextRequest) {
 
           // Update website with Enterprise plan and subscription item ID
           // Do NOT reset monthlyQueries - keep tracking them for analytics
-          await prisma.website.update({
-            where: { id: website.id },
-            data: {
-              plan: "Enterprise",
-              stripeSubscriptionItemId: updated.items.data[0].id,
-              queryLimit: 0, // Set queryLimit to 0 for unlimited usage
-            },
-          });
+          await query(
+            `UPDATE Website SET plan = 'Enterprise', stripeSubscriptionItemId = ?, queryLimit = 0 WHERE id = ?`,
+            [updated.items.data[0].id, website.id]
+          );
 
           // Update the website object in memory to reflect the changes
           website.plan = "Enterprise";
@@ -2940,33 +2911,50 @@ export async function POST(request: NextRequest) {
       console.log(`Website ID: ${website.id}`);
 
       // First try to find by direct query to debug
-      const threadById = await prisma.aiThread.findFirst({
-        where: { id: threadId },
-      });
+      const threadByIdRows = (await query(
+        `SELECT id FROM AiThread WHERE id = ? LIMIT 1`,
+        [threadId]
+      )) as { id: string }[];
+      const threadById = threadByIdRows.length > 0 ? threadByIdRows[0] : null;
       console.log(`Thread found by id: ${threadById ? "YES" : "NO"}`);
 
-      const threadByThreadId = await prisma.aiThread.findFirst({
-        where: { threadId: threadId },
-      });
+      const threadByThreadIdRows = (await query(
+        `SELECT id, threadId FROM AiThread WHERE threadId = ? LIMIT 1`,
+        [threadId]
+      )) as { id: string; threadId: string }[];
+      const threadByThreadId =
+        threadByThreadIdRows.length > 0 ? threadByThreadIdRows[0] : null;
       console.log(
         `Thread found by threadId: ${threadByThreadId ? "YES" : "NO"}`
       );
 
       // Now try the combined query
-      aiThread = (await prisma.aiThread.findFirst({
-        where: {
-          OR: [{ id: threadId }, { threadId: threadId }],
-          websiteId: website.id,
-        },
-        include: {
-          messages: {
-            orderBy: {
-              createdAt: "desc",
-            },
-            take: 4, // Get last 4 messages for context
-          },
-        },
-      })) as ThreadWithMessages;
+      const aiThreadRows = (await query(
+        `SELECT id, threadId, websiteId, title, createdAt, lastMessageAt
+         FROM AiThread
+         WHERE (id = ? OR threadId = ?) AND websiteId = ?
+         LIMIT 1`,
+        [threadId, threadId, website.id]
+      )) as any[];
+      const baseThread = aiThreadRows[0];
+      let messages: any[] = [];
+      if (baseThread) {
+        messages = (await query(
+          `SELECT id, threadId, role, content, pageUrl, scrollToText, createdAt, type
+           FROM AiMessage
+           WHERE threadId = ?
+           ORDER BY createdAt DESC
+           LIMIT 4`,
+          [baseThread.id]
+        )) as any[];
+        aiThread = {
+          ...baseThread,
+          title: baseThread.title ?? null,
+          messages,
+        } as ThreadWithMessages;
+      } else {
+        aiThread = undefined as any;
+      }
 
       console.log(`Combined query found thread: ${aiThread ? "YES" : "NO"}`);
       if (aiThread) {
@@ -2981,19 +2969,21 @@ export async function POST(request: NextRequest) {
 
         // Create new thread with a new UUID for id and the provided threadId
         try {
-          aiThread = (await prisma.aiThread.create({
-            data: {
-              id: crypto.randomUUID(),
-              threadId: threadId,
-              websiteId: website.id,
-              messages: {
-                create: [], // Empty array for new thread
-              },
-            },
-            include: {
-              messages: true,
-            },
-          })) as ThreadWithMessages;
+          const newId = crypto.randomUUID();
+          await query(
+            `INSERT INTO AiThread (id, threadId, websiteId, createdAt, lastMessageAt)
+             VALUES (?, ?, ?, NOW(), NOW())`,
+            [newId, threadId, website.id]
+          );
+          aiThread = {
+            id: newId,
+            threadId,
+            websiteId: website.id,
+            title: null,
+            createdAt: new Date(),
+            lastMessageAt: new Date(),
+            messages: [],
+          } as ThreadWithMessages;
           console.log(
             `Created new thread with ID: ${aiThread.id} and ThreadId: ${aiThread.threadId}`
           );
@@ -3010,18 +3000,22 @@ export async function POST(request: NextRequest) {
       }
     } else {
       // Create new thread
-      aiThread = (await prisma.aiThread.create({
-        data: {
-          threadId: crypto.randomUUID(),
-          websiteId: website.id,
-          messages: {
-            create: [], // Empty array for new thread
-          },
-        },
-        include: {
-          messages: true,
-        },
-      })) as ThreadWithMessages;
+      const newId = crypto.randomUUID();
+      const newThreadId = crypto.randomUUID();
+      await query(
+        `INSERT INTO AiThread (id, threadId, websiteId, createdAt, lastMessageAt)
+         VALUES (?, ?, ?, NOW(), NOW())`,
+        [newId, newThreadId, website.id]
+      );
+      aiThread = {
+        id: newId,
+        threadId: newThreadId,
+        websiteId: website.id,
+        title: null,
+        createdAt: new Date(),
+        lastMessageAt: new Date(),
+        messages: [],
+      } as ThreadWithMessages;
     }
 
     // Per-thread billing: Check if this is the first user message in the thread
@@ -3042,12 +3036,12 @@ export async function POST(request: NextRequest) {
         console.log(
           `🔍 Billing Debug - About to increment monthly queries for Beta plan`
         );
-        const updatedWebsite = await prisma.website.update({
-          where: { id: website.id },
-          data: { monthlyQueries: { increment: 1 } },
-        });
+        await query(
+          `UPDATE Website SET monthlyQueries = monthlyQueries + 1 WHERE id = ?`,
+          [website.id]
+        );
         console.log(
-          `🔍 Billing Debug - After update, monthly queries: ${updatedWebsite.monthlyQueries}`
+          `🔍 Billing Debug - After update, incremented monthly queries`
         );
         shouldBillForStripe = true;
         console.log(
@@ -3064,12 +3058,12 @@ export async function POST(request: NextRequest) {
         console.log(
           `🔍 Billing Debug - About to increment monthly queries for ${website.plan} plan`
         );
-        const updatedWebsite = await prisma.website.update({
-          where: { id: website.id },
-          data: { monthlyQueries: { increment: 1 } },
-        });
+        await query(
+          `UPDATE Website SET monthlyQueries = monthlyQueries + 1 WHERE id = ?`,
+          [website.id]
+        );
         console.log(
-          `🔍 Billing Debug - After update, monthly queries: ${updatedWebsite.monthlyQueries}`
+          `🔍 Billing Debug - After update, incremented monthly queries`
         );
         shouldBillForStripe = true;
         console.log(
@@ -3105,11 +3099,23 @@ export async function POST(request: NextRequest) {
         );
         const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-        // Get user ID for customer mapping
-        const user = await prisma.user.findFirst({
-          where: { id: website.userId },
-          select: { id: true, stripeCustomerId: true, email: true },
-        });
+        // Get user for customer mapping (guard against undefined website.userId)
+        let user: {
+          id: string;
+          stripeCustomerId: string | null;
+          email: string;
+        } | null = null;
+        if (website.userId) {
+          const userRows = (await query(
+            `SELECT id, stripeCustomerId, email FROM User WHERE id = ? LIMIT 1`,
+            [website.userId]
+          )) as {
+            id: string;
+            stripeCustomerId: string | null;
+            email: string;
+          }[];
+          user = userRows.length > 0 ? userRows[0] : null;
+        }
 
         let stripeCustomerId = user?.stripeCustomerId;
 
@@ -3128,10 +3134,11 @@ export async function POST(request: NextRequest) {
                   ? subscription.customer
                   : subscription.customer.id;
               console.log(
-                `🔍 Stripe Debug - Found customer ID from subscription: ${stripeCustomerId.substring(
-                  0,
-                  8
-                )}...`
+                `🔍 Stripe Debug - Found customer ID from subscription: ${
+                  typeof stripeCustomerId === "string"
+                    ? stripeCustomerId.substring(0, 8)
+                    : "unknown"
+                }...`
               );
             }
           } catch (error) {
@@ -3144,7 +3151,7 @@ export async function POST(request: NextRequest) {
           const meterEvent = await stripe.billing.meterEvents.create({
             event_name: "api_requests", // EXACTLY the meter name configured in your Stripe Dashboard
             payload: {
-              stripe_customer_id: stripeCustomerId,
+              stripe_customer_id: stripeCustomerId as string,
               value: "1", // Quantity of usage to record
             },
             timestamp: Math.floor(Date.now() / 1000), // Unix timestamp in seconds
@@ -3160,10 +3167,10 @@ export async function POST(request: NextRequest) {
             console.log(
               `🔍 Stripe Debug - Updating user with stripeCustomerId`
             );
-            await prisma.user.update({
-              where: { id: user.id },
-              data: { stripeCustomerId },
-            });
+            await query(`UPDATE User SET stripeCustomerId = ? WHERE id = ?`, [
+              stripeCustomerId,
+              user.id,
+            ]);
           }
         } else {
           console.log(
@@ -3180,10 +3187,11 @@ export async function POST(request: NextRequest) {
         );
         const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
         // Get user ID for customer mapping
-        const user = await prisma.user.findFirst({
-          where: { id: website.userId },
-          select: { id: true, stripeCustomerId: true, email: true },
-        });
+        const userRows2 = (await query(
+          `SELECT id, stripeCustomerId, email FROM User WHERE id = ? LIMIT 1`,
+          [website.userId]
+        )) as { id: string; stripeCustomerId: string | null; email: string }[];
+        const user = userRows2.length > 0 ? userRows2[0] : null;
 
         let stripeCustomerId = user?.stripeCustomerId;
 
@@ -3234,10 +3242,10 @@ export async function POST(request: NextRequest) {
             console.log(
               `🔍 Stripe Debug - Updating user with stripeCustomerId`
             );
-            await prisma.user.update({
-              where: { id: user.id },
-              data: { stripeCustomerId },
-            });
+            await query(`UPDATE User SET stripeCustomerId = ? WHERE id = ?`, [
+              stripeCustomerId,
+              user.id,
+            ]);
           }
         } else {
           console.log(
@@ -3388,9 +3396,12 @@ export async function POST(request: NextRequest) {
         // We'll keep the default namespaces but use the search-all logic later
       } else {
         // Try to get configured namespaces from DB if available
-        const vectorDbConfig = await prisma.vectorDbConfig.findUnique({
-          where: { websiteId: website.id },
-        });
+        const vectorDbConfigRows = (await query(
+          `SELECT MainNamespace, QANamespace FROM VectorDbConfig WHERE websiteId = ? LIMIT 1`,
+          [website.id]
+        )) as { MainNamespace: string; QANamespace: string }[];
+        const vectorDbConfig =
+          vectorDbConfigRows.length > 0 ? vectorDbConfigRows[0] : null;
 
         if (vectorDbConfig) {
           mainNamespace = vectorDbConfig.MainNamespace;
@@ -4193,49 +4204,8 @@ export async function POST(request: NextRequest) {
       classification?.action_intent
     );
 
-    // Extract up to the last 4 messages (2 question/answer pairs) from pastContext
+    // Build minimal context without previous conversation; rely on previous_response_id
     const messageContext = {
-      ...context,
-      // Include up to 4 recent messages in the context
-      previousConversation:
-        pastContext && pastContext.length > 0
-          ? pastContext
-              .slice(-Math.min(4, pastContext.length))
-              .map((message) => ({
-                role: message.role || (message.question ? "user" : "assistant"),
-                content:
-                  message.question ||
-                  message.content ||
-                  (typeof message.answer === "string" &&
-                  message.answer?.startsWith("{")
-                    ? JSON.parse(message.answer).answer
-                    : typeof message.answer === "object" &&
-                      message.answer?.answer
-                    ? message.answer.answer
-                    : message.answer || ""),
-              }))
-          : [],
-      // Keep the most recent Q&A for backward compatibility
-      previousContext:
-        pastContext && pastContext.length >= 2
-          ? {
-              question:
-                pastContext[pastContext.length - 2].question ||
-                pastContext[pastContext.length - 2].content,
-              answer:
-                typeof pastContext[pastContext.length - 1].answer ===
-                  "string" &&
-                pastContext[pastContext.length - 1].answer?.startsWith("{")
-                  ? JSON.parse(pastContext[pastContext.length - 1].answer)
-                      .answer
-                  : typeof pastContext[pastContext.length - 1].answer ===
-                      "object" &&
-                    pastContext[pastContext.length - 1].answer?.answer
-                  ? pastContext[pastContext.length - 1].answer.answer
-                  : pastContext[pastContext.length - 1].answer ||
-                    pastContext[pastContext.length - 1].content,
-            }
-          : null,
       mainContent: context.mainContent.map((item) => {
         if (item.type === "product") {
           return {
@@ -4283,6 +4253,9 @@ export async function POST(request: NextRequest) {
         // For other types (post, discount), return the full item
         return item;
       }),
+      relevantQAs: context.relevantQAs,
+      classification,
+      currentPageUrl: currentPageUrl || null,
     };
 
     // Add logging to see what's being sent to the AI
@@ -4369,7 +4342,7 @@ export async function POST(request: NextRequest) {
           }
         : null;
 
-    // Add logging with the expanded context
+    // Add logging with the expanded context (without past conversation)
     console.dir(
       {
         currentPage: currentPageUrl || "Not provided",
@@ -4378,38 +4351,37 @@ export async function POST(request: NextRequest) {
           mainContent: filteredMainContent,
           relevantQAs: context.relevantQAs,
           classification,
-          previousContext: formattedPreviousContext || "None",
-          previousConversation: formattedPreviousConversation,
         },
         userMessage: message,
       },
       { depth: null, colors: true }
     );
 
-    // Using Anthropic Claude model instead
-    const completion = await anthropic.messages.create({
-      model: "claude-3-7-sonnet-20250219",
-      system:
+    // Use OpenAI Responses API (GPT-5)
+    const completion = await openai.responses.create({
+      model: "gpt-5",
+      instructions:
         SYSTEM_PROMPT +
         "\n\nIMPORTANT: Respond with ONLY the raw JSON object. Do NOT wrap the response in ```json or ``` markers.",
-      messages: [
-        {
-          role: "user",
-          content: `${
-            currentPageUrl ? `Current page: ${currentPageUrl}\n\n` : ""
-          }${
-            pageData
-              ? `Complete Page Data: ${JSON.stringify(pageData)}\n\n`
-              : ""
-          }Context: ${JSON.stringify(messageContext)}\n\nQuestion: ${message}`,
-        },
-      ],
-      max_tokens: 500,
-      temperature: 0.7,
+      input: `${currentPageUrl ? `Current page: ${currentPageUrl}\n\n` : ""}${
+        pageData ? `Complete Page Data: ${JSON.stringify(pageData)}\n\n` : ""
+      }Context: ${JSON.stringify(messageContext)}\n\nQuestion: ${message}`,
+      // Keep as plain text; SDK types may not expose response_format yet. We enforce JSON in the prompt.
+      previous_response_id: (previousResponseId || responseId) ?? undefined,
     });
 
-    // Extract OpenAI's response (different format than Anthropic)
-    let aiResponse = "";
+    // Robust output extraction per latest SDK result shape
+    const outputText =
+      (completion as any).output_text ??
+      (Array.isArray((completion as any).output)
+        ? (completion as any).output
+            .map((p: any) =>
+              (p.content ?? []).map((c: any) => c.text?.value ?? "").join("")
+            )
+            .join("")
+        : "");
+
+    let aiResponse = outputText;
     let parsedResponse = {
       answer: "",
       action: null as string | null,
@@ -4417,15 +4389,7 @@ export async function POST(request: NextRequest) {
       action_context: {} as Record<string, any>,
     };
 
-    // Extract Anthropic's response
-    if (completion.content && completion.content.length > 0) {
-      const contentBlock = completion.content[0];
-      if (contentBlock.type === "text") {
-        aiResponse = contentBlock.text;
-      }
-    }
-
-    // Try to parse JSON response
+    // Try to parse JSON response with fallback
     try {
       // First attempt to parse as is
       parsedResponse = JSON.parse(aiResponse);
@@ -4679,6 +4643,69 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Apply minimal-actions filter BEFORE formatting response
+    // Default to none for basic informational answers unless explicit action intent detected
+    if (parsedResponse && typeof parsedResponse === "object") {
+      const msgLower = message.toLowerCase();
+      const explicitActionPhrases = [
+        "take me",
+        "show me",
+        "go to",
+        "open",
+        "navigate",
+        "click",
+        "highlight",
+        "scroll",
+        "add to cart",
+        "buy",
+        "purchase",
+        "log in",
+        "login",
+        "log out",
+        "logout",
+        "track",
+        "return",
+        "cancel",
+        "exchange",
+      ];
+      const hasExplicitIntent = explicitActionPhrases.some((p) =>
+        msgLower.includes(p)
+      );
+
+      const isContinuationFlow = [
+        "get_orders",
+        "track_order",
+        "return_order",
+        "cancel_order",
+        "exchange_order",
+        "fill_form",
+        "account_management",
+        "account_reset",
+      ].includes((parsedResponse.action as any) || "");
+
+      // If the model proposed a UI action but the user didn't explicitly ask and it's not a continuation, prefer none
+      if (
+        parsedResponse.action &&
+        parsedResponse.action !== "none" &&
+        !hasExplicitIntent &&
+        !isContinuationFlow
+      ) {
+        parsedResponse.action = "none" as const;
+        // keep the assistant's textual answer as-is
+        parsedResponse.action_context = {} as any;
+      }
+
+      // For on-page answers, require explicit highlight/scroll request
+      if (
+        (parsedResponse.action === "highlight_text" ||
+          parsedResponse.action === "scroll") &&
+        !hasExplicitIntent
+      ) {
+        parsedResponse.action = "none" as const;
+        parsedResponse.action_context = {} as any;
+      }
+    }
+
     // Format response
     const formattedResponse: FormattedResponse = {
       action: (parsedResponse.action as any) || "none",
@@ -4710,7 +4737,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-
     // Check if the action is a disabled image generation type
     if (
       formattedResponse.action === "generate_image" &&
@@ -4719,6 +4745,54 @@ export async function POST(request: NextRequest) {
       formattedResponse.action = "none";
       formattedResponse.answer = `I'm sorry, I'm unable to generate images at the moment. This feature will be available soon. Would you like me to help you with something else?`;
       formattedResponse.action_context = {};
+    }
+
+    // Preserve return flow: if model attempted to use contact for a return, override to return_order when allowed
+    if (formattedResponse.action === "contact" && website.allowAutoReturn) {
+      const isReturnContext =
+        classification?.action_intent === "return_order" ||
+        enhancedPreviousContext?.previousAction === "return_order" ||
+        /\breturn(ing)?\b|send\s*back/i.test(message);
+
+      if (isReturnContext) {
+        formattedResponse.action = "return_order";
+        if (!formattedResponse.action_context) {
+          formattedResponse.action_context = {};
+        }
+
+        // Extract basic order info from the message if present
+        const orderIdMatch = message.match(/\b(\d{4,})\b/i);
+        const emailMatch = message.match(
+          /([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/i
+        );
+        if (orderIdMatch && orderIdMatch[1]) {
+          (formattedResponse.action_context as any).order_id = orderIdMatch[1];
+        }
+        if (emailMatch && emailMatch[1]) {
+          (formattedResponse.action_context as any).order_email = emailMatch[1];
+        }
+
+        // Remove contact-form specific fields if present
+        if ((formattedResponse.action_context as any).contact_help_form) {
+          delete (formattedResponse.action_context as any).contact_help_form;
+        }
+        if ((formattedResponse.action_context as any).message) {
+          delete (formattedResponse.action_context as any).message;
+        }
+
+        // Provide a clear, helpful return-specific answer
+        formattedResponse.answer =
+          "I'll help you process your return request. Could you provide your order number and the reason for your return?";
+      }
+    }
+
+    // Ensure return_order answers are helpful and consistent
+    if (formattedResponse.action === "return_order") {
+      if (!formattedResponse.action_context) {
+        formattedResponse.action_context = {};
+      }
+      formattedResponse.answer =
+        "I'll help you process your return request. Could you provide your order number and the reason for your return?";
     }
 
     // Handle return/exchange when auto settings are disabled
@@ -4777,33 +4851,46 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Normalize return reason if present
+    if (
+      formattedResponse.action === "return_order" &&
+      formattedResponse.action_context
+    ) {
+      const currentReason = (formattedResponse.action_context as any)
+        .returnReason;
+      if (currentReason !== undefined) {
+        (formattedResponse.action_context as any).returnReason =
+          normalizeReturnReason(currentReason);
+      }
+      const currentNote = (formattedResponse.action_context as any)
+        .returnReasonNote;
+      (formattedResponse.action_context as any).returnReasonNote =
+        coerceReturnReasonNote(
+          (formattedResponse.action_context as any).returnReason,
+          currentNote
+        );
+    }
+
     // Save messages to database
     try {
       // Create user message first
-      await prisma.aiMessage.create({
-        data: {
-          threadId: aiThread.id,
-          role: "user",
-          content: message,
-          type: type,
-        },
-      });
+      await query(
+        `INSERT INTO AiMessage (id, threadId, role, content, type, createdAt)
+         VALUES (UUID(), ?, 'user', ?, ?, NOW())`,
+        [aiThread.id, message, type]
+      );
 
       // Then create assistant message
-      await prisma.aiMessage.create({
-        data: {
-          threadId: aiThread.id,
-          role: "assistant",
-          content: aiResponse,
-          type: "text", // Assistant response is always text
-        },
-      });
+      await query(
+        `INSERT INTO AiMessage (id, threadId, role, content, type, createdAt)
+         VALUES (UUID(), ?, 'assistant', ?, 'text', NOW())`,
+        [aiThread.id, aiResponse]
+      );
 
       // Update thread's last message timestamp
-      await prisma.aiThread.update({
-        where: { id: aiThread.id },
-        data: { lastMessageAt: new Date() },
-      });
+      await query(`UPDATE AiThread SET lastMessageAt = NOW() WHERE id = ?`, [
+        aiThread.id,
+      ]);
     } catch (dbError) {
       console.error("Error saving messages to database:", dbError);
       // Continue even if database operations fail
@@ -4816,6 +4903,7 @@ export async function POST(request: NextRequest) {
       request,
       NextResponse.json({
         response: formattedResponse,
+        responseId: completion.id,
         threadId: aiThread.threadId,
         context: {
           mainContent: context.mainContent,

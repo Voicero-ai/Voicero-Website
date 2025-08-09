@@ -1,11 +1,34 @@
-import prisma from "../../../lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../lib/auth";
 import { NextResponse } from "next/server";
 import { subDays, startOfDay, endOfDay, isSameDay } from "date-fns";
-import { toZonedTime, fromZonedTime } from "date-fns-tz";
+import { toZonedTime } from "date-fns-tz";
+import { query } from "../../../lib/db";
 
 export const dynamic = "force-dynamic";
+
+// Define types
+interface Website {
+  id: string;
+  url: string;
+  type: string;
+  active: boolean;
+  createdAt: Date;
+  aiThreads: AiThread[];
+}
+
+interface AiThread {
+  id: any;
+  messages: AiMessage[];
+}
+
+interface AiMessage {
+  content: string;
+  type: string | null;
+  role: string;
+  createdAt: Date;
+  pageUrl?: string | null;
+}
 
 // Helper function to count redirects in a message
 const countRedirectsInMessage = (message: {
@@ -69,31 +92,32 @@ export async function GET(request: Request) {
       })
       .reverse();
 
-    // Get user's websites with date-filtered threads
-    const websites = await prisma.website.findMany({
-      where: {
-        userId: session.user.id,
-      },
-      select: {
-        id: true,
-        url: true,
-        type: true,
-        active: true,
-        aiThreads: {
-          select: {
-            messages: {
-              select: {
-                content: true,
-                type: true,
-                role: true,
-                createdAt: true,
-              },
-            },
-          },
-        },
-        createdAt: true,
-      },
-    });
+    // Get user's websites
+    const websites = (await query(
+      "SELECT id, url, type, active, createdAt FROM Website WHERE userId = ?",
+      [session.user.id]
+    )) as Website[];
+
+    // For each website, get its threads and messages
+    for (const website of websites) {
+      // Get all threads for this website
+      const threads = (await query(
+        "SELECT id FROM AiThread WHERE websiteId = ?",
+        [website.id]
+      )) as AiThread[];
+
+      website.aiThreads = threads;
+
+      // For each thread, get its messages
+      for (const thread of website.aiThreads) {
+        const messages = (await query(
+          "SELECT content, type, role, createdAt, pageUrl FROM AiMessage WHERE threadId = ?",
+          [thread.id]
+        )) as AiMessage[];
+
+        thread.messages = messages;
+      }
+    }
 
     // Calculate total stats
     const totalStats = websites.reduce(

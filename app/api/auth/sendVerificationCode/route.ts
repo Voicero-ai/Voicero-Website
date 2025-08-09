@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
-import prisma from "../../../../lib/prisma";
+import { query } from "../../../../lib/db";
 import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
+
+interface User {
+  id: string;
+  email: string;
+}
 
 // Configure AWS SES client
 const ses = new SESClient({
@@ -26,11 +31,11 @@ export async function POST(request: Request) {
     console.log(`Attempting to send verification code to ${email}`);
 
     // Find user by email
-    const user = await prisma.user.findFirst({
-      where: { email },
-    });
+    const users = (await query("SELECT id, email FROM User WHERE email = ?", [
+      email,
+    ])) as User[];
 
-    if (!user) {
+    if (users.length === 0) {
       console.log(`No user found with email: ${email}`);
       // Don't reveal that the user doesn't exist for security
       return NextResponse.json(
@@ -39,6 +44,8 @@ export async function POST(request: Request) {
       );
     }
 
+    const user = users[0];
+
     // Generate a 6-digit verification code
     const verificationCode = crypto.randomInt(100000, 999999).toString();
     console.log(
@@ -46,10 +53,10 @@ export async function POST(request: Request) {
     );
 
     // Save the code to the user record
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { emailCode: verificationCode },
-    });
+    await query("UPDATE User SET emailCode = ? WHERE id = ?", [
+      verificationCode,
+      user.id,
+    ]);
     console.log(`Saved verification code to database for user: ${user.id}`);
 
     // Send email with verification code

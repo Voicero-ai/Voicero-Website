@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import prisma from "../../../../lib/prisma";
+import { query } from "../../../../lib/db";
 import { stripe } from "../../../../lib/stripe";
 import { authOptions } from "../../../../lib/auth";
 export const dynamic = "force-dynamic";
@@ -17,10 +17,11 @@ export async function POST(request: Request) {
 
     // Get or create customer
     let customerId;
-    const user = await prisma.user.findUnique({
-      where: { id: session.user.id },
-      select: { stripeCustomerId: true },
-    });
+    const userRows = (await query(
+      `SELECT stripeCustomerId FROM User WHERE id = ? LIMIT 1`,
+      [session.user.id]
+    )) as { stripeCustomerId: string | null }[];
+    const user = userRows.length > 0 ? userRows[0] : null;
 
     if (user?.stripeCustomerId) {
       customerId = user.stripeCustomerId;
@@ -30,10 +31,10 @@ export async function POST(request: Request) {
         metadata: { userId: session.user.id },
       });
 
-      await prisma.user.update({
-        where: { id: session.user.id },
-        data: { stripeCustomerId: customer.id },
-      });
+      await query(`UPDATE User SET stripeCustomerId = ? WHERE id = ?`, [
+        customer.id,
+        session.user.id,
+      ]);
       customerId = customer.id;
     }
 
@@ -41,13 +42,11 @@ export async function POST(request: Request) {
     let existingWebsite = null;
     let existingSubscriptionId = null;
     if (websiteId) {
-      existingWebsite = await prisma.website.findFirst({
-        where: {
-          id: websiteId,
-          userId: session.user.id,
-        },
-        select: { stripeSubscriptionId: true },
-      });
+      const websiteRows = (await query(
+        `SELECT stripeSubscriptionId FROM Website WHERE id = ? AND userId = ? LIMIT 1`,
+        [websiteId, session.user.id]
+      )) as { stripeSubscriptionId: string | null }[];
+      existingWebsite = websiteRows.length > 0 ? websiteRows[0] : null;
       if (!existingWebsite) {
         return NextResponse.json(
           { error: "Website not found" },
@@ -216,26 +215,41 @@ export async function GET(request: Request) {
       const queryLimit = 100;
 
       // Create new website ONLY after payment is confirmed
-      const website = await prisma.website.create({
-        data: {
-          name: websiteData.name,
-          url: websiteData.url,
-          type: websiteData.type,
+      await query(
+        `INSERT INTO Website (
+           id, name, url, type, plan, active, userId,
+           stripeSubscriptionId, stripeSubscriptionItemId,
+           queryLimit, renewsOn, monthlyQueries, createdAt, updatedAt
+         ) VALUES (
+           UUID(), ?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?, 0, NOW(), NOW()
+         )`,
+        [
+          websiteData.name,
+          websiteData.url,
+          websiteData.type,
           plan,
-          active: true, // Active since payment is confirmed
-          userId: userId,
-          stripeSubscriptionId: checkoutSession.subscription as string,
-          stripeSubscriptionItemId: subscriptionItemId,
+          userId,
+          checkoutSession.subscription as string,
+          subscriptionItemId,
           queryLimit,
           renewsOn,
-          accessKeys: {
-            create: { key: websiteData.accessKey },
-          },
-          monthlyQueries: 0,
-        },
-      });
+        ]
+      );
 
-      return NextResponse.json({ success: true, websiteId: website.id });
+      const websiteIdRows = (await query(
+        `SELECT id FROM Website WHERE stripeSubscriptionId = ? LIMIT 1`,
+        [checkoutSession.subscription as string]
+      )) as { id: string }[];
+      const createdWebsiteId = websiteIdRows[0]?.id;
+
+      if (createdWebsiteId) {
+        await query(
+          `INSERT INTO AccessKey (id, key, websiteId, createdAt) VALUES (UUID(), ?, ?, NOW())`,
+          [websiteData.accessKey, createdWebsiteId]
+        );
+      }
+
+      return NextResponse.json({ success: true, websiteId: createdWebsiteId });
     }
 
     // Update existing website - always to Starter plan
@@ -243,17 +257,24 @@ export async function GET(request: Request) {
     const queryLimit = 100;
 
     // Update the website with the new subscription data
-    await prisma.website.update({
-      where: { id: targetWebsiteId },
-      data: {
+    await query(
+      `UPDATE Website SET
+        plan = ?,
+        stripeSubscriptionId = ?,
+        stripeSubscriptionItemId = ?,
+        queryLimit = ?,
+        renewsOn = ?,
+        active = TRUE
+       WHERE id = ?`,
+      [
         plan,
-        stripeSubscriptionId: checkoutSession.subscription as string,
-        stripeSubscriptionItemId: subscriptionItemId, // Store subscription item ID
+        checkoutSession.subscription as string,
+        subscriptionItemId,
         queryLimit,
         renewsOn,
-        active: true, // Activate the website when upgrading
-      },
-    });
+        targetWebsiteId,
+      ]
+    );
 
     return NextResponse.json({ success: true });
   } catch (error) {

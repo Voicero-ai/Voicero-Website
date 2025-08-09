@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import prisma from "@/lib/prisma";
+import { query } from "@/lib/db";
 import { stripe } from "@/lib/stripe";
 import { authOptions } from "@/lib/auth";
 
@@ -19,10 +19,11 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-    const website = await prisma.website.findFirst({
-      where: { id: websiteId, userId: session.user.id },
-      select: { stripeSubscriptionId: true },
-    });
+    const rows = (await query(
+      `SELECT stripeSubscriptionId FROM Website WHERE id = ? AND userId = ? LIMIT 1`,
+      [websiteId, session.user.id]
+    )) as any[];
+    const website = rows[0];
     if (!website || !website.stripeSubscriptionId) {
       return NextResponse.json(
         { error: "No active subscription found" },
@@ -34,17 +35,17 @@ export async function POST(request: Request) {
       cancel_at_period_end: true,
     });
     // Remove stripeSubscriptionId and blank the plan
-    await prisma.website.update({
-      where: { id: websiteId },
-      data: {
-        stripeSubscriptionId: null,
-        stripeSubscriptionItemId: null,
-        queryLimit: 0,
-        monthlyQueries: 0,
-        plan: "",
-        active: false,
-      },
-    });
+    await query(
+      `UPDATE Website
+       SET stripeSubscriptionId = NULL,
+           stripeSubscriptionItemId = NULL,
+           queryLimit = 0,
+           monthlyQueries = 0,
+           plan = '',
+           active = 0
+       WHERE id = ?`,
+      [websiteId]
+    );
     return NextResponse.json({ success: true });
   } catch (error: any) {
     console.error("Error cancelling subscription:", error);

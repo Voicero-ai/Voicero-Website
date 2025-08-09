@@ -1,9 +1,8 @@
-import { PrismaClient } from "@prisma/client";
+import { query } from "@/lib/db";
 import { Pinecone } from "@pinecone-database/pinecone";
 
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
 const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY!,
 });
@@ -16,9 +15,11 @@ export async function POST(request: Request) {
     console.log(`Processing website ID: ${websiteId}`);
 
     // Check vector config
-    const vectorConfig = await prisma.vectorDbConfig.findUnique({
-      where: { websiteId },
-    });
+    const vectorConfigs = (await query(
+      "SELECT websiteId FROM VectorDbConfig WHERE websiteId = ?",
+      [websiteId]
+    )) as { websiteId: string }[];
+    const vectorConfig = vectorConfigs.length > 0 ? vectorConfigs[0] : null;
 
     if (!vectorConfig) {
       console.log(`No vector configuration found for website ${websiteId}`);
@@ -61,9 +62,9 @@ export async function POST(request: Request) {
 
       // Delete vector config
       console.log("Deleting vector config from database...");
-      await prisma.vectorDbConfig.delete({
-        where: { websiteId },
-      });
+      await query("DELETE FROM VectorDbConfig WHERE websiteId = ?", [
+        websiteId,
+      ]);
       console.log("Vector config deleted successfully");
 
       return Response.json({ success: true });
@@ -74,9 +75,9 @@ export async function POST(request: Request) {
         console.log(
           "Attempting to delete vector config after vector deletion failure..."
         );
-        await prisma.vectorDbConfig.delete({
-          where: { websiteId },
-        });
+        await query("DELETE FROM VectorDbConfig WHERE websiteId = ?", [
+          websiteId,
+        ]);
         console.log(
           "Vector config deleted successfully despite vector deletion failure"
         );

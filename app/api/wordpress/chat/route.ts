@@ -5,7 +5,6 @@ import { OpenAIEmbeddings } from "@langchain/openai";
 import { Client } from "@opensearch-project/opensearch";
 import { cors } from "../../../../lib/cors";
 import OpenAI from "openai";
-import Anthropic from "@anthropic-ai/sdk";
 import {
   FINAL_MAIN_PROMPT,
   MAIN_PROMPT,
@@ -20,6 +19,11 @@ import {
   PURCHASE_PROMPT,
   ORDER_MANAGEMENT_PROMPT,
 } from "@/lib/systemPrompts";
+import {
+  normalizeReturnReason,
+  coerceReturnReasonNote,
+  ALLOWED_RETURN_REASONS,
+} from "@/lib/returns";
 import Stripe from "stripe";
 export const dynamic = "force-dynamic";
 
@@ -28,9 +32,6 @@ const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY!,
 });
 const openai = new OpenAI();
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY!,
-});
 
 // Initialize OpenSearch client
 const opensearch = new Client({
@@ -1430,6 +1431,8 @@ export async function POST(request: NextRequest) {
     threadId?: string;
     type: "text" | "voice";
     pastContext?: PreviousContext[];
+    previousResponseId?: string;
+    responseId?: string;
     currentPageUrl?: string;
     pageData?: {
       url: string;
@@ -1468,6 +1471,8 @@ export async function POST(request: NextRequest) {
       threadId,
       type,
       pastContext,
+      previousResponseId,
+      responseId,
       currentPageUrl,
       pageData,
     } = body;
@@ -2325,39 +2330,8 @@ export async function POST(request: NextRequest) {
       classification?.action_intent
     );
 
-    // Extract up to the last 4 messages (2 question/answer pairs) from pastContext
+    // Build minimal context without previous conversation; rely on previous_response_id
     const messageContext = {
-      ...context,
-      // Include up to 4 recent messages in the context
-      previousConversation:
-        pastContext && pastContext.length > 0
-          ? pastContext
-              .slice(-Math.min(4, pastContext.length))
-              .map((message) => ({
-                role: message.role || (message.question ? "user" : "assistant"),
-                content:
-                  message.question ||
-                  message.content ||
-                  (message.answer?.startsWith("{")
-                    ? JSON.parse(message.answer).answer
-                    : message.answer || ""),
-              }))
-          : [],
-      // Keep the most recent Q&A for backward compatibility
-      previousContext:
-        pastContext && pastContext.length >= 2
-          ? {
-              question:
-                pastContext[pastContext.length - 2].question ||
-                pastContext[pastContext.length - 2].content,
-              answer: pastContext[pastContext.length - 1].answer?.startsWith(
-                "{"
-              )
-                ? JSON.parse(pastContext[pastContext.length - 1].answer).answer
-                : pastContext[pastContext.length - 1].answer ||
-                  pastContext[pastContext.length - 1].content,
-            }
-          : null,
       mainContent: context.mainContent.map((item) => {
         if (item.type === "product") {
           return {
@@ -2405,6 +2379,9 @@ export async function POST(request: NextRequest) {
         // For other types (post, discount), return the full item
         return item;
       }),
+      relevantQAs: context.relevantQAs,
+      classification,
+      currentPageUrl: currentPageUrl || null,
     };
 
     // Add logging to see what's being sent to the AI
@@ -2482,7 +2459,7 @@ export async function POST(request: NextRequest) {
           }
         : null;
 
-    // Add logging with the expanded context
+    // Add logging with the expanded context (without past conversation)
     console.dir(
       {
         currentPage: currentPageUrl || "Not provided",
@@ -2491,52 +2468,42 @@ export async function POST(request: NextRequest) {
           mainContent: filteredMainContent,
           relevantQAs: context.relevantQAs,
           classification,
-          previousContext: formattedPreviousContext || "None",
-          previousConversation: formattedPreviousConversation,
         },
         userMessage: message,
       },
       { depth: null, colors: true }
     );
 
-    // Using Anthropic Claude model instead
-    const completion = await anthropic.messages.create({
-      model: "claude-3-7-sonnet-20250219",
-      system:
+    // Use OpenAI Responses API (GPT-5)
+    const completion = await openai.responses.create({
+      model: "gpt-5",
+      instructions:
         SYSTEM_PROMPT +
         "\n\nIMPORTANT: Respond with ONLY the raw JSON object. Do NOT wrap the response in ```json or ``` markers.",
-      messages: [
-        {
-          role: "user",
-          content: `${
-            currentPageUrl ? `Current page: ${currentPageUrl}\n\n` : ""
-          }${
-            pageData
-              ? `Complete Page Data: ${JSON.stringify(pageData)}\n\n`
-              : ""
-          }Context: ${JSON.stringify(messageContext)}\n\nQuestion: ${message}`,
-        },
-      ],
-      max_tokens: 500,
-      temperature: 0.7,
+      input: `${currentPageUrl ? `Current page: ${currentPageUrl}\n\n` : ""}${
+        pageData ? `Complete Page Data: ${JSON.stringify(pageData)}\n\n` : ""
+      }Context: ${JSON.stringify(messageContext)}\n\nQuestion: ${message}`,
+      max_output_tokens: 500,
+      previous_response_id: (previousResponseId || responseId) ?? undefined,
     });
 
-    // Extract OpenAI's response (different format than Anthropic)
-    let aiResponse = "";
+    const outputText =
+      (completion as any).output_text ??
+      (Array.isArray((completion as any).output)
+        ? (completion as any).output
+            .map((p: any) =>
+              (p.content ?? []).map((c: any) => c.text?.value ?? "").join("")
+            )
+            .join("")
+        : "");
+
+    let aiResponse = outputText;
     let parsedResponse = {
       answer: "",
       action: null as string | null,
       url: null as string | null,
       action_context: {} as Record<string, any>,
     };
-
-    // Extract Anthropic's response
-    if (completion.content && completion.content.length > 0) {
-      const contentBlock = completion.content[0];
-      if (contentBlock.type === "text") {
-        aiResponse = contentBlock.text;
-      }
-    }
 
     // Try to parse JSON response
     try {
@@ -2768,6 +2735,65 @@ export async function POST(request: NextRequest) {
         url: null,
         action_context: {},
       };
+    }
+
+    // Minimal-actions filter BEFORE creating the formatted response
+    if (parsedResponse && typeof parsedResponse === "object") {
+      const msgLower = message.toLowerCase();
+      const explicitActionPhrases = [
+        "take me",
+        "show me",
+        "go to",
+        "open",
+        "navigate",
+        "click",
+        "highlight",
+        "scroll",
+        "add to cart",
+        "buy",
+        "purchase",
+        "log in",
+        "login",
+        "log out",
+        "logout",
+        "track",
+        "return",
+        "cancel",
+        "exchange",
+      ];
+      const hasExplicitIntent = explicitActionPhrases.some((p) =>
+        msgLower.includes(p)
+      );
+
+      const isContinuationFlow = [
+        "get_orders",
+        "track_order",
+        "return_order",
+        "cancel_order",
+        "exchange_order",
+        "fill_form",
+        "account_management",
+        "account_reset",
+      ].includes((parsedResponse.action as any) || "");
+
+      if (
+        parsedResponse.action &&
+        parsedResponse.action !== "none" &&
+        !hasExplicitIntent &&
+        !isContinuationFlow
+      ) {
+        parsedResponse.action = "none" as const;
+        parsedResponse.action_context = {} as any;
+      }
+
+      if (
+        (parsedResponse.action === "highlight_text" ||
+          parsedResponse.action === "scroll") &&
+        !hasExplicitIntent
+      ) {
+        parsedResponse.action = "none" as const;
+        parsedResponse.action_context = {} as any;
+      }
     }
 
     // Check if this is an account-related request BEFORE creating the formatted response
@@ -3331,6 +3357,26 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Normalize return reason if present
+    if (
+      formattedResponse.action === "return_order" &&
+      formattedResponse.action_context
+    ) {
+      const currentReason = (formattedResponse.action_context as any)
+        .returnReason;
+      if (currentReason !== undefined) {
+        (formattedResponse.action_context as any).returnReason =
+          normalizeReturnReason(currentReason);
+      }
+      const currentNote = (formattedResponse.action_context as any)
+        .returnReasonNote;
+      (formattedResponse.action_context as any).returnReasonNote =
+        coerceReturnReasonNote(
+          (formattedResponse.action_context as any).returnReason,
+          currentNote
+        );
+    }
+
     // CRITICAL FIX: ENSURE ORDER ACTION CONTINUITY
     // This must come after all other formatting but before saving to database
     if (
@@ -3836,6 +3882,7 @@ export async function POST(request: NextRequest) {
       request,
       NextResponse.json({
         response: formattedResponse,
+        responseId: (completion as any).id,
         threadId: aiThread.threadId,
         context: {
           mainContent: context.mainContent,

@@ -1,8 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { cors } from "../../../../lib/cors";
+import { query } from "../../../../lib/db";
+
 export const dynamic = "force-dynamic";
-const prisma = new PrismaClient();
+
+interface AccessKey {
+  websiteId: string;
+}
+
+interface Website {
+  id: string;
+  plan: string;
+  queryLimit: number;
+  renewsOn: Date | null;
+  color: string | null;
+}
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -63,34 +75,49 @@ export async function POST(request: NextRequest) {
     }
 
     // First find the website ID using the access key
-    const accessKeyRecord = await prisma.accessKey.findUnique({
-      where: {
-        key: accessKey,
-      },
-      select: {
-        websiteId: true,
-      },
-    });
+    const accessKeys = (await query(
+      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
+      [accessKey]
+    )) as AccessKey[];
 
-    if (!accessKeyRecord) {
+    if (accessKeys.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Invalid access key" }, { status: 401 })
       );
     }
 
+    const websiteId = accessKeys[0].websiteId;
+
+    // Prepare update data
+    const updateFields = ["plan = ?", "queryLimit = ?"];
+    const updateValues = [plan, queryLimit];
+
+    if (subscriptionEnds) {
+      updateFields.push("renewsOn = ?");
+      updateValues.push(new Date(subscriptionEnds));
+    } else {
+      updateFields.push("renewsOn = NULL");
+    }
+
+    if (color) {
+      updateFields.push("color = ?");
+      updateValues.push(color);
+    }
+
     // Update the website using the found website ID
-    const website = await prisma.website.update({
-      where: {
-        id: accessKeyRecord.websiteId,
-      },
-      data: {
-        plan: plan,
-        queryLimit: queryLimit,
-        renewsOn: subscriptionEnds ? new Date(subscriptionEnds) : null,
-        ...(color && { color: color }),
-      },
-    });
+    await query(`UPDATE Website SET ${updateFields.join(", ")} WHERE id = ?`, [
+      ...updateValues,
+      websiteId,
+    ]);
+
+    // Get the updated website
+    const websites = (await query(
+      "SELECT id, plan, queryLimit, renewsOn, color FROM Website WHERE id = ?",
+      [websiteId]
+    )) as Website[];
+
+    const website = websites[0];
 
     return cors(
       request,

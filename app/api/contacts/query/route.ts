@@ -1,8 +1,38 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-import prisma from "@/lib/prisma";
+import { query } from "@/lib/db";
 export const dynamic = "force-dynamic";
+
+interface Contact {
+  id: string;
+  email: string;
+  message: string;
+  threadId: string;
+  userId: string;
+  websiteId: string;
+  read: boolean;
+  replied: boolean;
+  reminded: boolean;
+  createdAt: Date;
+}
+
+interface User {
+  name: string;
+  email: string;
+}
+
+interface ContactWithUser extends Contact {
+  user: User;
+}
+
+interface AiMessage {
+  id: string;
+  threadId: string;
+  role: string;
+  content: string;
+  createdAt: Date;
+}
 
 export async function GET(request: Request) {
   try {
@@ -22,37 +52,45 @@ export async function GET(request: Request) {
       );
     }
 
-    const contact = await prisma.contact.findUnique({
-      where: {
-        id: contactId,
-        userId,
-      },
-      include: {
-        user: {
-          select: {
-            name: true,
-            email: true,
-          },
-        },
-      },
-    });
+    // Get contact with user information
+    const contacts = (await query(
+      `SELECT c.*, u.name as userName, u.email as userEmail 
+       FROM Contact c
+       JOIN User u ON c.userId = u.id
+       WHERE c.id = ? AND c.userId = ?`,
+      [contactId, userId]
+    )) as (Contact & { userName: string; userEmail: string })[];
 
-    if (!contact) {
+    if (contacts.length === 0) {
       return NextResponse.json({ error: "Contact not found" }, { status: 404 });
     }
 
+    const contact = contacts[0];
+
+    // Format the contact with user data
+    const contactWithUser: ContactWithUser = {
+      ...contact,
+      user: {
+        name: contact.userName,
+        email: contact.userEmail,
+      },
+    };
+
+    // Delete the extra properties that were added for joining
+    delete (contactWithUser as any).userName;
+    delete (contactWithUser as any).userEmail;
+
     // Get thread messages
-    const threadMessages = await prisma.aiMessage.findMany({
-      where: {
-        threadId: contact.threadId,
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
-    });
+    const threadMessages = (await query(
+      `SELECT id, threadId, role, content, createdAt
+       FROM AiMessage
+       WHERE threadId = ?
+       ORDER BY createdAt ASC`,
+      [contact.threadId]
+    )) as AiMessage[];
 
     return NextResponse.json({
-      ...contact,
+      ...contactWithUser,
       threadMessages,
     });
   } catch (error) {

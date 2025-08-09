@@ -1,10 +1,26 @@
 import { getServerSession } from "next-auth/next";
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
 import { authOptions } from "../../../../lib/auth";
 import { cors } from "@/lib/cors";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
+
+// Define types
+interface Website {
+  userId: string;
+}
+
+interface User {
+  id: string;
+  name: string;
+  username: string;
+  profilePicture: string | null;
+  email: string;
+}
+
+// Define a type for query results
+type QueryResult = any[] | { [key: string]: any };
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -28,20 +44,16 @@ export async function GET(request: NextRequest) {
         const accessKey = authHeader.substring(7); // Remove "Bearer " prefix
 
         // Look up the website by accessKey and get associated userId
-        const website = await prisma.website.findFirst({
-          where: {
-            id: websiteId,
-            accessKeys: {
-              some: {
-                key: accessKey,
-              },
-            },
-          },
-          select: { userId: true },
-        });
+        const websites = (await query(
+          `SELECT w.userId 
+           FROM Website w
+           JOIN AccessKey ak ON w.id = ak.websiteId
+           WHERE w.id = ? AND ak.key = ?`,
+          [websiteId, accessKey]
+        )) as Website[];
 
-        if (website) {
-          userId = website.userId;
+        if (websites.length > 0) {
+          userId = websites[0].userId;
         }
       }
     }
@@ -60,25 +72,21 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const user = await prisma.user.findUnique({
-      where: {
-        id: userId,
-      },
-      select: {
-        id: true,
-        name: true,
-        username: true,
-        profilePicture: true,
-        email: true,
-      },
-    });
+    const users = (await query(
+      `SELECT id, name, username, profilePicture, email 
+       FROM User 
+       WHERE id = ?`,
+      [userId]
+    )) as User[];
 
-    if (!user) {
+    if (users.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "User not found" }, { status: 404 })
       );
     }
+
+    const user = users[0];
 
     return cors(request, NextResponse.json(user));
   } catch (error) {

@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
-import { PrismaClient } from "@prisma/client";
+import { query } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
+interface Waitlist {
+  id: string;
+  email: string;
+  platform: string;
+  createdAt: Date;
+}
 
 const ses = new SESClient({
   region: process.env.AWS_REGION || "us-east-2",
@@ -19,15 +24,16 @@ const ses = new SESClient({
 async function scheduleFollowUpEmail(email: string, platform: string) {
   try {
     // Store the email in the database with a scheduled time
-    await prisma.scheduledEmail.create({
-      data: {
+    await query(
+      "INSERT INTO ScheduledEmail (email, platform, scheduledFor, type, sent) VALUES (?, ?, ?, ?, ?)",
+      [
         email,
         platform,
-        scheduledFor: new Date(Date.now() + 30 * 60 * 1000), // 30 minutes from now
-        type: "QUESTIONNAIRE",
-        sent: false,
-      },
-    });
+        new Date(Date.now() + 30 * 60 * 1000), // 30 minutes from now
+        "QUESTIONNAIRE",
+        false,
+      ]
+    );
 
     return true;
   } catch (error) {
@@ -164,13 +170,12 @@ export async function POST(request: Request) {
     }
 
     // Check if email already exists
-    const existingEmail = await prisma.waitlist.findFirst({
-      where: {
-        email: email,
-      },
-    });
+    const existingEmails = (await query(
+      "SELECT id FROM Waitlist WHERE email = ?",
+      [email]
+    )) as { id: string }[];
 
-    if (existingEmail) {
+    if (existingEmails.length > 0) {
       return NextResponse.json(
         { error: "This email is already on the waitlist" },
         { status: 400 }
@@ -178,19 +183,20 @@ export async function POST(request: Request) {
     }
 
     // If email doesn't exist, proceed with creating it
-    await prisma.waitlist.create({
-      data: {
-        email,
-        platform,
-      },
-    });
+    await query("INSERT INTO Waitlist (email, platform) VALUES (?, ?)", [
+      email,
+      platform,
+    ]);
 
     // Get total count and all emails
-    const totalCount = await prisma.waitlist.count();
-    const allEmails = await prisma.waitlist.findMany({
-      select: { email: true, platform: true },
-      orderBy: { createdAt: "desc" },
-    });
+    const totalCountResult = (await query(
+      "SELECT COUNT(*) as count FROM Waitlist"
+    )) as { count: number }[];
+    const totalCount = totalCountResult[0].count;
+
+    const allEmails = (await query(
+      "SELECT email, platform FROM Waitlist ORDER BY createdAt DESC"
+    )) as { email: string; platform: string | null }[];
 
     // Process the waitlist signup (send thank you email and schedule follow-up)
     await processWaitlistSignup(email, platform);
@@ -246,13 +252,12 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Waitlist submission error:", error);
 
-    // Check if it's a Prisma unique constraint violation
+    // Check if it's a MySQL unique constraint violation
     if (
       error &&
       typeof error === "object" &&
-      "name" in error &&
-      (error as any).name === "PrismaClientKnownRequestError" &&
-      (error as any).code === "P2002"
+      "code" in error &&
+      (error as any).code === "ER_DUP_ENTRY"
     ) {
       return NextResponse.json(
         { error: "This email is already on the waitlist" },
@@ -264,7 +269,5 @@ export async function POST(request: Request) {
     const errorMessage =
       error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json({ error: errorMessage }, { status: 500 });
-  } finally {
-    await prisma.$disconnect();
   }
 }

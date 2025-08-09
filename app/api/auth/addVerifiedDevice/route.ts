@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
+
+interface VerifiedDevice {
+  id: string;
+  userId: string;
+  deviceId: string;
+}
 
 export async function POST(request: Request) {
   try {
@@ -20,33 +26,31 @@ export async function POST(request: Request) {
     );
 
     // Check if the device is already verified (to avoid duplicates)
-    const existingDevice = await prisma.verifiedDevice.findFirst({
-      where: {
-        userId: userId,
-        deviceId: deviceId,
-      },
-    });
+    const existingDevices = (await query(
+      "SELECT id, userId, deviceId FROM VerifiedDevice WHERE userId = ? AND deviceId = ?",
+      [userId, deviceId]
+    )) as VerifiedDevice[];
 
-    if (existingDevice) {
+    if (existingDevices.length > 0) {
       console.log(`Device ${deviceId} already verified for user ${userId}`);
       return NextResponse.json({
         message: "Device already verified",
-        deviceId: existingDevice.id,
+        deviceId: existingDevices[0].id,
       });
     }
 
     // Add the device to verified devices
-    const verifiedDevice = await prisma.verifiedDevice.create({
-      data: {
-        userId: userId,
-        deviceId: deviceId,
-      },
-    });
+    const result = await query(
+      "INSERT INTO VerifiedDevice (userId, deviceId) VALUES (?, ?)",
+      [userId, deviceId]
+    );
 
-    console.log(`Successfully added verified device: ${verifiedDevice.id}`);
+    const deviceDbId = (result as any).insertId;
+
+    console.log(`Successfully added verified device: ${deviceDbId}`);
     return NextResponse.json({
       message: "Device verified successfully",
-      deviceId: verifiedDevice.id,
+      deviceId: deviceDbId,
     });
   } catch (error) {
     console.error("Error adding verified device:", error);

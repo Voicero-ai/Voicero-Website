@@ -1,10 +1,24 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../lib/auth";
-import prisma from "../../../lib/prisma";
+import { query } from "../../../lib/db";
 import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
+
+interface Website {
+  id: string;
+  url: string;
+  name: string;
+  userId: string;
+  type: string;
+}
+
+interface AccessKey {
+  id: string;
+  key: string;
+  websiteId: string;
+}
 
 export async function POST(request: Request) {
   try {
@@ -28,69 +42,114 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid site type" }, { status: 400 });
     }
 
-    let website;
-    let accessKey;
+    let website: Website;
+    let accessKey: AccessKey;
     const websiteName = extractWebsiteName(siteUrl);
 
     if (websiteId) {
       // Use existing website
-      website = await prisma.website.findFirst({
-        where: {
-          id: websiteId,
-          userId: session.user.id,
-          type: type,
-        },
-        include: {
-          accessKeys: true,
-        },
-      });
+      const websites = (await query(
+        "SELECT * FROM Website WHERE id = ? AND userId = ? AND type = ?",
+        [websiteId, session.user.id, type]
+      )) as Website[];
 
-      if (!website) {
+      if (websites.length === 0) {
         return NextResponse.json(
           { error: "Website not found" },
           { status: 404 }
         );
       }
+
+      website = websites[0];
+
+      // Get access keys for this website
+      const accessKeys = (await query(
+        "SELECT * FROM AccessKey WHERE websiteId = ?",
+        [website.id]
+      )) as AccessKey[];
+
+      if (accessKeys.length > 0) {
+        accessKey = accessKeys[0];
+      } else {
+        // Create a new access key
+        const newKey = generateAccessKey();
+        const accessKeyResult = await query(
+          "INSERT INTO AccessKey (key, websiteId) VALUES (?, ?)",
+          [newKey, website.id]
+        );
+
+        accessKey = {
+          id: (accessKeyResult as any).insertId,
+          key: newKey,
+          websiteId: website.id,
+        };
+      }
     } else {
-      // Use upsert to prevent duplicates
-      website = await prisma.website.upsert({
-        where: {
-          userId_url_type: {
-            url: siteUrl,
-            userId: session.user.id,
-            type: type,
-          },
-        },
-        update: {},
-        create: {
+      // Check if website already exists
+      const existingWebsites = (await query(
+        "SELECT * FROM Website WHERE url = ? AND userId = ? AND type = ?",
+        [siteUrl, session.user.id, type]
+      )) as Website[];
+
+      if (existingWebsites.length > 0) {
+        website = existingWebsites[0];
+
+        // Get access keys for this website
+        const accessKeys = (await query(
+          "SELECT * FROM AccessKey WHERE websiteId = ?",
+          [website.id]
+        )) as AccessKey[];
+
+        if (accessKeys.length > 0) {
+          accessKey = accessKeys[0];
+        } else {
+          // Create a new access key
+          const newKey = generateAccessKey();
+          const accessKeyResult = await query(
+            "INSERT INTO AccessKey (key, websiteId) VALUES (?, ?)",
+            [newKey, website.id]
+          );
+
+          accessKey = {
+            id: (accessKeyResult as any).insertId,
+            key: newKey,
+            websiteId: website.id,
+          };
+        }
+      } else {
+        // Create a new website
+        const renewsOn = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // Set 30 days from now
+        const websiteResult = await query(
+          `INSERT INTO Website 
+            (url, name, userId, type, plan, queryLimit, renewsOn) 
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [siteUrl, websiteName, session.user.id, type, "", 0, renewsOn]
+        );
+
+        const newWebsiteId = (websiteResult as any).insertId;
+
+        // Create a new access key
+        const newKey = generateAccessKey();
+        const accessKeyResult = await query(
+          "INSERT INTO AccessKey (key, websiteId) VALUES (?, ?)",
+          [newKey, newWebsiteId]
+        );
+
+        website = {
+          id: newWebsiteId,
           url: siteUrl,
           name: websiteName,
           userId: session.user.id,
           type: type,
-          plan: "",
-          queryLimit: 0,
-          renewsOn: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Set 30 days from now
-          accessKeys: {
-            create: {
-              key: generateAccessKey(),
-            },
-          },
-        },
-        include: {
-          accessKeys: true,
-        },
-      });
-    }
+        };
 
-    // Use existing access key or create new one if needed
-    accessKey =
-      website.accessKeys[0] ||
-      (await prisma.accessKey.create({
-        data: {
-          key: generateAccessKey(),
-          websiteId: website.id,
-        },
-      }));
+        accessKey = {
+          id: (accessKeyResult as any).insertId,
+          key: newKey,
+          websiteId: newWebsiteId,
+        };
+      }
+    }
 
     // Construct redirect URL with access key
     const redirectUrl = new URL(wpRedirect);

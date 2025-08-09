@@ -1,9 +1,29 @@
 import { NextResponse, NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { cors } from "../../../lib/cors";
+import { query } from "../../../lib/db";
+
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
+interface Website {
+  id: string;
+  name: string;
+  customInstructions: string | null;
+  customWelcomeMessage: string | null;
+  botName: string | null;
+  color: string | null;
+  iconBot: string | null;
+  iconVoice: string | null;
+  iconMessage: string | null;
+  removeHighlight: boolean;
+  allowMultiAIReview: boolean;
+  clickMessage: string | null;
+}
+
+interface PopUpQuestion {
+  id: string;
+  question: string;
+  websiteId: string;
+}
 
 // Add OPTIONS handler for CORS preflight
 export async function OPTIONS(request: NextRequest) {
@@ -94,23 +114,14 @@ export async function POST(request: NextRequest) {
       websiteId,
       "and access key"
     );
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-        accessKeys: {
-          some: {
-            key: accessKey,
-          },
-        },
-      },
-      include: {
-        popUpQuestions: true,
-      },
-    });
 
-    console.log("Website found:", website ? "Yes" : "No");
+    // Check if the access key is valid for this website
+    const accessKeyResult = await query(
+      `SELECT websiteId FROM AccessKey WHERE key = ? AND websiteId = ?`,
+      [accessKey, websiteId]
+    );
 
-    if (!website) {
+    if (Array.isArray(accessKeyResult) && accessKeyResult.length === 0) {
       console.log("Invalid access key or website ID");
       return cors(
         request,
@@ -121,96 +132,150 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Prepare the data object with only fields that are provided
-    const updateData: any = {};
+    // Get the website and its popup questions
+    const websiteResult = (await query(`SELECT * FROM Website WHERE id = ?`, [
+      websiteId,
+    ])) as Website[];
 
-    if (customInstructions !== undefined)
-      updateData.customInstructions = customInstructions;
-    if (customWelcomeMessage !== undefined)
-      updateData.customWelcomeMessage = customWelcomeMessage;
-    if (botName !== undefined) updateData.botName = botName;
-    if (color !== undefined) updateData.color = color;
-    if (iconBot !== undefined) updateData.iconBot = iconBot;
-    if (iconVoice !== undefined) updateData.iconVoice = iconVoice;
-    if (iconMessage !== undefined) updateData.iconMessage = iconMessage;
-    if (removeHighlight !== undefined)
-      updateData.removeHighlight = removeHighlight;
-    if (allowMultiAIReview !== undefined)
-      updateData.allowMultiAIReview = allowMultiAIReview;
-    if (clickMessage !== undefined) updateData.clickMessage = clickMessage;
+    if (websiteResult.length === 0) {
+      console.log("Website not found");
+      return cors(
+        request,
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
+      );
+    }
 
-    console.log("Update data prepared:", updateData);
+    const website = websiteResult[0];
 
-    // Begin transaction for atomic updates
-    console.log("Beginning database transaction");
-    const result = await prisma.$transaction(async (tx) => {
-      // Update the website with the new settings
+    // Get existing popup questions
+    const existingQuestions = (await query(
+      `SELECT * FROM PopUpQuestion WHERE websiteId = ?`,
+      [websiteId]
+    )) as PopUpQuestion[];
+
+    // Prepare the update fields and values
+    const updateFields = [];
+    const updateValues = [];
+
+    if (customInstructions !== undefined) {
+      updateFields.push("customInstructions = ?");
+      updateValues.push(customInstructions);
+    }
+
+    if (customWelcomeMessage !== undefined) {
+      updateFields.push("customWelcomeMessage = ?");
+      updateValues.push(customWelcomeMessage);
+    }
+
+    if (botName !== undefined) {
+      updateFields.push("botName = ?");
+      updateValues.push(botName);
+    }
+
+    if (color !== undefined) {
+      updateFields.push("color = ?");
+      updateValues.push(color);
+    }
+
+    if (iconBot !== undefined) {
+      updateFields.push("iconBot = ?");
+      updateValues.push(iconBot);
+    }
+
+    if (iconVoice !== undefined) {
+      updateFields.push("iconVoice = ?");
+      updateValues.push(iconVoice);
+    }
+
+    if (iconMessage !== undefined) {
+      updateFields.push("iconMessage = ?");
+      updateValues.push(iconMessage);
+    }
+
+    if (removeHighlight !== undefined) {
+      updateFields.push("removeHighlight = ?");
+      updateValues.push(removeHighlight);
+    }
+
+    if (allowMultiAIReview !== undefined) {
+      updateFields.push("allowMultiAIReview = ?");
+      updateValues.push(allowMultiAIReview);
+    }
+
+    if (clickMessage !== undefined) {
+      updateFields.push("clickMessage = ?");
+      updateValues.push(clickMessage);
+    }
+
+    console.log("Update data prepared:", { updateFields, updateValues });
+
+    // Begin transaction-like operations
+    console.log("Beginning database operations");
+
+    // Update the website with the new settings if there are fields to update
+    if (updateFields.length > 0) {
       console.log("Updating website with new settings");
-      const updatedWebsite = await tx.website.update({
-        where: { id: websiteId },
-        data: updateData,
-        include: {
-          popUpQuestions: true,
-        },
-      });
+      await query(
+        `UPDATE Website SET ${updateFields.join(", ")} WHERE id = ?`,
+        [...updateValues, websiteId]
+      );
       console.log("Website updated successfully");
+    }
 
-      // If we're updating pop-up questions
-      if (popUpQuestions !== undefined) {
-        console.log("Processing popUpQuestions update");
-        // Delete all existing questions
-        console.log("Deleting existing popUpQuestions");
-        await tx.popUpQuestion.deleteMany({
-          where: {
-            websiteId: websiteId,
-          },
-        });
+    // If we're updating pop-up questions
+    if (popUpQuestions !== undefined) {
+      console.log("Processing popUpQuestions update");
 
-        // Create new questions
-        if (Array.isArray(popUpQuestions) && popUpQuestions.length > 0) {
-          console.log(`Creating ${popUpQuestions.length} new popUpQuestions`);
-          await tx.popUpQuestion.createMany({
-            data: popUpQuestions.map((question: string) => ({
-              question,
-              websiteId,
-            })),
-          });
+      // Delete all existing questions
+      console.log("Deleting existing popUpQuestions");
+      await query(`DELETE FROM PopUpQuestion WHERE websiteId = ?`, [websiteId]);
+
+      // Create new questions
+      if (Array.isArray(popUpQuestions) && popUpQuestions.length > 0) {
+        console.log(`Creating ${popUpQuestions.length} new popUpQuestions`);
+
+        for (const question of popUpQuestions) {
+          await query(
+            `INSERT INTO PopUpQuestion (question, websiteId) VALUES (?, ?)`,
+            [question, websiteId]
+          );
         }
-
-        // Refetch to get the new questions
-        console.log("Refetching website with updated popUpQuestions");
-        const refreshedWebsite = await tx.website.findUnique({
-          where: { id: websiteId },
-          include: {
-            popUpQuestions: true,
-          },
-        });
-
-        return refreshedWebsite;
       }
+    }
 
-      return updatedWebsite;
-    });
+    // Get the updated website data
+    const updatedWebsiteResult = (await query(
+      `SELECT * FROM Website WHERE id = ?`,
+      [websiteId]
+    )) as Website[];
 
-    console.log("Transaction completed successfully, returning result");
+    const updatedWebsite = updatedWebsiteResult[0];
+
+    // Get the updated popup questions
+    const updatedQuestions = (await query(
+      `SELECT * FROM PopUpQuestion WHERE websiteId = ?`,
+      [websiteId]
+    )) as PopUpQuestion[];
+
+    console.log("Operations completed successfully, returning result");
     return cors(
       request,
       NextResponse.json({
         success: true,
         website: {
-          id: result?.id,
-          name: result?.name,
-          customInstructions: result?.customInstructions,
-          customWelcomeMessage: result?.customWelcomeMessage,
-          botName: result?.botName,
-          color: result?.color,
-          iconBot: result?.iconBot,
-          iconVoice: result?.iconVoice,
-          iconMessage: result?.iconMessage,
-          removeHighlight: result?.removeHighlight,
-          allowMultiAIReview: result?.allowMultiAIReview,
-          clickMessage: result?.clickMessage,
-          popUpQuestions: result?.popUpQuestions,
+          id: updatedWebsite.id,
+          name: updatedWebsite.name,
+          customInstructions: updatedWebsite.customInstructions,
+          customWelcomeMessage: updatedWebsite.customWelcomeMessage,
+          botName: updatedWebsite.botName,
+          color: updatedWebsite.color,
+          iconBot: updatedWebsite.iconBot,
+          iconVoice: updatedWebsite.iconVoice,
+          iconMessage: updatedWebsite.iconMessage,
+          removeHighlight: updatedWebsite.removeHighlight,
+          allowMultiAIReview: updatedWebsite.allowMultiAIReview,
+          clickMessage: updatedWebsite.clickMessage,
+          popUpQuestions: updatedQuestions,
         },
       })
     );

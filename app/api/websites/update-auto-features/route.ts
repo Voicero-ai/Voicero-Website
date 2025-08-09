@@ -1,8 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { query } from "@/lib/db";
+
 export const dynamic = "force-dynamic";
+
+// Define interface for website
+interface Website {
+  id: string;
+  url: string;
+  userId: string;
+  allowAutoCancel: boolean;
+  allowAutoReturn: boolean;
+  allowAutoExchange: boolean;
+  allowAutoClick: boolean;
+  allowAutoScroll: boolean;
+  allowAutoHighlight: boolean;
+  allowAutoRedirect: boolean;
+  allowAutoGetUserOrders: boolean;
+  allowAutoUpdateUserInfo: boolean;
+  allowAutoFillForm: boolean;
+  allowAutoTrackOrder: boolean;
+  allowAutoLogout: boolean;
+  allowAutoLogin: boolean;
+  allowAutoGenerateImage: boolean;
+  allowMultiAIReview: boolean;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,16 +65,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if website exists and belongs to the user
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-        user: {
-          email: session.user.email ?? undefined,
-        },
-      },
-    });
+    const websites = (await query(
+      "SELECT * FROM Website WHERE id = ? AND userId IN (SELECT id FROM User WHERE email = ?)",
+      [websiteId, session.user.email || ""]
+    )) as Website[];
 
-    if (!website) {
+    if (websites.length === 0) {
       return NextResponse.json(
         { error: "Website not found or access denied" },
         { status: 404 }
@@ -59,39 +78,50 @@ export async function POST(request: NextRequest) {
     }
 
     // Update website with auto features
-    const updatedWebsite = await prisma.website.update({
-      where: {
-        id: websiteId,
-      },
-      data: {
-        allowAutoCancel: allowAutoCancel !== undefined ? allowAutoCancel : true,
-        allowAutoReturn: allowAutoReturn !== undefined ? allowAutoReturn : true,
-        allowAutoExchange:
-          allowAutoExchange !== undefined ? allowAutoExchange : true,
-        allowAutoClick: allowAutoClick !== undefined ? allowAutoClick : true,
-        allowAutoScroll: allowAutoScroll !== undefined ? allowAutoScroll : true,
-        allowAutoHighlight:
-          allowAutoHighlight !== undefined ? allowAutoHighlight : true,
-        allowAutoRedirect:
-          allowAutoRedirect !== undefined ? allowAutoRedirect : true,
-        allowAutoGetUserOrders:
-          allowAutoGetUserOrders !== undefined ? allowAutoGetUserOrders : true,
-        allowAutoUpdateUserInfo:
-          allowAutoUpdateUserInfo !== undefined
-            ? allowAutoUpdateUserInfo
-            : true,
-        allowAutoFillForm:
-          allowAutoFillForm !== undefined ? allowAutoFillForm : true,
-        allowAutoTrackOrder:
-          allowAutoTrackOrder !== undefined ? allowAutoTrackOrder : true,
-        allowAutoLogout: allowAutoLogout !== undefined ? allowAutoLogout : true,
-        allowAutoLogin: allowAutoLogin !== undefined ? allowAutoLogin : true,
-        allowAutoGenerateImage:
-          allowAutoGenerateImage !== undefined ? allowAutoGenerateImage : true,
-        allowMultiAIReview:
-          allowMultiAIReview !== undefined ? allowMultiAIReview : false,
-      },
-    });
+    await query(
+      `UPDATE Website SET 
+        allowAutoCancel = ?,
+        allowAutoReturn = ?,
+        allowAutoExchange = ?,
+        allowAutoClick = ?,
+        allowAutoScroll = ?,
+        allowAutoHighlight = ?,
+        allowAutoRedirect = ?,
+        allowAutoGetUserOrders = ?,
+        allowAutoUpdateUserInfo = ?,
+        allowAutoFillForm = ?,
+        allowAutoTrackOrder = ?,
+        allowAutoLogout = ?,
+        allowAutoLogin = ?,
+        allowAutoGenerateImage = ?,
+        allowMultiAIReview = ?
+      WHERE id = ?`,
+      [
+        allowAutoCancel !== undefined ? allowAutoCancel : true,
+        allowAutoReturn !== undefined ? allowAutoReturn : true,
+        allowAutoExchange !== undefined ? allowAutoExchange : true,
+        allowAutoClick !== undefined ? allowAutoClick : true,
+        allowAutoScroll !== undefined ? allowAutoScroll : true,
+        allowAutoHighlight !== undefined ? allowAutoHighlight : true,
+        allowAutoRedirect !== undefined ? allowAutoRedirect : true,
+        allowAutoGetUserOrders !== undefined ? allowAutoGetUserOrders : true,
+        allowAutoUpdateUserInfo !== undefined ? allowAutoUpdateUserInfo : true,
+        allowAutoFillForm !== undefined ? allowAutoFillForm : true,
+        allowAutoTrackOrder !== undefined ? allowAutoTrackOrder : true,
+        allowAutoLogout !== undefined ? allowAutoLogout : true,
+        allowAutoLogin !== undefined ? allowAutoLogin : true,
+        allowAutoGenerateImage !== undefined ? allowAutoGenerateImage : true,
+        allowMultiAIReview !== undefined ? allowMultiAIReview : false,
+        websiteId,
+      ]
+    );
+
+    // Get the updated website
+    const updatedWebsites = (await query("SELECT * FROM Website WHERE id = ?", [
+      websiteId,
+    ])) as Website[];
+
+    const updatedWebsite = updatedWebsites[0];
 
     return NextResponse.json({
       success: true,

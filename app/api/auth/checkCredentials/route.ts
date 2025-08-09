@@ -1,8 +1,16 @@
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
 import { compare } from "bcryptjs";
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
+
+interface User {
+  id: string;
+  email: string;
+  username: string;
+  password: string;
+  emailVerified: boolean | number;
+}
 
 export async function POST(request: Request) {
   try {
@@ -18,23 +26,22 @@ export async function POST(request: Request) {
 
     // Find user by email or username
     const isEmail = login.includes("@");
-    const user = await prisma.user.findFirst({
-      where: isEmail ? { email: login } : { username: login },
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        password: true,
-        emailVerified: true,
-      },
-    });
+    const users = (await query(
+      `SELECT id, email, username, password, emailVerified 
+       FROM User 
+       WHERE ${isEmail ? "email = ?" : "username = ?"}
+       LIMIT 1`,
+      [login]
+    )) as User[];
 
-    if (!user) {
+    if (users.length === 0) {
       return NextResponse.json(
         { error: "No user found with that email/username" },
         { status: 400 }
       );
     }
+
+    const user = users[0];
 
     // Verify password
     const isPasswordValid = await compare(password, user.password);
@@ -47,7 +54,7 @@ export async function POST(request: Request) {
       userId: user.id,
       email: user.email,
       username: user.username,
-      emailVerified: user.emailVerified,
+      emailVerified: !!user.emailVerified,
     });
   } catch (error) {
     console.error("Error checking credentials:", error);

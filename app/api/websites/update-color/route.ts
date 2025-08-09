@@ -1,8 +1,16 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import prisma from "@/lib/prisma";
+import { query } from "@/lib/db";
+
 export const dynamic = "force-dynamic";
+
+interface Website {
+  id: string;
+  url: string;
+  userId: string;
+  color: string | null;
+}
 
 export async function POST(req: Request) {
   try {
@@ -21,14 +29,12 @@ export async function POST(req: Request) {
     }
 
     // Verify the website belongs to the user
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-        userId: session.user.id,
-      },
-    });
+    const websites = (await query(
+      "SELECT * FROM Website WHERE id = ? AND userId = ?",
+      [websiteId, session.user.id]
+    )) as Website[];
 
-    if (!website) {
+    if (websites.length === 0) {
       return NextResponse.json(
         { error: "Website not found or unauthorized" },
         { status: 404 }
@@ -36,16 +42,17 @@ export async function POST(req: Request) {
     }
 
     // Update the website color
-    const updatedWebsite = await prisma.website.update({
-      where: {
-        id: websiteId,
-      },
-      data: {
-        color,
-      },
-    });
+    await query("UPDATE Website SET color = ? WHERE id = ?", [
+      color,
+      websiteId,
+    ]);
 
-    return NextResponse.json(updatedWebsite);
+    // Get the updated website
+    const updatedWebsites = (await query("SELECT * FROM Website WHERE id = ?", [
+      websiteId,
+    ])) as Website[];
+
+    return NextResponse.json(updatedWebsites[0]);
   } catch (error) {
     console.error("Error updating website color:", error);
     return NextResponse.json(

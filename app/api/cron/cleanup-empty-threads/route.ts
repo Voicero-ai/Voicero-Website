@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
 
 // Internal batch size for database efficiency
 const BATCH_SIZE = 200;
+
+interface Thread {
+  id: string;
+  websiteId: string;
+  sessions_count?: number;
+}
 
 export async function GET(request: Request) {
   try {
@@ -22,11 +28,11 @@ export async function GET(request: Request) {
     console.log("Checking for problematic threads...");
 
     // Get IDs of empty threads
-    const emptyThreadIds = await prisma.$queryRaw`
+    const emptyThreadIds = (await query(`
       SELECT a.id 
       FROM AiThread a 
       WHERE NOT EXISTS (SELECT 1 FROM AiMessage m WHERE m.threadId = a.id)
-    `;
+    `)) as { id: string }[];
 
     if (Array.isArray(emptyThreadIds) && emptyThreadIds.length > 0) {
       console.log(
@@ -40,24 +46,27 @@ export async function GET(request: Request) {
 
         // Direct SQL to delete the connections
         try {
-          const result = await prisma.$executeRaw`
-            DELETE FROM _AiThreadToSession WHERE A = ${threadId}
-          `;
-          console.log(
-            `Directly deleted ${result} session connections for thread ${threadId}`
+          const result = await query(
+            "DELETE FROM _AiThreadToSession WHERE A = ?",
+            [threadId]
           );
-          totalConnectionsRemoved += result;
+
+          const deleteCount = (result as any).affectedRows || 0;
+          console.log(
+            `Directly deleted ${deleteCount} session connections for thread ${threadId}`
+          );
+          totalConnectionsRemoved += deleteCount;
 
           // Now delete the thread itself
-          const deleteResult = await prisma.aiThread.deleteMany({
-            where: {
-              id: threadId,
-            },
-          });
+          const deleteResult = await query(
+            "DELETE FROM AiThread WHERE id = ?",
+            [threadId]
+          );
 
-          if (deleteResult.count > 0) {
+          const threadDeleteCount = (deleteResult as any).affectedRows || 0;
+          if (threadDeleteCount > 0) {
             console.log(`Successfully deleted thread ${threadId}`);
-            totalDeleted += deleteResult.count;
+            totalDeleted += threadDeleteCount;
           } else {
             console.log(`Failed to delete thread ${threadId}`);
           }
@@ -77,28 +86,17 @@ export async function GET(request: Request) {
     // Process all empty threads without an artificial limit
     while (hasMoreEmptyThreads) {
       // Get a batch of empty threads
-      const emptyThreadsBatch = await prisma.aiThread.findMany({
-        where: {
-          messages: {
-            none: {}, // This checks for threads with no related messages
-          },
-          // Remove the time filter to get all empty threads regardless of age
-        },
-        select: {
-          id: true,
-          websiteId: true,
-          _count: {
-            select: {
-              sessions: true,
-            },
-          },
-        },
-        take: BATCH_SIZE,
-        skip: emptyOffset,
-        orderBy: {
-          createdAt: "asc",
-        },
-      });
+      const emptyThreadsBatch = (await query(
+        `
+        SELECT a.id, a.websiteId, 
+          (SELECT COUNT(*) FROM _AiThreadToSession WHERE A = a.id) as sessions_count
+        FROM AiThread a
+        WHERE NOT EXISTS (SELECT 1 FROM AiMessage m WHERE m.threadId = a.id)
+        ORDER BY a.createdAt ASC
+        LIMIT ? OFFSET ?
+      `,
+        [BATCH_SIZE, emptyOffset]
+      )) as Thread[];
 
       if (emptyThreadsBatch.length === 0) {
         hasMoreEmptyThreads = false;
@@ -112,7 +110,7 @@ export async function GET(request: Request) {
 
       // Get thread IDs with sessions
       const threadIdsWithSessions = emptyThreadsBatch
-        .filter((thread) => thread._count.sessions > 0)
+        .filter((thread) => (thread.sessions_count || 0) > 0)
         .map((thread) => thread.id);
 
       if (threadIdsWithSessions.length > 0) {
@@ -124,13 +122,16 @@ export async function GET(request: Request) {
         for (const threadId of threadIdsWithSessions) {
           try {
             // Direct SQL to delete the connections
-            const result = await prisma.$executeRaw`
-              DELETE FROM _AiThreadToSession WHERE A = ${threadId}
-            `;
-            console.log(
-              `Directly deleted ${result} session connections for thread ${threadId}`
+            const result = await query(
+              "DELETE FROM _AiThreadToSession WHERE A = ?",
+              [threadId]
             );
-            totalConnectionsRemoved += result;
+
+            const deleteCount = (result as any).affectedRows || 0;
+            console.log(
+              `Directly deleted ${deleteCount} session connections for thread ${threadId}`
+            );
+            totalConnectionsRemoved += deleteCount;
           } catch (error) {
             console.error(
               `Error disconnecting sessions for thread ${threadId}:`,
@@ -147,18 +148,19 @@ export async function GET(request: Request) {
       // Get all thread IDs in this batch
       const threadIds = emptyThreadsBatch.map((thread) => thread.id);
 
-      // Batch delete all threads in this batch
-      const deleteResult = await prisma.aiThread.deleteMany({
-        where: {
-          id: {
-            in: threadIds,
-          },
-        },
-      });
+      if (threadIds.length > 0) {
+        // Batch delete all threads in this batch using a parameterized query
+        const placeholders = threadIds.map(() => "?").join(",");
+        const deleteResult = await query(
+          `DELETE FROM AiThread WHERE id IN (${placeholders})`,
+          threadIds
+        );
 
-      emptyDeletedCount += deleteResult.count;
-      totalDeleted += deleteResult.count;
-      console.log(`Deleted ${deleteResult.count} empty threads in batch`);
+        const deleteCount = (deleteResult as any).affectedRows || 0;
+        emptyDeletedCount += deleteCount;
+        totalDeleted += deleteCount;
+        console.log(`Deleted ${deleteCount} empty threads in batch`);
+      }
 
       // Update offset for next iteration
       emptyOffset += emptyThreadsBatch.length;
@@ -176,7 +178,8 @@ export async function GET(request: Request) {
     // Process all assistant-only threads without an artificial limit
     while (hasMoreThreads) {
       // Get threads with messages, excluding threads with user messages
-      const assistantOnlyThreadsIds = (await prisma.$queryRaw`
+      const assistantOnlyThreadsIds = (await query(
+        `
         SELECT a.id, a.websiteId 
         FROM AiThread a
         WHERE EXISTS (
@@ -188,9 +191,10 @@ export async function GET(request: Request) {
           WHERE m.threadId = a.id AND m.role = 'user'
         )
         ORDER BY a.createdAt ASC
-        LIMIT ${BATCH_SIZE}
-        OFFSET ${assistantOffset}
-      `) as { id: string; websiteId: string }[];
+        LIMIT ? OFFSET ?
+      `,
+        [BATCH_SIZE, assistantOffset]
+      )) as { id: string; websiteId: string }[];
 
       if (assistantOnlyThreadsIds.length === 0) {
         hasMoreThreads = false;
@@ -206,24 +210,19 @@ export async function GET(request: Request) {
       const threadIds = assistantOnlyThreadsIds.map((thread) => thread.id);
 
       // Get threads with sessions
-      const threadsWithSessions = await prisma.aiThread.findMany({
-        where: {
-          id: {
-            in: threadIds,
-          },
-        },
-        include: {
-          _count: {
-            select: {
-              sessions: true,
-            },
-          },
-        },
-      });
+      const threadsWithSessions = (await query(
+        `
+        SELECT a.id, 
+          (SELECT COUNT(*) FROM _AiThreadToSession WHERE A = a.id) as sessions_count
+        FROM AiThread a
+        WHERE a.id IN (${threadIds.map(() => "?").join(",")})
+      `,
+        threadIds
+      )) as Thread[];
 
       // Get IDs of threads with sessions
       const threadIdsWithSessions = threadsWithSessions
-        .filter((thread) => thread._count.sessions > 0)
+        .filter((thread) => (thread.sessions_count || 0) > 0)
         .map((thread) => thread.id);
 
       if (threadIdsWithSessions.length > 0) {
@@ -235,13 +234,16 @@ export async function GET(request: Request) {
         for (const threadId of threadIdsWithSessions) {
           try {
             // Direct SQL to delete the connections
-            const result = await prisma.$executeRaw`
-              DELETE FROM _AiThreadToSession WHERE A = ${threadId}
-            `;
-            console.log(
-              `Directly deleted ${result} session connections for thread ${threadId}`
+            const result = await query(
+              "DELETE FROM _AiThreadToSession WHERE A = ?",
+              [threadId]
             );
-            totalConnectionsRemoved += result;
+
+            const deleteCount = (result as any).affectedRows || 0;
+            console.log(
+              `Directly deleted ${deleteCount} session connections for thread ${threadId}`
+            );
+            totalConnectionsRemoved += deleteCount;
           } catch (error) {
             console.error(
               `Error disconnecting sessions for thread ${threadId}:`,
@@ -255,29 +257,25 @@ export async function GET(request: Request) {
         );
       }
 
-      // Batch delete all message records for these threads
-      await prisma.aiMessage.deleteMany({
-        where: {
-          threadId: {
-            in: threadIds,
-          },
-        },
-      });
+      if (threadIds.length > 0) {
+        // Batch delete all message records for these threads
+        const placeholders = threadIds.map(() => "?").join(",");
+        await query(
+          `DELETE FROM AiMessage WHERE threadId IN (${placeholders})`,
+          threadIds
+        );
 
-      // Batch delete all threads in this batch
-      const deleteResult = await prisma.aiThread.deleteMany({
-        where: {
-          id: {
-            in: threadIds,
-          },
-        },
-      });
+        // Batch delete all threads in this batch
+        const deleteResult = await query(
+          `DELETE FROM AiThread WHERE id IN (${placeholders})`,
+          threadIds
+        );
 
-      assistantOnlyDeletedCount += deleteResult.count;
-      totalDeleted += deleteResult.count;
-      console.log(
-        `Deleted ${deleteResult.count} assistant-only threads in batch`
-      );
+        const deleteCount = (deleteResult as any).affectedRows || 0;
+        assistantOnlyDeletedCount += deleteCount;
+        totalDeleted += deleteCount;
+        console.log(`Deleted ${deleteCount} assistant-only threads in batch`);
+      }
 
       // Update offset for next iteration
       assistantOffset += assistantOnlyThreadsIds.length;
@@ -295,12 +293,15 @@ export async function GET(request: Request) {
 
     while (hasMoreOrphanedConnections) {
       // Get a batch of orphaned thread-to-session connections
-      const orphanedConnections = (await prisma.$queryRaw`
+      const orphanedConnections = (await query(
+        `
         SELECT ts.A as threadId, ts.B as sessionId 
         FROM _AiThreadToSession ts 
         WHERE NOT EXISTS (SELECT 1 FROM AiThread t WHERE t.id = ts.A)
-        LIMIT ${BATCH_SIZE}
-      `) as { threadId: string; sessionId: string }[];
+        LIMIT ?
+      `,
+        [BATCH_SIZE]
+      )) as { threadId: string; sessionId: string }[];
 
       if (orphanedConnections.length === 0) {
         hasMoreOrphanedConnections = false;
@@ -313,17 +314,17 @@ export async function GET(request: Request) {
 
       // Batch delete orphaned connections
       if (threadIds.length > 0) {
-        const result = await prisma.$executeRawUnsafe(
-          `DELETE FROM _AiThreadToSession WHERE A IN (${threadIds
-            .map(() => "?")
-            .join(",")})`,
-          ...threadIds
+        const placeholders = threadIds.map(() => "?").join(",");
+        const result = await query(
+          `DELETE FROM _AiThreadToSession WHERE A IN (${placeholders})`,
+          threadIds
         );
 
-        orphanedConnectionsRemoved += result;
+        const deleteCount = (result as any).affectedRows || 0;
+        orphanedConnectionsRemoved += deleteCount;
         orphanedBatchCount++;
         console.log(
-          `Deleted ${result} orphaned session connections in batch ${orphanedBatchCount}`
+          `Deleted ${deleteCount} orphaned session connections in batch ${orphanedBatchCount}`
         );
       }
     }
@@ -348,7 +349,5 @@ export async function GET(request: Request) {
       { error: "Failed to process empty thread cleanup" },
       { status: 500 }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }

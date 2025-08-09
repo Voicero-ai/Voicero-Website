@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/auth";
+import { query } from "@/lib/db";
 import OpenAI from "openai";
 
 export const dynamic = "force-dynamic";
@@ -51,17 +51,18 @@ export async function POST(req: Request) {
     const { websiteId, instructions } = await req.json();
 
     // Verify user owns this website and get assistant IDs
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-        userId: session.user.id,
-      },
-      select: {
-        id: true,
-        aiAssistantId: true,
-        aiVoiceAssistantId: true,
-      },
-    });
+    const websites = (await query(
+      `SELECT id, aiAssistantId, aiVoiceAssistantId
+       FROM Website
+       WHERE id = ? AND userId = ?
+       LIMIT 1`,
+      [websiteId, session.user.id]
+    )) as {
+      id: string;
+      aiAssistantId: string | null;
+      aiVoiceAssistantId: string | null;
+    }[];
+    const website = websites.length > 0 ? websites[0] : null;
 
     if (!website) {
       return NextResponse.json({ error: "Website not found" }, { status: 404 });

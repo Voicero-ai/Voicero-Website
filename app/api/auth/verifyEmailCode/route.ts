@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
+
+interface User {
+  id: string;
+  email: string;
+  emailCode: string | null;
+}
 
 export async function POST(request: Request) {
   try {
@@ -16,16 +22,19 @@ export async function POST(request: Request) {
     }
 
     // Find user by email
-    const user = await prisma.user.findFirst({
-      where: { email },
-    });
+    const users = (await query(
+      "SELECT id, email, emailCode FROM User WHERE email = ?",
+      [email]
+    )) as User[];
 
-    if (!user) {
+    if (users.length === 0) {
       return NextResponse.json(
         { error: "Invalid verification code" },
         { status: 400 }
       );
     }
+
+    const user = users[0];
 
     // Check if the code matches
     if (user.emailCode !== code) {
@@ -36,13 +45,10 @@ export async function POST(request: Request) {
     }
 
     // Mark email as verified and clear the code
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        emailVerified: true,
-        emailCode: null,
-      },
-    });
+    await query(
+      "UPDATE User SET emailVerified = ?, emailCode = ? WHERE id = ?",
+      [true, null, user.id]
+    );
 
     return NextResponse.json(
       { message: "Email verified successfully" },

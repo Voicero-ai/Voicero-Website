@@ -1,78 +1,61 @@
-import { PrismaClient } from "@prisma/client";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
-
-const prisma = new PrismaClient();
 
 export async function POST(request: Request) {
   try {
     const { websiteId } = await request.json();
 
-    await prisma.$transaction(async (tx) => {
-      // Delete blog-related content first (comments depend on blog posts)
-      await tx.shopifyComment.deleteMany({
-        where: {
-          post: {
-            websiteId,
-          },
-        },
-      });
-      console.log("Deleted Shopify comments");
+    // Emulate transactional deletes with ordered deletes to maintain FK integrity
+    // Delete blog-related content first (comments depend on blog posts)
+    await query(
+      `DELETE sc FROM ShopifyComment sc
+       JOIN ShopifyBlogPost sbp ON sc.postId = sbp.id
+       WHERE sbp.websiteId = ?`,
+      [websiteId]
+    );
+    console.log("Deleted Shopify comments");
 
-      await tx.shopifyBlogPost.deleteMany({
-        where: { websiteId },
-      });
-      console.log("Deleted Shopify blog posts");
+    await query(`DELETE FROM ShopifyBlogPost WHERE websiteId = ?`, [websiteId]);
+    console.log("Deleted Shopify blog posts");
 
-      await tx.shopifyBlog.deleteMany({
-        where: { websiteId },
-      });
-      console.log("Deleted Shopify blogs");
+    await query(`DELETE FROM ShopifyBlog WHERE websiteId = ?`, [websiteId]);
+    console.log("Deleted Shopify blogs");
 
-      // Delete product-related content
-      await tx.shopifyReview.deleteMany({
-        where: {
-          product: {
-            websiteId,
-          },
-        },
-      });
-      console.log("Deleted Shopify reviews");
+    // Delete product-related content
+    await query(
+      `DELETE sr FROM ShopifyReview sr
+       JOIN ShopifyProduct sp ON sr.productId = sp.id
+       WHERE sp.websiteId = ?`,
+      [websiteId]
+    );
+    console.log("Deleted Shopify reviews");
 
-      await tx.shopifyMedia.deleteMany({
-        where: {
-          product: {
-            websiteId,
-          },
-        },
-      });
-      console.log("Deleted Shopify media");
+    await query(
+      `DELETE sm FROM ShopifyMedia sm
+       JOIN ShopifyProduct sp ON sm.productId = sp.id
+       WHERE sp.websiteId = ?`,
+      [websiteId]
+    );
+    console.log("Deleted Shopify media");
 
-      await tx.shopifyProductVariant.deleteMany({
-        where: {
-          product: {
-            websiteId,
-          },
-        },
-      });
-      console.log("Deleted Shopify product variants");
+    await query(
+      `DELETE spv FROM ShopifyProductVariant spv
+       JOIN ShopifyProduct sp ON spv.productId = sp.id
+       WHERE sp.websiteId = ?`,
+      [websiteId]
+    );
+    console.log("Deleted Shopify product variants");
 
-      await tx.shopifyProduct.deleteMany({
-        where: { websiteId },
-      });
-      console.log("Deleted Shopify products");
+    await query(`DELETE FROM ShopifyProduct WHERE websiteId = ?`, [websiteId]);
+    console.log("Deleted Shopify products");
 
-      // Delete other content
-      await tx.shopifyDiscount.deleteMany({
-        where: { websiteId },
-      });
-      console.log("Deleted Shopify discounts");
+    // Delete other content
+    await query(`DELETE FROM ShopifyDiscount WHERE websiteId = ?`, [websiteId]);
+    console.log("Deleted Shopify discounts");
 
-      await tx.shopifyPage.deleteMany({
-        where: { websiteId },
-      });
-      console.log("Deleted Shopify pages");
-    });
+    await query(`DELETE FROM ShopifyPage WHERE websiteId = ?`, [websiteId]);
+    console.log("Deleted Shopify pages");
 
     return new Response(JSON.stringify({ success: true }), {
       status: 200,

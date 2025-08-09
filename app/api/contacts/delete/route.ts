@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -16,9 +16,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Delete the contact
-    await prisma.contact.delete({
-      where: { id },
-    });
+    await query("DELETE FROM Contact WHERE id = ?", [id]);
 
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (error) {

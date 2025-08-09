@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../../lib/auth";
-import prisma from "../../../../lib/prisma";
+import { query } from "@/lib/db";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -34,15 +34,11 @@ export async function POST(request: Request) {
     }
 
     // Check if website with same URL and type already exists for this user
-    const existingWebsite = await prisma.website.findUnique({
-      where: {
-        userId_url_type: {
-          userId: session.user.id,
-          url,
-          type,
-        },
-      },
-    });
+    const existingRows = (await query(
+      `SELECT id FROM Website WHERE userId = ? AND url = ? AND type = ? LIMIT 1`,
+      [session.user.id, url, type]
+    )) as { id: string }[];
+    const existingWebsite = existingRows.length > 0 ? existingRows[0] : null;
 
     if (existingWebsite) {
       return NextResponse.json(

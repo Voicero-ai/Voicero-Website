@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
-export const dynamic = "force-dynamic";
+import { query } from "../../../lib/db";
 
-const prisma = new PrismaClient();
+export const dynamic = "force-dynamic";
 
 const ses = new SESClient({
   region: process.env.AWS_REGION || "us-east-2",
@@ -24,15 +23,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Store contact submission in Prisma database
-    const contactSubmission = await prisma.contactUs.create({
-      data: {
-        name,
-        email,
-        company,
-        message,
-      },
-    });
+    // Store contact submission in database using direct SQL
+    const contactResult = await query(
+      "INSERT INTO ContactUs (name, email, company, message) VALUES (?, ?, ?, ?)",
+      [name, email, company || null, message]
+    );
 
     // Send notification email using AWS SES
     const params = {
@@ -106,7 +101,5 @@ Time: ${new Date().toLocaleString()}
       { error: "Internal server error" },
       { status: 500 }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }

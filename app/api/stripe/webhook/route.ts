@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { stripe } from "../../../../lib/stripe";
-import prisma from "../../../../lib/prisma";
+import { query } from "../../../../lib/db";
 export const dynamic = "force-dynamic";
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!;
 
@@ -69,15 +69,6 @@ export async function POST(request: Request) {
           );
         }
 
-        // Check if this is a new plan or an upgrade
-        const website = await prisma.website.findUnique({
-          where: { id: websiteId },
-          select: {
-            plan: true,
-            monthlyQueries: true,
-          },
-        });
-
         // Set plan and queryLimit based on the price ID
         const priceId = subscription.items.data[0].price.id;
         const isEnterprisePlan =
@@ -87,17 +78,23 @@ export async function POST(request: Request) {
         const queryLimit = isEnterprisePlan ? 0 : 100; // Now 100 for Starter plan (0 means unlimited for Enterprise)
 
         // Don't reset monthly queries - keep them for analytics
-        await prisma.website.update({
-          where: { id: websiteId },
-          data: {
+        await query(
+          `UPDATE Website SET
+            plan = ?,
+            stripeSubscriptionId = ?,
+            stripeSubscriptionItemId = ?,
+            queryLimit = ?,
+            renewsOn = ?
+           WHERE id = ?`,
+          [
             plan,
-            stripeSubscriptionId: session.subscription as string,
-            stripeSubscriptionItemId: subscription.items.data[0].id, // Always store the subscription item ID
+            session.subscription as string,
+            subscription.items.data[0].id,
             queryLimit,
-            renewsOn: new Date(subscription.current_period_end * 1000),
-            // Don't reset monthly queries to preserve usage statistics
-          },
-        });
+            new Date(subscription.current_period_end * 1000),
+            websiteId,
+          ]
+        );
 
         console.log(`Successfully updated to ${plan} plan`);
 
@@ -109,15 +106,19 @@ export async function POST(request: Request) {
         const subscription = event.data.object;
 
         // Find the website using subscription ID
-        const website = await prisma.website.findFirst({
-          where: { stripeSubscriptionId: subscription.id },
-          select: {
-            id: true,
-            plan: true,
-            monthlyQueries: true,
-            stripeSubscriptionId: true,
-          },
-        });
+        const websiteRows = (await query(
+          `SELECT id, plan, monthlyQueries, stripeSubscriptionId
+           FROM Website
+           WHERE stripeSubscriptionId = ?
+           LIMIT 1`,
+          [subscription.id]
+        )) as {
+          id: string;
+          plan: string;
+          monthlyQueries: number;
+          stripeSubscriptionId: string | null;
+        }[];
+        const website = websiteRows.length > 0 ? websiteRows[0] : null;
 
         if (!website) {
           console.error(
@@ -150,10 +151,12 @@ export async function POST(request: Request) {
           });
 
           // Get current query usage before downgrade
-          const currentWebsite = await prisma.website.findUnique({
-            where: { id: website.id },
-            select: { monthlyQueries: true },
-          });
+          const currentWebsiteRows = (await query(
+            `SELECT monthlyQueries FROM Website WHERE id = ? LIMIT 1`,
+            [website.id]
+          )) as { monthlyQueries: number }[];
+          const currentWebsite =
+            currentWebsiteRows.length > 0 ? currentWebsiteRows[0] : null;
 
           // Calculate how many queries they've used relative to free tier limit
           const queryLimit = 200; // Free tier limit
@@ -161,17 +164,21 @@ export async function POST(request: Request) {
             ? Math.min(currentWebsite.monthlyQueries, queryLimit)
             : 0;
 
-          await prisma.website.update({
-            where: { id: website.id },
-            data: {
-              plan: "",
-              stripeSubscriptionId: null,
-              stripeSubscriptionItemId: null,
-              renewsOn: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // Set 30 days from now
-              queryLimit: 0, // Reset to free tier limit
-              monthlyQueries: usedQueries, // Maintain their query usage up to the free tier limit
-            },
-          });
+          await query(
+            `UPDATE Website SET
+               plan = '',
+               stripeSubscriptionId = NULL,
+               stripeSubscriptionItemId = NULL,
+               renewsOn = ?,
+               queryLimit = 0,
+               monthlyQueries = ?
+             WHERE id = ?`,
+            [
+              new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+              usedQueries,
+              website.id,
+            ]
+          );
 
           console.log("Successfully downgraded website to free plan");
         } else if (subscription.status === "active") {
@@ -187,16 +194,21 @@ export async function POST(request: Request) {
             `Updating subscription to ${plan} plan with queryLimit ${queryLimit}`
           );
 
-          await prisma.website.update({
-            where: { id: website.id },
-            data: {
+          await query(
+            `UPDATE Website SET
+               plan = ?,
+               queryLimit = ?,
+               stripeSubscriptionItemId = ?,
+               renewsOn = ?
+             WHERE id = ?`,
+            [
               plan,
               queryLimit,
-              stripeSubscriptionItemId: subscription.items.data[0].id, // Always store the subscription item ID
-              renewsOn: new Date(subscription.current_period_end * 1000),
-              // Don't reset monthly queries to preserve usage statistics
-            },
-          });
+              subscription.items.data[0].id,
+              new Date(subscription.current_period_end * 1000),
+              website.id,
+            ]
+          );
         }
         break;
       }

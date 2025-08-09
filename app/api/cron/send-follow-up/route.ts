@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { query } from "../../../../lib/db";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
+interface ScheduledEmail {
+  id: string;
+  email: string;
+  type: string;
+  platform: string | null;
+  scheduledFor: Date;
+  sent: boolean;
+}
 
 const ses = new SESClient({
   region: process.env.AWS_REGION || "us-east-2",
@@ -124,14 +131,10 @@ export async function GET(request: Request) {
     console.log("Current time:", now.toISOString());
 
     // Get all unsent scheduled emails that are due
-    const scheduledEmails = await prisma.scheduledEmail.findMany({
-      where: {
-        sent: false,
-        scheduledFor: {
-          lte: now, // Less than or equal to current time
-        },
-      },
-    });
+    const scheduledEmails = (await query(
+      "SELECT id, email, type, platform, scheduledFor, sent FROM ScheduledEmail WHERE sent = ? AND scheduledFor <= ?",
+      [false, now]
+    )) as ScheduledEmail[];
 
     console.log(
       "Found scheduled emails:",
@@ -167,10 +170,10 @@ export async function GET(request: Request) {
 
           if (success) {
             // Mark as sent
-            await prisma.scheduledEmail.update({
-              where: { id: email.id },
-              data: { sent: true },
-            });
+            await query("UPDATE ScheduledEmail SET sent = ? WHERE id = ?", [
+              true,
+              email.id,
+            ]);
             console.log("Marked email as sent:", email.id);
           }
         }
@@ -194,7 +197,5 @@ export async function GET(request: Request) {
       { error: "Failed to process scheduled emails" },
       { status: 500 }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }

@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
+import { query } from "../../../../lib/db";
 export const dynamic = "force-dynamic";
+
+interface Website {
+  id: string;
+  plan: string;
+  renewsOn: Date;
+}
 
 export async function GET(request: Request) {
   try {
@@ -8,13 +14,10 @@ export async function GET(request: Request) {
     console.log("Executing monthly query reset cron job:", now.toISOString());
 
     // Find all websites that have reached their renewal date
-    const websites = await prisma.website.findMany({
-      where: {
-        renewsOn: {
-          lte: now, // Less than or equal to current time
-        },
-      },
-    });
+    const websites = (await query(
+      "SELECT id, plan, renewsOn FROM Website WHERE renewsOn <= ?",
+      [now]
+    )) as Website[];
 
     console.log(`Found ${websites.length} websites due for query reset`);
 
@@ -23,7 +26,7 @@ export async function GET(request: Request) {
     for (const website of websites) {
       try {
         // Reset monthly queries and set next renewal date
-        const nextRenewal = new Date(website.renewsOn!);
+        const nextRenewal = new Date(website.renewsOn);
         nextRenewal.setMonth(nextRenewal.getMonth() + 1); // Set next month
 
         // Set the appropriate query limit based on plan
@@ -33,14 +36,10 @@ export async function GET(request: Request) {
         // For renewals, reset to 0
         // For downgrades (pro to free), capped in the webhook handler
 
-        await prisma.website.update({
-          where: { id: website.id },
-          data: {
-            monthlyQueries: 0,
-            renewsOn: nextRenewal,
-            queryLimit: queryLimit,
-          },
-        });
+        await query(
+          "UPDATE Website SET monthlyQueries = 0, renewsOn = ?, queryLimit = ? WHERE id = ?",
+          [nextRenewal, queryLimit, website.id]
+        );
 
         resetCount++;
         console.log(
@@ -63,7 +62,5 @@ export async function GET(request: Request) {
       { error: "Failed to process query resets" },
       { status: 500 }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }

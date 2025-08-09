@@ -1,8 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { cors } from "../../../lib/cors";
+import { query } from "../../../lib/db";
 export const dynamic = "force-dynamic";
-const prisma = new PrismaClient();
+
+// Define types
+interface Website {
+  id: string;
+}
+
+interface AiThread {
+  id: string;
+  threadId: string;
+  websiteId: string;
+  messages: AiMessage[];
+}
+
+interface AiMessage {
+  id: string;
+  role: string;
+  content: string;
+  createdAt: Date;
+}
 
 export async function OPTIONS(request: NextRequest) {
   const response = new NextResponse(null, { status: 204 });
@@ -46,47 +64,51 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify website access
-    const website = await prisma.website.findFirst({
-      where: {
-        accessKeys: {
-          some: {
-            key: accessKey,
-          },
-        },
-      },
-    });
+    const websites = (await query(
+      `SELECT w.id FROM Website w
+       JOIN AccessKey ak ON w.id = ak.websiteId
+       WHERE ak.key = ?`,
+      [accessKey]
+    )) as Website[];
 
-    if (!website) {
+    if (websites.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Invalid access key" }, { status: 401 })
       );
     }
 
-    // Find the thread in our database
-    const aiThread = await prisma.aiThread.findFirst({
-      where: {
-        OR: [{ id: threadId }, { threadId: threadId }],
-        websiteId: website.id,
-      },
-      include: {
-        messages: {
-          orderBy: {
-            createdAt: "asc",
-          },
-        },
-      },
-    });
+    const website = websites[0];
 
-    if (!aiThread) {
+    // Find the thread in our database
+    const threads = (await query(
+      `SELECT * FROM AiThread
+       WHERE (id = ? OR threadId = ?) AND websiteId = ?`,
+      [threadId, threadId, website.id]
+    )) as AiThread[];
+
+    if (threads.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Thread not found" }, { status: 404 })
       );
     }
 
+    const aiThread = threads[0];
+
+    // Get messages for the thread
+    const messages = (await query(
+      `SELECT * FROM AiMessage
+       WHERE threadId = ?
+       ORDER BY createdAt ASC`,
+      [aiThread.id]
+    )) as AiMessage[];
+
+    // Assign messages to the thread
+    aiThread.messages = messages;
+
     // Format messages - only include user messages and valid JSON assistant responses
-    const messages = aiThread.messages
+    const formattedMessages = aiThread.messages
       .map((msg) => {
         // For user messages, return as is
         if (msg.role === "user") {
@@ -135,7 +157,7 @@ export async function POST(request: NextRequest) {
     return cors(
       request,
       NextResponse.json({
-        messages: messages.reverse(), // Most recent first
+        messages: formattedMessages.reverse(), // Most recent first
         threadId: aiThread.threadId,
       })
     );

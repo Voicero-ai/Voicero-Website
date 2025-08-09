@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import prisma from "../../../../lib/prisma";
+import { query } from "../../../../lib/db";
 import { stripe } from "../../../../lib/stripe";
 import { authOptions } from "../../../../lib/auth";
 
@@ -24,26 +24,21 @@ export async function POST(request: Request) {
     }
 
     // Get website and verify ownership
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-        userId: session.user.id,
-      },
-      select: {
-        stripeId: true,
-        user: {
-          select: {
-            stripeCustomerId: true,
-          },
-        },
-      },
-    });
+    const rows = (await query(
+      `SELECT w.stripeId, u.stripeCustomerId
+       FROM Website w
+       JOIN User u ON u.id = w.userId
+       WHERE w.id = ? AND w.userId = ?
+       LIMIT 1`,
+      [websiteId, session.user.id]
+    )) as any[];
+    const website = rows[0];
 
     if (!website) {
       return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
 
-    if (!website.stripeId || !website.user.stripeCustomerId) {
+    if (!website.stripeId || !website.stripeCustomerId) {
       return NextResponse.json(
         { error: "No subscription found" },
         { status: 400 }
@@ -52,7 +47,7 @@ export async function POST(request: Request) {
 
     // Create Stripe portal session
     const portalSession = await stripe.billingPortal.sessions.create({
-      customer: website.user.stripeCustomerId,
+      customer: website.stripeCustomerId,
       return_url: `${process.env.NEXT_PUBLIC_APP_URL}/app/websites/website?id=${websiteId}`,
     });
 

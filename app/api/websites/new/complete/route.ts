@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { stripe } from "../../../../../lib/stripe";
-import prisma from "../../../../../lib/prisma";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -34,23 +34,35 @@ export async function GET(request: Request) {
   if (plan === "Growth") queryLimit = 10000;
 
   // Create website with subscription data
-  const website = await prisma.website.create({
-    data: {
-      name: websiteData.name,
-      url: websiteData.url,
-      type: websiteData.type,
-      plan: plan,
-      active: false,
-      userId: userId,
-      stripeId: checkoutSession.subscription as string,
-      queryLimit: queryLimit,
+  // Create website and access key
+  const websiteIdRows = (await query(
+    `INSERT INTO Website (id, name, url, type, plan, active, userId, stripeId, queryLimit, renewsOn, monthlyQueries)
+     VALUES (UUID(), ?, ?, ?, ?, FALSE, ?, ?, ?, ?, 0)`,
+    [
+      websiteData.name,
+      websiteData.url,
+      websiteData.type,
+      plan,
+      userId,
+      checkoutSession.subscription as string,
+      queryLimit,
       renewsOn,
-      accessKeys: {
-        create: { key: websiteData.accessKey },
-      },
-      monthlyQueries: 0,
-    },
-  });
+    ]
+  )) as any;
+
+  // Fetch the created website id by stripeId to avoid relying on insertId for UUID
+  const websites = (await query(
+    `SELECT id FROM Website WHERE stripeId = ? LIMIT 1`,
+    [checkoutSession.subscription as string]
+  )) as { id: string }[];
+  const websiteId = websites[0]?.id;
+
+  if (websiteId) {
+    await query(
+      `INSERT INTO AccessKey (id, key, websiteId, createdAt) VALUES (UUID(), ?, ?, NOW())`,
+      [websiteData.accessKey, websiteId]
+    );
+  }
 
   return NextResponse.redirect(
     `${process.env.NEXT_PUBLIC_APP_URL}/app/websites`

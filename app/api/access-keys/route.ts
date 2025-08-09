@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import prisma from "../../../lib/prisma";
 import { authOptions } from "../../../lib/auth";
+import { query } from "../../../lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -13,24 +13,20 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const websites = await prisma.website.findMany({
-      where: {
-        userId: session.user.id,
-      },
-      select: {
-        id: true,
-        url: true,
-        type: true,
-        accessKeys: {
-          select: {
-            id: true,
-            name: true,
-            key: true,
-            createdAt: true,
-          },
-        },
-      },
-    });
+    // Get all websites for the user
+    const websites = (await query(
+      "SELECT id, url, type FROM Website WHERE userId = ?",
+      [session.user.id]
+    )) as any[];
+
+    // For each website, get its access keys
+    for (const website of websites) {
+      const accessKeys = await query(
+        "SELECT id, name, `key`, createdAt FROM AccessKey WHERE websiteId = ?",
+        [website.id]
+      );
+      website.accessKeys = accessKeys;
+    }
 
     return NextResponse.json(websites);
   } catch (error) {
@@ -52,21 +48,22 @@ export async function POST(request: Request) {
     const { websiteId, name } = await request.json();
 
     // Verify website belongs to user
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-        userId: session.user.id,
-      },
-      include: {
-        accessKeys: true,
-      },
-    });
+    const websites = (await query(
+      "SELECT * FROM Website WHERE id = ? AND userId = ?",
+      [websiteId, session.user.id]
+    )) as any[];
 
-    if (!website) {
+    if (websites.length === 0) {
       return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
 
-    if (website.accessKeys.length >= 5) {
+    // Get current access keys to check limit
+    const accessKeys = (await query(
+      "SELECT * FROM AccessKey WHERE websiteId = ?",
+      [websiteId]
+    )) as any[];
+
+    if (accessKeys.length >= 5) {
       return NextResponse.json(
         { error: "Maximum number of keys reached" },
         { status: 400 }
@@ -78,15 +75,18 @@ export async function POST(request: Request) {
       .toString(36)
       .substring(2, 15)}_${Math.random().toString(36).substring(2, 15)}`;
 
-    const accessKey = await prisma.accessKey.create({
-      data: {
-        name: name || "Default",
-        key,
-        websiteId,
-      },
-    });
+    // Insert the new access key
+    await query(
+      "INSERT INTO AccessKey (id, name, `key`, websiteId, createdAt) VALUES (UUID(), ?, ?, ?, NOW())",
+      [name || "Default", key, websiteId]
+    );
 
-    return NextResponse.json(accessKey);
+    // Retrieve the newly created key
+    const newKeys = (await query("SELECT * FROM AccessKey WHERE `key` = ?", [
+      key,
+    ])) as any[];
+
+    return NextResponse.json(newKeys[0]);
   } catch (error) {
     console.error("Error creating access key:", error);
     return NextResponse.json(
@@ -106,25 +106,22 @@ export async function DELETE(request: Request) {
     const { keyId } = await request.json();
 
     // Verify the key belongs to a website owned by the user
-    const accessKey = await prisma.accessKey.findFirst({
-      where: {
-        id: keyId,
-        website: {
-          userId: session.user.id,
-        },
-      },
-    });
+    const accessKeys = (await query(
+      `SELECT ak.* FROM AccessKey ak 
+       JOIN Website w ON ak.websiteId = w.id 
+       WHERE ak.id = ? AND w.userId = ?`,
+      [keyId, session.user.id]
+    )) as any[];
 
-    if (!accessKey) {
+    if (accessKeys.length === 0) {
       return NextResponse.json(
         { error: "Access key not found" },
         { status: 404 }
       );
     }
 
-    await prisma.accessKey.delete({
-      where: { id: keyId },
-    });
+    // Delete the access key
+    await query("DELETE FROM AccessKey WHERE id = ?", [keyId]);
 
     return NextResponse.json({ success: true });
   } catch (error) {

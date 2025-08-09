@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../../../lib/auth";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -15,22 +15,26 @@ export async function POST(req: Request) {
     const { websiteId, question } = await req.json();
 
     // Verify user owns this website
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-        userId: session.user.id,
-      },
-      include: {
-        popUpQuestions: true,
-      },
-    });
+    const websites = (await query(
+      `SELECT w.id
+       FROM Website w
+       WHERE w.id = ? AND w.userId = ?
+       LIMIT 1`,
+      [websiteId, session.user.id]
+    )) as { id: string }[];
+    const website = websites.length > 0 ? websites[0] : null;
 
     if (!website) {
       return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
 
     // Check if website already has 5 questions
-    if (website.popUpQuestions.length >= 5) {
+    const questionCountRows = (await query(
+      `SELECT COUNT(*) as count FROM PopUpQuestion WHERE websiteId = ?`,
+      [websiteId]
+    )) as { count: number }[];
+    const questionCount = questionCountRows[0]?.count ?? 0;
+    if (questionCount >= 5) {
       return NextResponse.json(
         { error: "Maximum number of questions reached" },
         { status: 400 }
@@ -38,12 +42,21 @@ export async function POST(req: Request) {
     }
 
     // Create new question
-    const newQuestion = await prisma.popUpQuestion.create({
-      data: {
-        question,
-        websiteId,
-      },
-    });
+    const insertResult = (await query(
+      `INSERT INTO PopUpQuestion (id, question, websiteId, createdAt) VALUES (UUID(), ?, ?, NOW())`,
+      [question, websiteId]
+    )) as any;
+
+    const newQuestions = (await query(
+      `SELECT id, question, websiteId, createdAt FROM PopUpQuestion WHERE websiteId = ? ORDER BY createdAt DESC LIMIT 1`,
+      [websiteId]
+    )) as {
+      id: string;
+      question: string;
+      websiteId: string;
+      createdAt: Date;
+    }[];
+    const newQuestion = newQuestions[0];
 
     return NextResponse.json(newQuestion);
   } catch (error) {

@@ -1,10 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { query } from "@/lib/db";
+
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
+// Define interface for website
+interface Website {
+  id: string;
+  url: string;
+  userId: string;
+  botName: string;
+  customWelcomeMessage: string | null;
+  iconBot: string;
+  iconVoice: string;
+  iconMessage: string;
+  customInstructions: string | null;
+  color: string | null;
+  clickMessage: string | null;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -26,7 +40,7 @@ export async function POST(request: NextRequest) {
       customInstructions,
       color,
       clickMessage,
-    } = data;
+    } = data || {};
 
     if (!websiteId) {
       return NextResponse.json(
@@ -36,14 +50,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify user owns this website
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-        userId: session.user.id,
-      },
-    });
+    const websites = (await query(
+      "SELECT * FROM Website WHERE id = ? AND userId = ?",
+      [websiteId, session.user.id]
+    )) as Website[];
 
-    if (!website) {
+    if (websites.length === 0) {
       return NextResponse.json(
         { error: "Website not found or access denied" },
         { status: 404 }
@@ -73,22 +85,56 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Update the website settings
-    const updatedWebsite = await prisma.website.update({
-      where: {
-        id: websiteId,
-      },
-      data: {
-        botName: botName || "Bot",
-        customWelcomeMessage,
-        iconBot: iconBot || "bot",
-        iconVoice: iconVoice || "microphone",
-        iconMessage: iconMessage || "message",
-        customInstructions,
-        color,
-        clickMessage,
-      },
-    });
+    // Dynamically build SET clause to avoid undefined bindings
+    const fields: string[] = [];
+    const values: any[] = [];
+
+    if (botName !== undefined) {
+      fields.push("botName = ?");
+      values.push(botName || "Bot");
+    }
+    if (customWelcomeMessage !== undefined) {
+      fields.push("customWelcomeMessage = ?");
+      values.push(customWelcomeMessage ?? null);
+    }
+    if (iconBot !== undefined) {
+      fields.push("iconBot = ?");
+      values.push(iconBot || "bot");
+    }
+    if (iconVoice !== undefined) {
+      fields.push("iconVoice = ?");
+      values.push(iconVoice || "microphone");
+    }
+    if (iconMessage !== undefined) {
+      fields.push("iconMessage = ?");
+      values.push(iconMessage || "message");
+    }
+    if (customInstructions !== undefined) {
+      fields.push("customInstructions = ?");
+      values.push(customInstructions ?? null);
+    }
+    if (color !== undefined) {
+      fields.push("color = ?");
+      values.push(color ?? null);
+    }
+    if (clickMessage !== undefined) {
+      fields.push("clickMessage = ?");
+      values.push(clickMessage ?? null);
+    }
+
+    if (fields.length === 0) {
+      return NextResponse.json({ success: true });
+    }
+
+    values.push(websiteId);
+    await query(`UPDATE Website SET ${fields.join(", ")} WHERE id = ?`, values);
+
+    // Get the updated website
+    const updatedWebsites = (await query("SELECT * FROM Website WHERE id = ?", [
+      websiteId,
+    ])) as Website[];
+
+    const updatedWebsite = updatedWebsites[0];
 
     return NextResponse.json({
       success: true,

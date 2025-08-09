@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../lib/auth";
-import prisma from "../../../lib/prisma";
+import { query } from "../../../lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -51,10 +51,10 @@ export async function GET(req: NextRequest) {
     }
 
     const { searchParams } = new URL(req.url);
-    const query = searchParams.get("q");
+    const query_param = searchParams.get("q");
 
     // Validate search query
-    if (!query || query.length < 7) {
+    if (!query_param || query_param.length < 7) {
       return NextResponse.json(
         { error: "Search query must be at least 7 characters" },
         { status: 400 }
@@ -64,9 +64,9 @@ export async function GET(req: NextRequest) {
     // Get user ID
     const userId = session.user.id;
 
-    // Prepare the search
-    // We need to join tables to access website information and filter by user's websites
-    const results = await prisma.$queryRaw<SearchResultRaw[]>`
+    // Prepare the search using direct SQL
+    const results = (await query(
+      `
       SELECT 
         m.id as messageId, 
         m.content, 
@@ -79,11 +79,13 @@ export async function GET(req: NextRequest) {
       JOIN AiThread t ON m.threadId = t.id
       JOIN Website w ON t.websiteId = w.id
       WHERE 
-        w.userId = ${userId}
-        AND m.content LIKE ${`%${query}%`}
+        w.userId = ?
+        AND m.content LIKE ?
       ORDER BY m.createdAt DESC
       LIMIT 50
-    `;
+    `,
+      [userId, `%${query_param}%`]
+    )) as SearchResultRaw[];
 
     // Process results to include match context
     const formattedResults = results.map((result) => ({
@@ -91,10 +93,13 @@ export async function GET(req: NextRequest) {
       messageId: result.messageId,
       content: result.content,
       role: result.role,
-      createdAt: result.createdAt.toISOString(),
+      createdAt:
+        result.createdAt instanceof Date
+          ? result.createdAt.toISOString()
+          : new Date(result.createdAt).toISOString(),
       websiteDomain: result.websiteDomain,
       websiteName: result.websiteName,
-      matchContext: extractContextAroundMatch(result.content, query),
+      matchContext: extractContextAroundMatch(result.content, query_param),
     }));
 
     return NextResponse.json({ results: formattedResults });

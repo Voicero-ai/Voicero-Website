@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
 import { cors } from "../../../../lib/cors";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -26,29 +26,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let website;
+    let website: { id: string; active: number | boolean } | null = null;
 
     if (websiteId) {
-      website = await prisma.website.findUnique({
-        where: { id: websiteId },
-      });
+      const rows = (await query(
+        "SELECT id, active FROM Website WHERE id = ? LIMIT 1",
+        [websiteId]
+      )) as { id: string; active: number | boolean }[];
+      website = rows.length > 0 ? rows[0] : null;
     } else if (accessKey) {
-      website = await prisma.website.findFirst({
-        where: { accessKeys: { some: { key: accessKey } } },
-      });
+      const rows = (await query(
+        `SELECT w.id, w.active
+         FROM Website w
+         JOIN AccessKey ak ON ak.websiteId = w.id
+         WHERE ak.key = ?
+         LIMIT 1`,
+        [accessKey]
+      )) as { id: string; active: number | boolean }[];
+      website = rows.length > 0 ? rows[0] : null;
     }
 
     if (!website) {
       return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
 
-    const updatedWebsite = await prisma.website.update({
-      where: { id: website.id },
-      data: { active: !website.active },
-    });
+    const currentActive = Boolean(website.active);
+    const nextActive = !currentActive;
+    await query("UPDATE Website SET active = ? WHERE id = ?", [
+      nextActive,
+      website.id,
+    ]);
 
     return NextResponse.json({
-      status: updatedWebsite.active ? "active" : "inactive",
+      status: nextActive ? "active" : "inactive",
     });
   } catch (error) {
     console.error("Error toggling website status:", error);

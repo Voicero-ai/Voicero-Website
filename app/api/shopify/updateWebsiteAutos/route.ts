@@ -1,8 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { cors } from "../../../../lib/cors";
+import { query } from "../../../../lib/db";
+
 export const dynamic = "force-dynamic";
-const prisma = new PrismaClient();
+
+interface AccessKey {
+  id: string;
+  key: string;
+  websiteId: string;
+}
+
+interface Website {
+  id: string;
+  allowAutoCancel: boolean;
+  allowAutoReturn: boolean;
+  allowAutoExchange: boolean;
+  allowAutoClick: boolean;
+  allowAutoScroll: boolean;
+  allowAutoHighlight: boolean;
+  allowAutoRedirect: boolean;
+  allowAutoGetUserOrders: boolean;
+  allowAutoUpdateUserInfo: boolean;
+  allowAutoFillForm: boolean;
+  allowAutoTrackOrder: boolean;
+  allowAutoLogout: boolean;
+  allowAutoLogin: boolean;
+  allowAutoGenerateImage: boolean;
+}
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -54,21 +78,19 @@ export async function POST(request: NextRequest) {
     } = body;
 
     // First find the website ID using the access key
-    const accessKeyRecord = await prisma.accessKey.findUnique({
-      where: {
-        key: accessKey,
-      },
-      select: {
-        websiteId: true,
-      },
-    });
+    const accessKeys = (await query(
+      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
+      [accessKey]
+    )) as AccessKey[];
 
-    if (!accessKeyRecord) {
+    if (accessKeys.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Invalid access key" }, { status: 401 })
       );
     }
+
+    const accessKeyRecord = accessKeys[0];
 
     // Use the provided websiteId or the one from the access key
     const websiteId = providedWebsiteId || accessKeyRecord.websiteId;
@@ -84,40 +106,82 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Prepare update data - only include fields that are defined in the request
-    const updateData: any = {};
+    // Prepare update fields and values
+    const updateFields = [];
+    const updateValues = [];
 
-    if (typeof allowAutoCancel === "boolean")
-      updateData.allowAutoCancel = allowAutoCancel;
-    if (typeof allowAutoReturn === "boolean")
-      updateData.allowAutoReturn = allowAutoReturn;
-    if (typeof allowAutoExchange === "boolean")
-      updateData.allowAutoExchange = allowAutoExchange;
-    if (typeof allowAutoClick === "boolean")
-      updateData.allowAutoClick = allowAutoClick;
-    if (typeof allowAutoScroll === "boolean")
-      updateData.allowAutoScroll = allowAutoScroll;
-    if (typeof allowAutoHighlight === "boolean")
-      updateData.allowAutoHighlight = allowAutoHighlight;
-    if (typeof allowAutoRedirect === "boolean")
-      updateData.allowAutoRedirect = allowAutoRedirect;
-    if (typeof allowAutoGetUserOrders === "boolean")
-      updateData.allowAutoGetUserOrders = allowAutoGetUserOrders;
-    if (typeof allowAutoUpdateUserInfo === "boolean")
-      updateData.allowAutoUpdateUserInfo = allowAutoUpdateUserInfo;
-    if (typeof allowAutoFillForm === "boolean")
-      updateData.allowAutoFillForm = allowAutoFillForm;
-    if (typeof allowAutoTrackOrder === "boolean")
-      updateData.allowAutoTrackOrder = allowAutoTrackOrder;
-    if (typeof allowAutoLogout === "boolean")
-      updateData.allowAutoLogout = allowAutoLogout;
-    if (typeof allowAutoLogin === "boolean")
-      updateData.allowAutoLogin = allowAutoLogin;
-    if (typeof allowAutoGenerateImage === "boolean")
-      updateData.allowAutoGenerateImage = allowAutoGenerateImage;
+    if (typeof allowAutoCancel === "boolean") {
+      updateFields.push("allowAutoCancel = ?");
+      updateValues.push(allowAutoCancel);
+    }
+
+    if (typeof allowAutoReturn === "boolean") {
+      updateFields.push("allowAutoReturn = ?");
+      updateValues.push(allowAutoReturn);
+    }
+
+    if (typeof allowAutoExchange === "boolean") {
+      updateFields.push("allowAutoExchange = ?");
+      updateValues.push(allowAutoExchange);
+    }
+
+    if (typeof allowAutoClick === "boolean") {
+      updateFields.push("allowAutoClick = ?");
+      updateValues.push(allowAutoClick);
+    }
+
+    if (typeof allowAutoScroll === "boolean") {
+      updateFields.push("allowAutoScroll = ?");
+      updateValues.push(allowAutoScroll);
+    }
+
+    if (typeof allowAutoHighlight === "boolean") {
+      updateFields.push("allowAutoHighlight = ?");
+      updateValues.push(allowAutoHighlight);
+    }
+
+    if (typeof allowAutoRedirect === "boolean") {
+      updateFields.push("allowAutoRedirect = ?");
+      updateValues.push(allowAutoRedirect);
+    }
+
+    if (typeof allowAutoGetUserOrders === "boolean") {
+      updateFields.push("allowAutoGetUserOrders = ?");
+      updateValues.push(allowAutoGetUserOrders);
+    }
+
+    if (typeof allowAutoUpdateUserInfo === "boolean") {
+      updateFields.push("allowAutoUpdateUserInfo = ?");
+      updateValues.push(allowAutoUpdateUserInfo);
+    }
+
+    if (typeof allowAutoFillForm === "boolean") {
+      updateFields.push("allowAutoFillForm = ?");
+      updateValues.push(allowAutoFillForm);
+    }
+
+    if (typeof allowAutoTrackOrder === "boolean") {
+      updateFields.push("allowAutoTrackOrder = ?");
+      updateValues.push(allowAutoTrackOrder);
+    }
+
+    if (typeof allowAutoLogout === "boolean") {
+      updateFields.push("allowAutoLogout = ?");
+      updateValues.push(allowAutoLogout);
+    }
+
+    if (typeof allowAutoLogin === "boolean") {
+      updateFields.push("allowAutoLogin = ?");
+      updateValues.push(allowAutoLogin);
+    }
+
+    if (typeof allowAutoGenerateImage === "boolean") {
+      updateFields.push("allowAutoGenerateImage = ?");
+      updateValues.push(allowAutoGenerateImage);
+    }
 
     // Check if there are any fields to update
-    if (Object.keys(updateData).length === 0) {
+    if (updateFields.length === 0) {
       return cors(
         request,
         NextResponse.json(
@@ -128,36 +192,27 @@ export async function POST(request: NextRequest) {
     }
 
     // Update the website
-    const updatedWebsite = await prisma.website.update({
-      where: {
-        id: websiteId,
-      },
-      data: updateData,
-      select: {
-        id: true,
-        allowAutoCancel: true,
-        allowAutoReturn: true,
-        allowAutoExchange: true,
-        allowAutoClick: true,
-        allowAutoScroll: true,
-        allowAutoHighlight: true,
-        allowAutoRedirect: true,
-        allowAutoGetUserOrders: true,
-        allowAutoUpdateUserInfo: true,
-        allowAutoFillForm: true,
-        allowAutoTrackOrder: true,
-        allowAutoLogout: true,
-        allowAutoLogin: true,
-        allowAutoGenerateImage: true,
-      },
-    });
+    await query(`UPDATE Website SET ${updateFields.join(", ")} WHERE id = ?`, [
+      ...updateValues,
+      websiteId,
+    ]);
+
+    // Get the updated website
+    const updatedWebsites = (await query(
+      `SELECT id, allowAutoCancel, allowAutoReturn, allowAutoExchange, 
+      allowAutoClick, allowAutoScroll, allowAutoHighlight, allowAutoRedirect, 
+      allowAutoGetUserOrders, allowAutoUpdateUserInfo, allowAutoFillForm, 
+      allowAutoTrackOrder, allowAutoLogout, allowAutoLogin, allowAutoGenerateImage 
+      FROM Website WHERE id = ?`,
+      [websiteId]
+    )) as Website[];
 
     return cors(
       request,
       NextResponse.json({
         success: true,
         message: "Website auto settings updated successfully",
-        settings: updatedWebsite,
+        settings: updatedWebsites[0],
       })
     );
   } catch (error) {

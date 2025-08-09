@@ -1,13 +1,70 @@
 import { NextResponse, NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { cors } from "../../../lib/cors";
+import { query } from "../../../lib/db";
 import OpenAI from "openai";
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
+
+// Define types for our data structures
+interface AiMessage {
+  id: string;
+  role: string;
+  content: string;
+  type: string | null;
+  createdAt: Date;
+  threadId: string;
+  pageUrl: string | null;
+  scrollToText: string | null;
+}
+
+interface ShopifyCustomer {
+  id: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  orders: ShopifyOrder[];
+}
+
+interface ShopifyOrder {
+  id: string;
+  orderId: string | null;
+  orderNumber: string | null;
+  totalAmount: number | null;
+  lineItems: ShopifyLineItem[];
+}
+
+interface ShopifyLineItem {
+  id: string;
+  title: string | null;
+  quantity: number | null;
+}
+
+interface Session {
+  id: string;
+  shopifyCustomerId: string | null;
+  customer: ShopifyCustomer | null;
+}
+
+interface AiThread {
+  id: string;
+  threadId: string;
+  title: string | null;
+  createdAt: Date;
+  lastMessageAt: Date;
+  messageCount: number;
+  messages: AiMessage[];
+  sessions: Session[];
+}
+
+interface Website {
+  id: string;
+  analysis: string | null;
+  lastAnalysedAt: Date | null;
+  allowMultiAIReview: boolean;
+}
 
 // Add OPTIONS handler for CORS preflight
 export async function OPTIONS(request: NextRequest) {
@@ -49,18 +106,14 @@ export async function POST(request: NextRequest) {
     const isWordPress = type === "WordPress";
 
     // Verify website access
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-        accessKeys: {
-          some: {
-            key: accessKey,
-          },
-        },
-      },
-    });
+    const websites = (await query(
+      `SELECT w.* FROM Website w
+       JOIN AccessKey ak ON w.id = ak.websiteId
+       WHERE w.id = ? AND ak.key = ?`,
+      [websiteId, accessKey]
+    )) as Website[];
 
-    if (!website) {
+    if (!websites.length) {
       return cors(
         request,
         NextResponse.json(
@@ -70,47 +123,67 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const website = websites[0];
+
     // Check if we need to generate a new analysis
     const now = new Date();
     const twoDaysAgo = new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000); // 1 day ago
     const needsNewAnalysis =
       website.allowMultiAIReview || // Always generate new analysis if allowMultiAIReview is true
       !website.lastAnalysedAt ||
-      website.lastAnalysedAt < twoDaysAgo ||
+      new Date(website.lastAnalysedAt) < twoDaysAgo ||
       !website.analysis;
 
     // If we already have an analysis and it's not time for a new one, return it
     if (!needsNewAnalysis && website.analysis) {
       // Fetch the most recent threads for display regardless
-      const aiThreads = await prisma.aiThread.findMany({
-        where: {
-          websiteId: website.id,
-        },
-        include: {
-          messages: {
-            orderBy: {
-              createdAt: "asc",
-            },
-          },
-          _count: {
-            select: {
-              messages: true,
-            },
-          },
-          sessions: {
-            include: {
-              customer: true,
-            },
-          },
-        },
-        orderBy: {
-          lastMessageAt: "desc",
-        },
-      });
+      const aiThreads = (await query(
+        `SELECT at.*, COUNT(am.id) as messageCount 
+         FROM AiThread at
+         LEFT JOIN AiMessage am ON at.id = am.threadId
+         WHERE at.websiteId = ?
+         GROUP BY at.id
+         ORDER BY at.lastMessageAt DESC`,
+        [website.id]
+      )) as AiThread[];
+
+      // For each thread, fetch its messages
+      for (const thread of aiThreads) {
+        // Get messages
+        const messages = (await query(
+          `SELECT * FROM AiMessage 
+           WHERE threadId = ? 
+           ORDER BY createdAt ASC`,
+          [thread.id]
+        )) as AiMessage[];
+        thread.messages = messages;
+
+        // Get sessions
+        const sessions = (await query(
+          `SELECT s.* FROM Session s
+           JOIN _AiThreadToSession ats ON s.id = ats.B
+           WHERE ats.A = ?`,
+          [thread.id]
+        )) as Session[];
+        thread.sessions = sessions;
+
+        // For each session, get customer if exists
+        for (const session of thread.sessions) {
+          if (session.shopifyCustomerId) {
+            const customers = (await query(
+              `SELECT * FROM ShopifyCustomer WHERE id = ?`,
+              [session.shopifyCustomerId]
+            )) as ShopifyCustomer[];
+            session.customer = customers.length ? customers[0] : null;
+          } else {
+            session.customer = null;
+          }
+        }
+      }
 
       // Filter out threads with fewer than 4 messages
       const filteredThreads = aiThreads.filter(
-        (thread) => thread._count.messages >= 4
+        (thread) => thread.messageCount >= 4
       );
 
       // Get the 10 most recent filtered threads
@@ -119,8 +192,12 @@ export async function POST(request: NextRequest) {
       // If we have fewer than 10 threads, add threads with fewer messages
       if (recentThreads.length < 10) {
         const remainingThreads = aiThreads
-          .filter((thread) => thread._count.messages < 4)
-          .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
+          .filter((thread) => thread.messageCount < 4)
+          .sort(
+            (a, b) =>
+              new Date(b.lastMessageAt).getTime() -
+              new Date(a.lastMessageAt).getTime()
+          )
           .slice(0, 10 - recentThreads.length);
 
         recentThreads = [...recentThreads, ...remainingThreads];
@@ -133,7 +210,7 @@ export async function POST(request: NextRequest) {
         title: thread.title || "Untitled Thread",
         createdAt: thread.createdAt,
         lastMessageAt: thread.lastMessageAt,
-        messages: thread.messages.map((msg) => ({
+        messages: thread.messages.map((msg: AiMessage) => ({
           id: msg.id,
           role: msg.role,
           content: msg.content,
@@ -143,11 +220,11 @@ export async function POST(request: NextRequest) {
           pageUrl: msg.pageUrl,
           scrollToText: msg.scrollToText,
         })),
-        messageCount: thread._count.messages,
+        messageCount: thread.messageCount,
         customers: thread.sessions
-          .map((session) => session.customer)
-          .filter((customer) => customer !== null),
-        sessions: thread.sessions.map((session) => ({
+          .map((session: Session) => session.customer)
+          .filter((customer: ShopifyCustomer | null) => customer !== null),
+        sessions: thread.sessions.map((session: Session) => ({
           id: session.id,
           customer: session.customer,
         })),
@@ -166,35 +243,53 @@ export async function POST(request: NextRequest) {
     }
 
     // Fetch ALL AI threads for this website with their complete messages
-    const aiThreads = await prisma.aiThread.findMany({
-      where: {
-        websiteId: website.id,
-      },
-      include: {
-        messages: {
-          orderBy: {
-            createdAt: "asc",
-          },
-        },
-        _count: {
-          select: {
-            messages: true,
-          },
-        },
-        sessions: {
-          include: {
-            customer: true,
-          },
-        },
-      },
-      orderBy: {
-        lastMessageAt: "desc",
-      },
-    });
+    const aiThreads = (await query(
+      `SELECT at.*, COUNT(am.id) as messageCount 
+       FROM AiThread at
+       LEFT JOIN AiMessage am ON at.id = am.threadId
+       WHERE at.websiteId = ?
+       GROUP BY at.id
+       ORDER BY at.lastMessageAt DESC`,
+      [website.id]
+    )) as AiThread[];
+
+    // For each thread, fetch its messages
+    for (const thread of aiThreads) {
+      // Get messages
+      const messages = (await query(
+        `SELECT * FROM AiMessage 
+         WHERE threadId = ? 
+         ORDER BY createdAt ASC`,
+        [thread.id]
+      )) as AiMessage[];
+      thread.messages = messages;
+
+      // Get sessions
+      const sessions = (await query(
+        `SELECT s.* FROM Session s
+         JOIN _AiThreadToSession ats ON s.id = ats.B
+         WHERE ats.A = ?`,
+        [thread.id]
+      )) as Session[];
+      thread.sessions = sessions;
+
+      // For each session, get customer if exists
+      for (const session of thread.sessions) {
+        if (session.shopifyCustomerId) {
+          const customers = (await query(
+            `SELECT * FROM ShopifyCustomer WHERE id = ?`,
+            [session.shopifyCustomerId]
+          )) as ShopifyCustomer[];
+          session.customer = customers.length ? customers[0] : null;
+        } else {
+          session.customer = null;
+        }
+      }
+    }
 
     // Filter out threads with fewer than 4 messages
     const filteredThreads = aiThreads.filter(
-      (thread) => thread._count.messages >= 4
+      (thread) => thread.messageCount >= 4
     );
 
     // Get the 10 most recent filtered threads
@@ -203,8 +298,12 @@ export async function POST(request: NextRequest) {
     // If we have fewer than 10 threads, add threads with fewer messages
     if (recentThreads.length < 10) {
       const remainingThreads = aiThreads
-        .filter((thread) => thread._count.messages < 4)
-        .sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime())
+        .filter((thread) => thread.messageCount < 4)
+        .sort(
+          (a, b) =>
+            new Date(b.lastMessageAt).getTime() -
+            new Date(a.lastMessageAt).getTime()
+        )
         .slice(0, 10 - recentThreads.length);
 
       recentThreads = [...recentThreads, ...remainingThreads];
@@ -217,7 +316,7 @@ export async function POST(request: NextRequest) {
       title: thread.title || "Untitled Thread",
       createdAt: thread.createdAt,
       lastMessageAt: thread.lastMessageAt,
-      messages: thread.messages.map((msg) => ({
+      messages: thread.messages.map((msg: AiMessage) => ({
         id: msg.id,
         role: msg.role,
         content: msg.content,
@@ -227,29 +326,39 @@ export async function POST(request: NextRequest) {
         pageUrl: msg.pageUrl,
         scrollToText: msg.scrollToText,
       })),
-      messageCount: thread._count.messages,
+      messageCount: thread.messageCount,
       customers: thread.sessions
-        .map((session) => session.customer)
-        .filter((customer) => customer !== null),
-      sessions: thread.sessions.map((session) => ({
+        .map((session: Session) => session.customer)
+        .filter((customer: ShopifyCustomer | null) => customer !== null),
+      sessions: thread.sessions.map((session: Session) => ({
         id: session.id,
         customer: session.customer,
       })),
     }));
 
     // Gather all Shopify customer data related to this websiteId
-    const shopifyCustomers = await prisma.shopifyCustomer.findMany({
-      where: {
-        websiteId: website.id,
-      },
-      include: {
-        orders: {
-          include: {
-            lineItems: true,
-          },
-        },
-      },
-    });
+    const shopifyCustomers = (await query(
+      `SELECT * FROM ShopifyCustomer WHERE websiteId = ?`,
+      [website.id]
+    )) as ShopifyCustomer[];
+
+    // For each customer, get their orders
+    for (const customer of shopifyCustomers) {
+      const orders = (await query(
+        `SELECT * FROM ShopifyCustomerOrder WHERE customerId = ?`,
+        [customer.id]
+      )) as ShopifyOrder[];
+      customer.orders = orders;
+
+      // For each order, get line items
+      for (const order of orders) {
+        const lineItems = (await query(
+          `SELECT * FROM ShopifyCustomerLineItem WHERE orderId = ?`,
+          [order.id]
+        )) as ShopifyLineItem[];
+        order.lineItems = lineItems;
+      }
+    }
 
     // Create an analysis prompt for GPT-4.1-mini
     const analysisPrompt = `
@@ -289,13 +398,10 @@ export async function POST(request: NextRequest) {
       analysis = response.choices[0].message.content || "No analysis generated";
 
       // Save the analysis and update lastAnalysedAt
-      await prisma.website.update({
-        where: { id: website.id },
-        data: {
-          analysis: analysis,
-          lastAnalysedAt: now,
-        },
-      });
+      await query(
+        `UPDATE Website SET analysis = ?, lastAnalysedAt = ? WHERE id = ?`,
+        [analysis, now, website.id]
+      );
     } catch (aiError) {
       console.error("AI analysis error:", aiError);
       analysis = "Error generating analysis. Please try again later.";

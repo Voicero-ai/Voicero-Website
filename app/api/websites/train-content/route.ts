@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import prisma from "@/lib/prisma";
+import { query } from "@/lib/db";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { Client } from "@opensearch-project/opensearch";
 import { RecordSparseValues } from "@pinecone-database/pinecone";
 import OpenAI from "openai";
+
+export const dynamic = "force-dynamic";
 
 const pinecone = new Pinecone({
   apiKey: process.env.PINECONE_API_KEY!,
@@ -491,23 +493,14 @@ function sanitizeAndStringifyArray(arr: any[]): string {
 async function deleteWebsiteVectors(websiteId: string) {
   try {
     // Get the website's VectorDbConfig
-    const website = await prisma.website.findUnique({
-      where: { id: websiteId },
-      include: {
-        VectorDbConfig: true,
-      },
-    });
+    const configRows = (await query(
+      `SELECT MainNamespace, QANamespace FROM VectorDbConfig WHERE websiteId = ? LIMIT 1`,
+      [websiteId]
+    )) as { MainNamespace: string; QANamespace: string }[];
 
-    if (!website) {
-      console.error(`⚠️ Website ${websiteId} not found`);
-      return;
-    }
-
-    // Get the QA namespace from VectorDbConfig or fallback to website ID
-    const qaNamespace =
-      website.VectorDbConfig?.QANamespace || `${websiteId}-qa`;
-    // Get the main namespace from VectorDbConfig or fallback to website ID
-    const mainNamespace = website.VectorDbConfig?.MainNamespace || websiteId;
+    // Get the namespaces from VectorDbConfig or fallback to defaults
+    const mainNamespace = configRows[0]?.MainNamespace || websiteId;
+    const qaNamespace = configRows[0]?.QANamespace || `${websiteId}-qa`;
 
     console.log(`Using namespaces for deletion: 
     - Main namespace: ${mainNamespace}
@@ -787,25 +780,16 @@ async function trainContent(
       }
     }
 
-    // Update VectorDbConfig
-    await prisma.website.update({
-      where: { id: websiteId },
-      data: {
-        VectorDbConfig: {
-          upsert: {
-            create: {
-              MainNamespace: websiteId,
-              QANamespace: `${websiteId}-qa`,
-            },
-            update: {
-              MainNamespace: websiteId,
-              QANamespace: `${websiteId}-qa`,
-            },
-          },
-        },
-        lastSyncedAt: new Date(),
-      },
-    });
+    // Update VectorDbConfig and lastSyncedAt
+    await query(
+      `INSERT INTO VectorDbConfig (id, websiteId, MainNamespace, QANamespace)
+       VALUES (UUID(), ?, ?, ?)
+       ON DUPLICATE KEY UPDATE MainNamespace = VALUES(MainNamespace), QANamespace = VALUES(QANamespace)`,
+      [websiteId, websiteId, `${websiteId}-qa`]
+    );
+    await query(`UPDATE Website SET lastSyncedAt = NOW() WHERE id = ?`, [
+      websiteId,
+    ]);
 
     return stats;
   } catch (error) {
@@ -837,14 +821,15 @@ export async function POST(req: NextRequest) {
     }
 
     // Verify the website exists and belongs to the user
-    const website = await prisma.website.findUnique({
-      where: {
-        id: body.websiteId,
-        user: {
-          email: session.user.email,
-        },
-      },
-    });
+    const websiteRows = (await query(
+      `SELECT w.id, w.name
+       FROM Website w
+       JOIN User u ON u.id = w.userId
+       WHERE w.id = ? AND u.email = ?
+       LIMIT 1`,
+      [body.websiteId, session.user.email]
+    )) as { id: string; name: string | null }[];
+    const website = websiteRows.length > 0 ? websiteRows[0] : null;
 
     if (!website) {
       return NextResponse.json(

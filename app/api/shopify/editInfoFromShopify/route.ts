@@ -1,8 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { query } from "../../../../lib/db";
 import { cors } from "../../../../lib/cors";
 export const dynamic = "force-dynamic";
-const prisma = new PrismaClient();
+
+interface AccessKey {
+  websiteId: string;
+}
+
+interface PopUpQuestion {
+  id: string;
+  question: string;
+  websiteId: string;
+}
+
+interface Website {
+  id: string;
+  name: string;
+  url: string;
+  customInstructions: string | null;
+  active: boolean;
+  plan: string;
+  queryLimit: number;
+  monthlyQueries: number;
+  renewsOn: Date | null;
+  lastSyncedAt: Date | null;
+  syncFrequency: string | null;
+  color: string | null;
+}
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -90,24 +114,25 @@ export async function POST(request: NextRequest) {
     }
 
     // Find the website ID using the access key
-    const accessKeyRecord = await prisma.accessKey.findUnique({
-      where: {
-        key: accessKey,
-      },
-      select: {
-        websiteId: true,
-      },
-    });
+    const accessKeyRecords = (await query(
+      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
+      [accessKey]
+    )) as AccessKey[];
 
-    console.log("Access key record found:", accessKeyRecord ? "yes" : "no");
+    console.log(
+      "Access key record found:",
+      accessKeyRecords.length > 0 ? "yes" : "no"
+    );
 
-    if (!accessKeyRecord) {
+    if (accessKeyRecords.length === 0) {
       console.log("No access key record found");
       return cors(
         request,
         NextResponse.json({ error: "Invalid access key" }, { status: 401 })
       );
     }
+
+    const accessKeyRecord = accessKeyRecords[0];
 
     console.log("Updating website with data:", {
       name,
@@ -124,41 +149,65 @@ export async function POST(request: NextRequest) {
     });
 
     // Update the website using the found website ID
-    const website = await prisma.website.update({
-      where: {
-        id: accessKeyRecord.websiteId,
-      },
-      data: {
-        name: name,
-        url: url,
-        customInstructions: customInstructions,
-        active: active,
-        plan: plan,
-        queryLimit: queryLimit,
-        monthlyQueries: monthlyQueries,
-        renewsOn: renewsOn ? new Date(renewsOn) : null,
-        syncFrequency: syncFrequency,
-        color: color || undefined,
-        // Handle pop-up questions update
-        popUpQuestions: {
-          deleteMany: {}, // Delete all existing questions
-          createMany: {
-            data: parsedPopUpQuestions.map((q: { question: string }) => ({
-              question: q.question,
-            })),
-          },
-        },
-      },
-      include: {
-        popUpQuestions: true,
-      },
-    });
+    await query(
+      `UPDATE Website SET 
+       name = ?, 
+       url = ?, 
+       customInstructions = ?, 
+       active = ?, 
+       plan = ?, 
+       queryLimit = ?, 
+       monthlyQueries = ?, 
+       renewsOn = ?, 
+       syncFrequency = ?, 
+       color = ?
+       WHERE id = ?`,
+      [
+        name,
+        url,
+        customInstructions,
+        active,
+        plan,
+        queryLimit,
+        monthlyQueries,
+        renewsOn ? new Date(renewsOn) : null,
+        syncFrequency,
+        color || null,
+        accessKeyRecord.websiteId,
+      ]
+    );
+
+    // Delete existing pop-up questions
+    await query("DELETE FROM PopUpQuestion WHERE websiteId = ?", [
+      accessKeyRecord.websiteId,
+    ]);
+
+    // Insert new pop-up questions
+    for (const q of parsedPopUpQuestions) {
+      await query(
+        "INSERT INTO PopUpQuestion (question, websiteId) VALUES (?, ?)",
+        [q.question, accessKeyRecord.websiteId]
+      );
+    }
+
+    // Get the updated website
+    const websites = (await query("SELECT * FROM Website WHERE id = ?", [
+      accessKeyRecord.websiteId,
+    ])) as Website[];
+
+    const website = websites[0];
+
+    // Get the pop-up questions
+    const popUpQuestionsResult = (await query(
+      "SELECT * FROM PopUpQuestion WHERE websiteId = ?",
+      [accessKeyRecord.websiteId]
+    )) as PopUpQuestion[];
 
     console.log("Website updated successfully:", {
       id: website.id,
       name: website.name,
       color: website.color,
-      popUpQuestions: website.popUpQuestions,
+      popUpQuestions: popUpQuestionsResult,
     });
 
     return cors(
@@ -177,7 +226,7 @@ export async function POST(request: NextRequest) {
           renewsOn: website.renewsOn,
           lastSyncedAt: website.lastSyncedAt,
           syncFrequency: website.syncFrequency,
-          popUpQuestions: website.popUpQuestions,
+          popUpQuestions: popUpQuestionsResult,
           color: website.color,
         },
       })

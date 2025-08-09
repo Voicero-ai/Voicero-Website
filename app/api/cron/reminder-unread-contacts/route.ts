@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
+import { query } from "@/lib/db";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 export const dynamic = "force-dynamic";
+
+interface Contact {
+  id: string;
+  email: string;
+  message: string;
+  createdAt: Date;
+  userEmail?: string;
+}
 
 const ses = new SESClient({
   region: process.env.AWS_REGION || "us-east-2",
@@ -22,22 +30,17 @@ export async function GET() {
     // 1. Created more than 24 hours ago
     // 2. Not yet read (read = false)
     // 3. Not yet reminded (reminded = false)
-    const unreadContacts = await prisma.contact.findMany({
-      where: {
-        createdAt: {
-          lt: twentyFourHoursAgo,
-        },
-        read: false,
-        reminded: false,
-      },
-      include: {
-        user: {
-          select: {
-            email: true,
-          },
-        },
-      },
-    });
+    const unreadContacts = (await query(
+      `
+      SELECT c.id, c.email, c.message, c.createdAt, u.email as userEmail
+      FROM Contact c
+      JOIN User u ON c.userId = u.id
+      WHERE c.createdAt < ?
+      AND c.read = false
+      AND c.reminded = false
+    `,
+      [twentyFourHoursAgo]
+    )) as Contact[];
 
     console.log(
       `Found ${unreadContacts.length} unread contacts older than 24 hours`
@@ -45,14 +48,14 @@ export async function GET() {
 
     // Send reminder emails for each unread contact
     for (const contact of unreadContacts) {
-      if (contact.user && contact.user.email) {
+      if (contact.userEmail) {
         const contactViewUrl = `https://www.voicero.ai/app/contacts/query?id=${contact.id}`;
 
         // Send reminder email using AWS SES
         const params = {
           Source: "support@voicero.ai",
           Destination: {
-            ToAddresses: [contact.user.email],
+            ToAddresses: [contact.userEmail],
           },
           Message: {
             Subject: {
@@ -112,13 +115,12 @@ Time Received: ${contact.createdAt.toLocaleString()}
         await ses.send(new SendEmailCommand(params));
 
         // Mark contact as reminded
-        await prisma.contact.update({
-          where: { id: contact.id },
-          data: { reminded: true },
-        });
+        await query("UPDATE Contact SET reminded = true WHERE id = ?", [
+          contact.id,
+        ]);
 
         console.log(
-          `Sent reminder email for contact ${contact.id} to ${contact.user.email}`
+          `Sent reminder email for contact ${contact.id} to ${contact.userEmail}`
         );
       }
     }

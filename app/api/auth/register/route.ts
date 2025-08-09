@@ -1,9 +1,19 @@
 import { NextResponse } from "next/server";
 import { hash } from "bcryptjs";
-import prisma from "../../../../lib/prisma";
 import { z } from "zod";
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
+
+// User interface
+interface User {
+  id: string;
+  username: string;
+  email: string;
+  name: string;
+  createdAt: Date;
+}
+
 // Validation schema
 const registerSchema = z.object({
   username: z
@@ -32,11 +42,12 @@ export async function POST(req: Request) {
     const validatedData = registerSchema.parse(body);
 
     // Check if username is taken
-    const existingUsername = await prisma.user.findUnique({
-      where: { username: validatedData.username },
-    });
+    const existingUsernames = (await query(
+      "SELECT id FROM User WHERE username = ?",
+      [validatedData.username]
+    )) as { id: string }[];
 
-    if (existingUsername) {
+    if (existingUsernames.length > 0) {
       return NextResponse.json(
         { error: "Username is already taken" },
         { status: 400 }
@@ -44,11 +55,11 @@ export async function POST(req: Request) {
     }
 
     // Check if email is taken
-    const existingEmail = await prisma.user.findUnique({
-      where: { email: validatedData.email },
-    });
+    const existingEmails = (await query("SELECT id FROM User WHERE email = ?", [
+      validatedData.email,
+    ])) as { id: string }[];
 
-    if (existingEmail) {
+    if (existingEmails.length > 0) {
       return NextResponse.json(
         { error: "Email is already registered" },
         { status: 400 }
@@ -59,21 +70,25 @@ export async function POST(req: Request) {
     const hashedPassword = await hash(validatedData.password, 12);
 
     // Create user
-    const user = await prisma.user.create({
-      data: {
-        username: validatedData.username,
-        email: validatedData.email,
-        password: hashedPassword,
-        name: validatedData.companyName,
-      },
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        name: true,
-        createdAt: true,
-      },
-    });
+    const result = await query(
+      "INSERT INTO User (username, email, password, name) VALUES (?, ?, ?, ?)",
+      [
+        validatedData.username,
+        validatedData.email,
+        hashedPassword,
+        validatedData.companyName,
+      ]
+    );
+
+    const userId = (result as any).insertId;
+
+    // Get the created user
+    const users = (await query(
+      "SELECT id, username, email, name, createdAt FROM User WHERE id = ?",
+      [userId]
+    )) as User[];
+
+    const user = users[0];
 
     return NextResponse.json(
       {

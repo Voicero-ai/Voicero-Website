@@ -1,10 +1,47 @@
 import { NextResponse, NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { query } from "../../../../lib/db";
 import OpenAI from "openai";
 import { cors } from "../../../../lib/cors";
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
+interface Website {
+  id: string;
+  name: string;
+  url: string;
+  aiAssistantId: string | null;
+  aiVoiceAssistantId: string | null;
+}
+
+interface ShopifyPage {
+  id: string;
+  shopifyId: string;
+  handle: string;
+}
+
+interface ShopifyProduct {
+  id: string;
+  shopifyId: string;
+  handle: string;
+}
+
+interface ShopifyBlogPost {
+  id: string;
+  shopifyId: string;
+  handle: string;
+}
+
+interface ShopifyCollection {
+  id: string;
+  shopifyId: string;
+  handle: string;
+}
+
+interface ShopifyDiscount {
+  id: string;
+  shopifyId: string;
+  code: string;
+}
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -62,59 +99,63 @@ export async function POST(request: NextRequest) {
     }
 
     // Find the website associated with this access key
-    const website = await prisma.website.findFirst({
-      where: {
-        accessKeys: {
-          some: {
-            key: accessKey,
-          },
-        },
-      },
-      include: {
-        shopifyPages: {
-          select: {
-            id: true,
-            shopifyId: true,
-            handle: true,
-          },
-        },
-        shopifyProducts: {
-          select: {
-            id: true,
-            shopifyId: true,
-            handle: true,
-          },
-        },
-        ShopifyBlogPost: {
-          select: {
-            id: true,
-            shopifyId: true,
-            handle: true,
-          },
-        },
-        ShopifyCollection: {
-          select: {
-            id: true,
-            shopifyId: true,
-            handle: true,
-          },
-        },
-        ShopifyDiscount: {
-          select: {
-            id: true,
-            shopifyId: true,
-            code: true,
-          },
-        },
-      },
-    });
+    const websites = (await query(
+      `SELECT w.id, w.name, w.url, w.aiAssistantId, w.aiVoiceAssistantId
+       FROM Website w
+       JOIN AccessKey ak ON w.id = ak.websiteId
+       WHERE ak.key = ?
+       LIMIT 1`,
+      [accessKey]
+    )) as Website[];
 
-    if (!website) {
+    if (websites.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Invalid access key" }, { status: 401 })
       );
     }
+
+    const website = websites[0];
+
+    // Get shopify pages
+    const shopifyPages = (await query(
+      `SELECT id, shopifyId, handle
+       FROM ShopifyPage
+       WHERE websiteId = ?`,
+      [website.id]
+    )) as ShopifyPage[];
+
+    // Get shopify products
+    const shopifyProducts = (await query(
+      `SELECT id, shopifyId, handle
+       FROM ShopifyProduct
+       WHERE websiteId = ?`,
+      [website.id]
+    )) as ShopifyProduct[];
+
+    // Get shopify blog posts
+    const shopifyBlogPosts = (await query(
+      `SELECT id, shopifyId, handle
+       FROM ShopifyBlogPost
+       WHERE websiteId = ?`,
+      [website.id]
+    )) as ShopifyBlogPost[];
+
+    // Get shopify collections
+    const shopifyCollections = (await query(
+      `SELECT id, shopifyId, handle
+       FROM ShopifyCollection
+       WHERE websiteId = ?`,
+      [website.id]
+    )) as ShopifyCollection[];
+
+    // Get shopify discounts
+    const shopifyDiscounts = (await query(
+      `SELECT id, shopifyId, code
+       FROM ShopifyDiscount
+       WHERE websiteId = ?`,
+      [website.id]
+    )) as ShopifyDiscount[];
 
     console.log("Found website:", website);
     console.log("Current assistantId:", website.aiAssistantId);
@@ -140,20 +181,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Update the website record with both assistant IDs
-    const updatedWebsite = await prisma.website.update({
-      where: { id: website.id },
-      data: {
-        aiAssistantId: textAssistantId,
-        aiVoiceAssistantId: voiceAssistantId,
-      },
-      select: {
-        id: true,
-        aiAssistantId: true,
-        aiVoiceAssistantId: true,
-      },
-    });
+    await query(
+      `UPDATE Website
+       SET aiAssistantId = ?, aiVoiceAssistantId = ?
+       WHERE id = ?`,
+      [textAssistantId, voiceAssistantId, website.id]
+    );
 
-    console.log("Updated website:", updatedWebsite);
+    console.log("Updated website with assistant IDs");
 
     return cors(
       request,
@@ -165,31 +200,31 @@ export async function POST(request: NextRequest) {
         websiteId: website.id,
         timestamp: new Date(),
         content: {
-          pages: website.shopifyPages.map((p) => ({
+          pages: shopifyPages.map((p) => ({
             id: p.id,
             vectorId: `page-${p.shopifyId}`,
             shopifyId: p.shopifyId.toString(),
             handle: p.handle,
           })),
-          products: website.shopifyProducts.map((p) => ({
+          products: shopifyProducts.map((p) => ({
             id: p.id,
             vectorId: `product-${p.shopifyId}`,
             shopifyId: p.shopifyId.toString(),
             handle: p.handle,
           })),
-          posts: website.ShopifyBlogPost.map((p) => ({
+          posts: shopifyBlogPosts.map((p) => ({
             id: p.id,
             vectorId: `post-${p.shopifyId}`,
             shopifyId: p.shopifyId.toString(),
             handle: p.handle,
           })),
-          collections: website.ShopifyCollection.map((c) => ({
+          collections: shopifyCollections.map((c) => ({
             id: c.id,
             vectorId: `collection-${c.shopifyId}`,
             shopifyId: c.shopifyId?.toString() || "",
             handle: c.handle,
           })),
-          discounts: website.ShopifyDiscount.map((d) => ({
+          discounts: shopifyDiscounts.map((d) => ({
             id: d.id,
             vectorId: `discount-${d.shopifyId}`,
             shopifyId: d.shopifyId.toString(),

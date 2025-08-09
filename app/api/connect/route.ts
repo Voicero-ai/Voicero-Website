@@ -1,8 +1,103 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { cors } from "../../../lib/cors";
+import { query } from "../../../lib/db";
+
 export const dynamic = "force-dynamic";
-const prisma = new PrismaClient();
+
+// Define interfaces for database entities
+interface Website {
+  id: string;
+  name: string;
+  url: string;
+  type: string;
+  plan: string;
+  active: boolean;
+  monthlyQueries: number;
+  queryLimit: number;
+  renewsOn: Date | null;
+  syncFrequency: string | null;
+  lastSyncedAt: Date | null;
+  customInstructions: string | null;
+  color: string | null;
+  allowAutoCancel: boolean;
+  allowAutoReturn: boolean;
+  allowAutoExchange: boolean;
+  allowAutoClick: boolean;
+  allowAutoScroll: boolean;
+  allowAutoHighlight: boolean;
+  allowAutoRedirect: boolean;
+  allowAutoGetUserOrders: boolean;
+  allowAutoUpdateUserInfo: boolean;
+  allowAutoFillForm: boolean;
+  allowAutoTrackOrder: boolean;
+  allowAutoLogout: boolean;
+  allowAutoLogin: boolean;
+  allowAutoGenerateImage: boolean;
+  removeHighlight: boolean;
+  customWelcomeMessage: string | null;
+  botName: string | null;
+  iconBot: string | null;
+  iconVoice: string | null;
+  iconMessage: string | null;
+  allowMultiAIReview: boolean;
+  clickMessage: string | null;
+}
+
+interface PopUpQuestion {
+  id: string;
+  question: string;
+  websiteId: string;
+}
+
+interface VectorDbConfig {
+  id: string;
+  websiteId: string;
+  namespace: string;
+}
+
+interface ShopifyPage {
+  id: string;
+  shopifyId: string;
+  handle: string;
+}
+
+interface ShopifyProduct {
+  id: string;
+  shopifyId: string;
+  handle: string;
+}
+
+interface ShopifyBlogPost {
+  id: string;
+  shopifyId: string;
+  handle: string;
+}
+
+interface ShopifyCollection {
+  id: string;
+  shopifyId: string | null;
+  handle: string;
+}
+
+interface ShopifyDiscount {
+  id: string;
+  shopifyId: string;
+  code: string;
+}
+
+interface ShopifyBlog {
+  id: string;
+  websiteId: string;
+  title: string;
+}
+
+interface ContentCounts {
+  pages: number;
+  posts: number;
+  products: number;
+  discounts?: number;
+  collections?: number;
+}
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -47,78 +142,171 @@ export async function GET(request: NextRequest) {
     }
 
     // Find the website associated with this access key
-    const website = await prisma.website.findFirst({
-      where: {
-        accessKeys: {
-          some: {
-            key: accessKey,
-          },
-        },
-      },
-      include: {
-        _count: {
-          select: {
-            pages: true,
-            posts: true,
-            products: true,
-            shopifyPages: true,
-            shopifyProducts: true,
-            shopifyBlog: true,
-            ShopifyDiscount: true,
-            ShopifyCollection: true,
-            ShopifyBlogPost: true,
-          },
-        },
-        accessKeys: true,
-        popUpQuestions: true,
-        VectorDbConfig: true,
-        shopifyBlog: true,
-        // Include all content types with their IDs
-        shopifyPages: {
-          select: {
-            id: true,
-            shopifyId: true,
-            handle: true,
-          },
-        },
-        shopifyProducts: {
-          select: {
-            id: true,
-            shopifyId: true,
-            handle: true,
-          },
-        },
-        ShopifyBlogPost: {
-          select: {
-            id: true,
-            shopifyId: true,
-            handle: true,
-          },
-        },
-        ShopifyCollection: {
-          select: {
-            id: true,
-            shopifyId: true,
-            handle: true,
-          },
-        },
-        ShopifyDiscount: {
-          select: {
-            id: true,
-            shopifyId: true,
-            code: true,
-          },
-        },
-      },
-    });
+    const websites = (await query(
+      `SELECT w.* FROM Website w
+       JOIN AccessKey ak ON w.id = ak.websiteId
+       WHERE ak.key = ?`,
+      [accessKey]
+    )) as Website[];
 
-    console.log("Website found:", website ? "yes" : "no"); // Debug log
+    console.log("Website found:", websites.length > 0 ? "yes" : "no"); // Debug log
 
-    if (!website) {
+    if (websites.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Invalid access key" }, { status: 401 })
       );
+    }
+
+    const website = websites[0];
+
+    // Get access keys
+    const accessKeys = (await query(
+      "SELECT * FROM AccessKey WHERE websiteId = ?",
+      [website.id]
+    )) as any[];
+
+    // Get popup questions
+    const popUpQuestions = (await query(
+      "SELECT * FROM PopUpQuestion WHERE websiteId = ?",
+      [website.id]
+    )) as PopUpQuestion[];
+
+    // Get vector DB config
+    const vectorDbConfigs = (await query(
+      "SELECT * FROM VectorDbConfig WHERE websiteId = ?",
+      [website.id]
+    )) as VectorDbConfig[];
+
+    // Get Shopify blog
+    const shopifyBlogs = (await query(
+      "SELECT * FROM ShopifyBlog WHERE websiteId = ?",
+      [website.id]
+    )) as ShopifyBlog[];
+
+    // Get content counts based on website type
+    let contentCounts: ContentCounts;
+
+    if (website.type === "WordPress") {
+      const [pageCount, postCount, productCount] = await Promise.all([
+        query(
+          "SELECT COUNT(*) as count FROM WordpressPage WHERE websiteId = ?",
+          [website.id]
+        ),
+        query(
+          "SELECT COUNT(*) as count FROM WordpressPost WHERE websiteId = ?",
+          [website.id]
+        ),
+        query(
+          "SELECT COUNT(*) as count FROM WordpressProduct WHERE websiteId = ?",
+          [website.id]
+        ),
+      ]);
+
+      contentCounts = {
+        pages: (pageCount as any[])[0]?.count || 0,
+        posts: (postCount as any[])[0]?.count || 0,
+        products: (productCount as any[])[0]?.count || 0,
+      };
+    } else {
+      // Shopify counts
+      const [
+        pageCount,
+        postCount,
+        productCount,
+        discountCount,
+        collectionCount,
+      ] = await Promise.all([
+        query("SELECT COUNT(*) as count FROM ShopifyPage WHERE websiteId = ?", [
+          website.id,
+        ]),
+        query(
+          "SELECT COUNT(*) as count FROM ShopifyBlogPost WHERE websiteId = ?",
+          [website.id]
+        ),
+        query(
+          "SELECT COUNT(*) as count FROM ShopifyProduct WHERE websiteId = ?",
+          [website.id]
+        ),
+        query(
+          "SELECT COUNT(*) as count FROM ShopifyDiscount WHERE websiteId = ?",
+          [website.id]
+        ),
+        query(
+          "SELECT COUNT(*) as count FROM ShopifyCollection WHERE websiteId = ?",
+          [website.id]
+        ),
+      ]);
+
+      contentCounts = {
+        pages: (pageCount as any[])[0]?.count || 0,
+        posts: (postCount as any[])[0]?.count || 0,
+        products: (productCount as any[])[0]?.count || 0,
+        discounts: (discountCount as any[])[0]?.count || 0,
+        collections: (collectionCount as any[])[0]?.count || 0,
+      };
+    }
+
+    // For Shopify websites, get all content IDs
+    let shopifyContent;
+    if (website.type === "Shopify") {
+      // Get all Shopify content
+      const [
+        shopifyPages,
+        shopifyProducts,
+        shopifyBlogPosts,
+        shopifyCollections,
+        shopifyDiscounts,
+      ] = await Promise.all([
+        query(
+          "SELECT id, shopifyId, handle FROM ShopifyPage WHERE websiteId = ?",
+          [website.id]
+        ) as Promise<ShopifyPage[]>,
+        query(
+          "SELECT id, shopifyId, handle FROM ShopifyProduct WHERE websiteId = ?",
+          [website.id]
+        ) as Promise<ShopifyProduct[]>,
+        query(
+          "SELECT id, shopifyId, handle FROM ShopifyBlogPost WHERE websiteId = ?",
+          [website.id]
+        ) as Promise<ShopifyBlogPost[]>,
+        query(
+          "SELECT id, shopifyId, handle FROM ShopifyCollection WHERE websiteId = ?",
+          [website.id]
+        ) as Promise<ShopifyCollection[]>,
+        query(
+          "SELECT id, shopifyId, code FROM ShopifyDiscount WHERE websiteId = ?",
+          [website.id]
+        ) as Promise<ShopifyDiscount[]>,
+      ]);
+
+      shopifyContent = {
+        pages: (shopifyPages as ShopifyPage[]).map((p) => ({
+          id: p.id,
+          shopifyId: p.shopifyId.toString(),
+          handle: p.handle,
+        })),
+        products: (shopifyProducts as ShopifyProduct[]).map((p) => ({
+          id: p.id,
+          shopifyId: p.shopifyId.toString(),
+          handle: p.handle,
+        })),
+        posts: (shopifyBlogPosts as ShopifyBlogPost[]).map((p) => ({
+          id: p.id,
+          shopifyId: p.shopifyId.toString(),
+          handle: p.handle,
+        })),
+        collections: (shopifyCollections as ShopifyCollection[]).map((c) => ({
+          id: c.id,
+          shopifyId: c.shopifyId?.toString() || "",
+          handle: c.handle,
+        })),
+        discounts: (shopifyDiscounts as ShopifyDiscount[]).map((d) => ({
+          id: d.id,
+          shopifyId: d.shopifyId.toString(),
+          code: d.code,
+        })),
+      };
     }
 
     // Return the website data with type-specific counts and IDs
@@ -138,8 +326,9 @@ export async function GET(request: NextRequest) {
           syncFrequency: website.syncFrequency,
           lastSyncedAt: website.lastSyncedAt,
           customInstructions: website.customInstructions,
-          popUpQuestions: website.popUpQuestions,
-          VectorDbConfig: website.VectorDbConfig,
+          popUpQuestions: popUpQuestions,
+          VectorDbConfig:
+            vectorDbConfigs.length > 0 ? vectorDbConfigs[0] : null,
           color: website.color,
           allowAutoCancel: website.allowAutoCancel,
           allowAutoReturn: website.allowAutoReturn,
@@ -163,51 +352,9 @@ export async function GET(request: NextRequest) {
           iconMessage: website.iconMessage,
           allowMultiAIReview: website.allowMultiAIReview,
           clickMessage: website.clickMessage,
-          _count:
-            website.type === "WordPress"
-              ? {
-                  pages: website._count.pages,
-                  posts: website._count.posts,
-                  products: website._count.products,
-                }
-              : {
-                  pages: website._count.shopifyPages,
-                  posts: website._count.ShopifyBlogPost,
-                  products: website._count.shopifyProducts,
-                  discounts: website._count.ShopifyDiscount,
-                  collections: website._count.ShopifyCollection,
-                },
+          _count: contentCounts,
           // Include all content IDs for Shopify
-          content:
-            website.type === "Shopify"
-              ? {
-                  pages: website.shopifyPages.map((p) => ({
-                    id: p.id,
-                    shopifyId: p.shopifyId.toString(),
-                    handle: p.handle,
-                  })),
-                  products: website.shopifyProducts.map((p) => ({
-                    id: p.id,
-                    shopifyId: p.shopifyId.toString(),
-                    handle: p.handle,
-                  })),
-                  posts: website.ShopifyBlogPost.map((p) => ({
-                    id: p.id,
-                    shopifyId: p.shopifyId.toString(),
-                    handle: p.handle,
-                  })),
-                  collections: website.ShopifyCollection.map((c) => ({
-                    id: c.id,
-                    shopifyId: c.shopifyId?.toString() || "",
-                    handle: c.handle,
-                  })),
-                  discounts: website.ShopifyDiscount.map((d) => ({
-                    id: d.id,
-                    shopifyId: d.shopifyId.toString(),
-                    code: d.code,
-                  })),
-                }
-              : undefined,
+          content: website.type === "Shopify" ? shopifyContent : undefined,
         },
       })
     );

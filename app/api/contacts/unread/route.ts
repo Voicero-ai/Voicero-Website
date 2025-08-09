@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -16,12 +16,16 @@ export async function GET() {
     const userId = session.user.id;
 
     // Count unread contacts for the user
-    const unreadCount = await prisma.contact.count({
-      where: {
-        userId,
-        read: false,
-      },
-    });
+    const unreadCountResult = await query(
+      "SELECT COUNT(*) as count FROM Contact WHERE userId = ? AND `read` = ?",
+      [userId, false]
+    );
+
+    // Extract the count from the result
+    const unreadCount =
+      Array.isArray(unreadCountResult) && unreadCountResult.length > 0
+        ? (unreadCountResult[0] as { count: number }).count
+        : 0;
 
     return NextResponse.json({ count: unreadCount });
   } catch (error) {

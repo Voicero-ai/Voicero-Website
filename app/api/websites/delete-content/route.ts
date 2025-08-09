@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "../../auth/[...nextauth]/auth";
-import prisma from "@/lib/prisma";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -44,12 +44,11 @@ export async function POST(request: Request) {
     }
 
     // Verify the user owns the website
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-        userId: session.user.id,
-      },
-    });
+    const websites = (await query(
+      `SELECT id FROM Website WHERE id = ? AND userId = ? LIMIT 1`,
+      [websiteId, session.user.id]
+    )) as { id: string }[];
+    const website = websites.length > 0 ? websites[0] : null;
 
     if (!website) {
       return NextResponse.json(
@@ -64,52 +63,42 @@ export async function POST(request: Request) {
     switch (contentType) {
       case "product":
         // Delete product
-        result = await prisma.shopifyProduct.delete({
-          where: {
-            id: contentId,
-            websiteId: websiteId,
-          },
-        });
+        await query(
+          `DELETE FROM ShopifyProduct WHERE id = ? AND websiteId = ?`,
+          [contentId, websiteId]
+        );
         break;
 
       case "post":
         // Delete blog post
-        result = await prisma.shopifyBlogPost.delete({
-          where: {
-            id: contentId,
-            websiteId: websiteId,
-          },
-        });
+        await query(
+          `DELETE FROM ShopifyBlogPost WHERE id = ? AND websiteId = ?`,
+          [contentId, websiteId]
+        );
         break;
 
       case "page":
         // Delete page
-        result = await prisma.shopifyPage.delete({
-          where: {
-            id: contentId,
-            websiteId: websiteId,
-          },
-        });
+        await query(`DELETE FROM ShopifyPage WHERE id = ? AND websiteId = ?`, [
+          contentId,
+          websiteId,
+        ]);
         break;
 
       case "collection":
         // Delete collection
-        result = await prisma.shopifyCollection.delete({
-          where: {
-            id: contentId,
-            websiteId: websiteId,
-          },
-        });
+        await query(
+          `DELETE FROM ShopifyCollection WHERE id = ? AND websiteId = ?`,
+          [contentId, websiteId]
+        );
         break;
 
       case "discount":
         // Delete discount
-        result = await prisma.shopifyDiscount.delete({
-          where: {
-            id: contentId,
-            websiteId: websiteId,
-          },
-        });
+        await query(
+          `DELETE FROM ShopifyDiscount WHERE id = ? AND websiteId = ?`,
+          [contentId, websiteId]
+        );
         break;
     }
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma"; // Adjust this path as needed
+import { query } from "@/lib/db";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../../lib/auth";
 
@@ -158,12 +158,11 @@ async function authenticateRequest(
   // Try session-based auth first
   const session = await getServerSession(authOptions);
   if (session?.user?.email) {
-    const user = await prisma.user.findUnique({
-      where: { email: session.user.email },
-      select: { id: true },
-    });
-    if (user) {
-      userId = user.id;
+    const users = (await query(`SELECT id FROM User WHERE email = ? LIMIT 1`, [
+      session.user.email,
+    ])) as { id: string }[];
+    if (users.length > 0) {
+      userId = users[0].id;
     }
   }
 
@@ -172,19 +171,16 @@ async function authenticateRequest(
     const authHeader = request.headers.get("Authorization");
     if (authHeader?.startsWith("Bearer ")) {
       const accessKey = authHeader.substring(7);
-      const websiteByKey = await prisma.website.findFirst({
-        where: {
-          accessKeys: {
-            some: {
-              key: accessKey,
-            },
-          },
-        },
-        select: {
-          id: true,
-          userId: true,
-        },
-      });
+      const websiteByKeyRows = (await query(
+        `SELECT w.id, w.userId
+         FROM Website w
+         JOIN AccessKey ak ON ak.websiteId = w.id
+         WHERE ak.key = ?
+         LIMIT 1`,
+        [accessKey]
+      )) as { id: string; userId: string }[];
+      const websiteByKey =
+        websiteByKeyRows.length > 0 ? websiteByKeyRows[0] : null;
 
       if (websiteByKey) {
         userId = websiteByKey.userId;
@@ -225,13 +221,11 @@ async function authenticateRequest(
 }
 
 async function checkWebsiteOwnership(userId: string, websiteId: string) {
-  const websiteOwnership = await prisma.website.findFirst({
-    where: {
-      id: websiteId,
-      userId: userId,
-    },
-    select: { id: true },
-  });
+  const ownershipRows = (await query(
+    `SELECT id FROM Website WHERE id = ? AND userId = ? LIMIT 1`,
+    [websiteId, userId]
+  )) as { id: string }[];
+  const websiteOwnership = ownershipRows.length > 0 ? ownershipRows[0] : null;
 
   if (!websiteOwnership) {
     console.log(
@@ -250,29 +244,93 @@ async function checkWebsiteOwnership(userId: string, websiteId: string) {
 
 async function fetchWebsiteData(websiteId: string) {
   // Fetch basic website data
-  const website = await prisma.website.findUnique({
-    where: { id: websiteId },
-    include: {
-      accessKeys: {
-        orderBy: { createdAt: "desc" },
-        take: 1,
-      },
-      popUpQuestions: {
-        orderBy: { createdAt: "desc" },
-      },
-    },
-  });
+  const websiteRows = (await query(
+    `SELECT id, url, name, type, customType, plan, active, monthlyQueries,
+            queryLimit, lastSyncedAt, customInstructions, color, botName,
+            customWelcomeMessage, iconBot, iconVoice, iconMessage, clickMessage,
+            removeHighlight, userId, allowAutoCancel, allowAutoReturn,
+            allowAutoExchange, allowAutoClick, allowAutoScroll, allowAutoHighlight,
+            allowAutoRedirect, allowAutoGetUserOrders, allowAutoUpdateUserInfo,
+            allowAutoFillForm, allowAutoTrackOrder, allowAutoLogout, allowAutoLogin,
+            allowAutoGenerateImage, allowMultiAIReview
+     FROM Website WHERE id = ? LIMIT 1`,
+    [websiteId]
+  )) as any[];
+  const baseWebsite = websiteRows.length > 0 ? websiteRows[0] : null;
 
-  // Fetch threads separately to reduce connection pressure
-  const aiThreads = await prisma.aiThread.findMany({
-    where: { websiteId },
-    orderBy: { createdAt: "desc" },
-    include: {
-      messages: {
-        orderBy: { createdAt: "asc" },
-      },
-    },
-  });
+  if (!baseWebsite) {
+    return { website: null, aiThreads: [] as Thread[] };
+  }
+
+  // Access key (latest)
+  const accessKeyRows = (await query(
+    `SELECT \`key\`, createdAt FROM AccessKey WHERE websiteId = ? ORDER BY createdAt DESC LIMIT 1`,
+    [websiteId]
+  )) as { key: string; createdAt: Date }[];
+  const accessKeys = accessKeyRows.map((r) => ({ key: r.key }));
+
+  // Pop up questions
+  const popUpRows = (await query(
+    `SELECT id, question, createdAt FROM PopUpQuestion WHERE websiteId = ? ORDER BY createdAt DESC`,
+    [websiteId]
+  )) as { id: string; question: string; createdAt: Date }[];
+  const popUpQuestions = popUpRows.map((r) => ({
+    id: r.id,
+    question: r.question,
+    createdAt: new Date(r.createdAt),
+  }));
+
+  const website = {
+    ...baseWebsite,
+    active: !!baseWebsite.active,
+    removeHighlight: !!baseWebsite.removeHighlight,
+    allowAutoCancel: !!baseWebsite.allowAutoCancel,
+    allowAutoReturn: !!baseWebsite.allowAutoReturn,
+    allowAutoExchange: !!baseWebsite.allowAutoExchange,
+    allowAutoClick: !!baseWebsite.allowAutoClick,
+    allowAutoScroll: !!baseWebsite.allowAutoScroll,
+    allowAutoHighlight: !!baseWebsite.allowAutoHighlight,
+    allowAutoRedirect: !!baseWebsite.allowAutoRedirect,
+    allowAutoGetUserOrders: !!baseWebsite.allowAutoGetUserOrders,
+    allowAutoUpdateUserInfo: !!baseWebsite.allowAutoUpdateUserInfo,
+    allowAutoFillForm: !!baseWebsite.allowAutoFillForm,
+    allowAutoTrackOrder: !!baseWebsite.allowAutoTrackOrder,
+    allowAutoLogout: !!baseWebsite.allowAutoLogout,
+    allowAutoLogin: !!baseWebsite.allowAutoLogin,
+    allowAutoGenerateImage: !!baseWebsite.allowAutoGenerateImage,
+    allowMultiAIReview: !!baseWebsite.allowMultiAIReview,
+    lastSyncedAt: baseWebsite.lastSyncedAt
+      ? new Date(baseWebsite.lastSyncedAt)
+      : null,
+    accessKeys,
+    popUpQuestions,
+  } as any;
+
+  // Fetch threads separately
+  const threadRows = (await query(
+    `SELECT id FROM AiThread WHERE websiteId = ? ORDER BY createdAt DESC`,
+    [websiteId]
+  )) as { id: string }[];
+
+  const aiThreads: Thread[] = [];
+  for (const t of threadRows) {
+    const messageRows = (await query(
+      `SELECT id, createdAt, content, type, threadId, role, pageUrl, scrollToText
+       FROM AiMessage WHERE threadId = ? ORDER BY createdAt ASC`,
+      [t.id]
+    )) as any[];
+    const messages: Message[] = messageRows.map((m) => ({
+      id: m.id,
+      createdAt: new Date(m.createdAt),
+      content: m.content,
+      type: m.type ?? null,
+      threadId: m.threadId,
+      role: m.role,
+      pageUrl: m.pageUrl ?? null,
+      scrollToText: m.scrollToText ?? null,
+    }));
+    aiThreads.push({ id: t.id, messages });
+  }
 
   return { website, aiThreads };
 }
@@ -543,38 +601,39 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
   const { urlRedirectCounts } = redirectMaps;
 
   // Fetch WordPress Products with relations
-  const wpProducts = await prisma.wordpressProduct.findMany({
-    where: { websiteId },
-    orderBy: { updatedAt: "desc" },
-    include: {
-      reviews: true,
-      categories: true,
-      tags: true,
-      customFields: true,
-    },
-  });
+  const wpProducts = (await query(
+    `SELECT p.*, wpr.review as reviewText, wpr.rating as reviewRating, wpr.verified as reviewVerified,
+            wc.name as categoryName, wt.name as tagName, wcf.metaKey, wcf.metaValue
+     FROM WordpressProduct p
+     LEFT JOIN WordpressReview wpr ON wpr.productId = p.wpId
+     LEFT JOIN _WordpressProductToWordpressProductCategory wpc ON wpc.A = p.id
+     LEFT JOIN WordpressProductCategory wc ON wc.id = wpc.B
+     LEFT JOIN _WordpressProductToWordpressProductTag wpt ON wpt.A = p.id
+     LEFT JOIN WordpressProductTag wt ON wt.id = wpt.B
+     LEFT JOIN WordpressCustomField wcf ON wcf.wordpressProductId = p.id
+     WHERE p.websiteId = ?
+     ORDER BY p.updatedAt DESC`,
+    [websiteId]
+  )) as any[];
 
   // Fetch WordPress Posts with relations
-  const wpPosts = await prisma.wordpressPost.findMany({
-    where: { websiteId },
-    orderBy: { updatedAt: "desc" },
-    include: {
-      author: true,
-      categories: true,
-      tags: true,
-      comments: true,
-      customFields: true,
-    },
-  });
+  const wpPosts = (await query(
+    `SELECT p.*, wa.name as authorName
+     FROM WordpressPost p
+     LEFT JOIN WordpressAuthor wa ON wa.wpId = p.authorId
+     WHERE p.websiteId = ?
+     ORDER BY p.updatedAt DESC`,
+    [websiteId]
+  )) as any[];
 
   // Fetch WordPress Pages
-  const wpPages = await prisma.wordpressPage.findMany({
-    where: { websiteId },
-    orderBy: { updatedAt: "desc" },
-  });
+  const wpPages = (await query(
+    `SELECT * FROM WordpressPage WHERE websiteId = ? ORDER BY updatedAt DESC`,
+    [websiteId]
+  )) as any[];
 
   // Map products
-  const products = wpProducts.map((prod) => {
+  const products = wpProducts.map((prod: any) => {
     const productUrl = `/products/${prod.slug}`;
     return {
       id: String(prod.id),
@@ -588,9 +647,9 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
       regularPrice: prod.regularPrice,
       salePrice: prod.salePrice,
       stockQuantity: prod.stockQuantity,
-      categories: prod.categories.map((c) => ({ id: c.id, name: c.name })),
-      tags: prod.tags.map((t) => ({ id: t.id, name: t.name })),
-      reviews: prod.reviews.map((r) => ({
+      categories: prod.categories.map((c: any) => ({ id: c.id, name: c.name })),
+      tags: prod.tags.map((t: any) => ({ id: t.id, name: t.name })),
+      reviews: prod.reviews.map((r: any) => ({
         id: r.id,
         reviewer: r.reviewer,
         rating: r.rating,
@@ -599,7 +658,7 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
         date: r.date.toISOString(),
       })),
       customFields: prod.customFields.reduce(
-        (acc, field) => ({
+        (acc: Record<string, any>, field: any) => ({
           ...acc,
           [field.metaKey]: field.metaValue,
         }),
@@ -609,7 +668,7 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
   });
 
   // Map blog posts
-  const blogPosts = wpPosts.map((post) => {
+  const blogPosts = wpPosts.map((post: any) => {
     const postUrl = `/${post.slug}`;
     return {
       id: String(post.id),
@@ -620,9 +679,9 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
       aiRedirects: redirectMaps.blogRedirects.get(post.slug) || 0,
       content: post.excerpt ?? post.content,
       author: post.author?.name ?? "Unknown",
-      categories: post.categories.map((c) => ({ id: c.id, name: c.name })),
-      tags: post.tags.map((t) => ({ id: t.id, name: t.name })),
-      comments: post.comments.map((c) => ({
+      categories: post.categories.map((c: any) => ({ id: c.id, name: c.name })),
+      tags: post.tags.map((t: any) => ({ id: t.id, name: t.name })),
+      comments: post.comments.map((c: any) => ({
         id: c.id,
         author: c.authorName,
         content: c.content,
@@ -631,7 +690,7 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
         parentId: c.parentId,
       })),
       customFields: post.customFields.reduce(
-        (acc, field) => ({
+        (acc: Record<string, any>, field: any) => ({
           ...acc,
           [field.metaKey]: field.metaValue,
         }),
@@ -641,7 +700,7 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
   });
 
   // Map pages
-  const pages = wpPages.map((p) => {
+  const pages = wpPages.map((p: any) => {
     const pageUrl = `/${p.slug}`;
     return {
       id: String(p.id),
@@ -663,47 +722,32 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   // Fetch collections first since products reference them
   let shopifyCollections: any[] = [];
   try {
-    shopifyCollections = await prisma.shopifyCollection.findMany({
-      where: { websiteId },
-      orderBy: { createdAt: "desc" }, // Use createdAt instead of updatedAt to avoid date issues
-      include: {
-        products: true,
-      },
-    });
+    shopifyCollections = (await query(
+      `SELECT sc.* FROM ShopifyCollection sc WHERE sc.websiteId = ? ORDER BY sc.createdAt DESC`,
+      [websiteId]
+    )) as any[];
+    // Load collection products
+    for (const col of shopifyCollections) {
+      const prodRows = (await query(
+        `SELECT sp.* FROM ShopifyProduct sp
+         JOIN _ShopifyCollectionToShopifyProduct cp ON cp.A = ?
+         WHERE sp.id = cp.B AND sp.websiteId = ?`,
+        [col.id, websiteId]
+      )) as any[];
+      col.products = prodRows;
+    }
   } catch (error) {
     console.error("Error fetching collection data:", error);
-    try {
-      shopifyCollections = await prisma.shopifyCollection.findMany({
-        where: { websiteId },
-        include: {
-          products: true,
-        },
-      });
-    } catch (fallbackError) {
-      console.error("Fallback collection fetch also failed:", fallbackError);
-    }
   }
 
   // Fetch discounts - use try/catch to handle invalid date values
   let shopifyDiscounts: any[] = [];
   try {
-    // Fetch without ordering first, as it's more likely to succeed
-    shopifyDiscounts = await prisma.shopifyDiscount.findMany({
-      where: { websiteId },
-      select: {
-        id: true,
-        title: true,
-        code: true,
-        value: true,
-        type: true,
-        status: true,
-        startsAt: true,
-        endsAt: true,
-        appliesTo: true,
-        shopifyId: true,
-        createdAt: true,
-      },
-    });
+    shopifyDiscounts = (await query(
+      `SELECT id, title, code, value, type, status, startsAt, endsAt, appliesTo, shopifyId, createdAt
+       FROM ShopifyDiscount WHERE websiteId = ?`,
+      [websiteId]
+    )) as any[];
 
     // Sort in memory instead of using database ordering
     shopifyDiscounts = shopifyDiscounts.sort((a, b) => {
@@ -721,15 +765,25 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   // Fetch products with relations
   let shopifyProducts: any[] = [];
   try {
-    // Fetch products without ordering first
-    shopifyProducts = await prisma.shopifyProduct.findMany({
-      where: { websiteId },
-      include: {
-        variants: true,
-        reviews: true,
-        images: true,
-      },
-    });
+    shopifyProducts = (await query(
+      `SELECT * FROM ShopifyProduct WHERE websiteId = ?`,
+      [websiteId]
+    )) as any[];
+    // load variants, reviews, images
+    for (const p of shopifyProducts) {
+      p.variants = (await query(
+        `SELECT * FROM ShopifyProductVariant WHERE productId = ?`,
+        [p.id]
+      )) as any[];
+      p.reviews = (await query(
+        `SELECT * FROM ShopifyReview WHERE productId = ?`,
+        [p.id]
+      )) as any[];
+      p.images = (await query(
+        `SELECT * FROM ShopifyMedia WHERE productId = ?`,
+        [p.id]
+      )) as any[];
+    }
 
     // Sort in memory instead of using database ordering
     shopifyProducts = shopifyProducts.sort((a, b) => {
@@ -746,18 +800,22 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   // Fetch blog posts with comments
   let shopifyBlogs: any[] = [];
   try {
-    // Fetch blogs without ordering first
-    shopifyBlogs = await prisma.shopifyBlog.findMany({
-      where: { websiteId },
-      include: {
-        posts: {
-          include: {
-            comments: true,
-          },
-          // No ordering at database level
-        },
-      },
-    });
+    shopifyBlogs = (await query(
+      `SELECT * FROM ShopifyBlog WHERE websiteId = ?`,
+      [websiteId]
+    )) as any[];
+    for (const blog of shopifyBlogs) {
+      blog.posts = (await query(
+        `SELECT * FROM ShopifyBlogPost WHERE blogId = ? ORDER BY createdAt DESC`,
+        [blog.id]
+      )) as any[];
+      for (const post of blog.posts) {
+        post.comments = (await query(
+          `SELECT * FROM ShopifyComment WHERE postId = ?`,
+          [post.id]
+        )) as any[];
+      }
+    }
 
     // Sort blog posts in memory
     shopifyBlogs = shopifyBlogs.map((blog) => {
@@ -779,18 +837,11 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   // Fetch pages - with improved error handling for invalid dates
   let shopifyPages: any[] = [];
   try {
-    // Fetch without ordering first, as it's more likely to succeed
-    shopifyPages = await prisma.shopifyPage.findMany({
-      where: { websiteId },
-      select: {
-        id: true,
-        title: true,
-        handle: true,
-        content: true,
-        createdAt: true,
-        shopifyId: true,
-      },
-    });
+    shopifyPages = (await query(
+      `SELECT id, title, handle, content, createdAt, shopifyId
+       FROM ShopifyPage WHERE websiteId = ?`,
+      [websiteId]
+    )) as any[];
 
     // Sort in memory instead of using database ordering
     shopifyPages = shopifyPages.sort((a, b) => {
@@ -818,10 +869,12 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
       sortOrder: collection.sortOrder,
       updatedAt: collection.createdAt.toISOString(), // Just use createdAt which should be valid
       createdAt: collection.createdAt.toISOString(),
-      products: collection.products.map((p: any) => ({
-        ...p,
-        shopifyId: p.shopifyId.toString(),
-      })),
+      products: Array.isArray(collection.products)
+        ? collection.products.map((p: any) => ({
+            ...p,
+            shopifyId: p.shopifyId.toString(),
+          }))
+        : [],
       aiRedirects:
         redirectMaps.collectionRedirects.get(collection.handle || "") || 0,
       shopifyId: collection.shopifyId.toString(),
@@ -963,10 +1016,13 @@ async function fetchCustomContent(websiteId: string, stats: any) {
   }> = [];
 
   try {
-    const customPages = await prisma.page.findMany({
-      where: { websiteId },
-      orderBy: { updatedAt: "desc" },
-    });
+    const customPages = (await query(
+      `SELECT id, title, url, content, html, updatedAt
+       FROM Page
+       WHERE websiteId = ?
+       ORDER BY updatedAt DESC`,
+      [websiteId]
+    )) as any[];
 
     pages = customPages.map((p: any) => {
       const pageUrl = p.url;
@@ -975,9 +1031,9 @@ async function fetchCustomContent(websiteId: string, stats: any) {
         title: p.title,
         url: pageUrl,
         type: "page" as const,
-        lastUpdated: p.updatedAt.toISOString(),
+        lastUpdated: new Date(p.updatedAt).toISOString(),
         aiRedirects:
-          redirectMaps.pageRedirects.get(p.url.replace(/^\//, "")) || 0,
+          redirectMaps.pageRedirects.get(String(p.url).replace(/^\//, "")) || 0,
         content: p.content,
         htmlContent: p.html,
         source: "custom_crawler",

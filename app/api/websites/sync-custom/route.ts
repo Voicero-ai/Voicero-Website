@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import prisma from "@/lib/prisma";
+import { query } from "@/lib/db";
+
+export const dynamic = "force-dynamic";
 
 interface PageData {
   url: string;
@@ -38,14 +40,15 @@ export async function POST(req: NextRequest) {
     }
 
     // Verify the website exists and belongs to the user
-    const website = await prisma.website.findUnique({
-      where: {
-        id: body.websiteId,
-        user: {
-          email: session.user.email,
-        },
-      },
-    });
+    const websiteRows = (await query(
+      `SELECT w.*
+       FROM Website w
+       JOIN User u ON u.id = w.userId
+       WHERE w.id = ? AND u.email = ?
+       LIMIT 1`,
+      [body.websiteId, session.user.email]
+    )) as any[];
+    const website = websiteRows[0];
 
     if (!website) {
       return NextResponse.json(
@@ -63,12 +66,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Delete existing custom pages for this website
-    // Note: Uses the correct model name 'Page' based on schema.prisma
-    await prisma.page.deleteMany({
-      where: {
-        websiteId: website.id,
-      },
-    });
+    await query(`DELETE FROM Page WHERE websiteId = ?`, [website.id]);
     console.log(
       `[SYNC API] Deleted existing pages for website ID: ${website.id}`
     );
@@ -90,21 +88,18 @@ export async function POST(req: NextRequest) {
         }); // Resolve to indicate skip
       }
 
-      return prisma.page
-        .create({
-          data: {
-            title: pageData.title || pageData.url, // Use URL as fallback title
-            url: pageData.url,
-            content: pageData.content,
-            html: pageData.htmlContent,
-            websiteId: website.id,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          },
-        })
-        .then((createdPage: any) => {
-          return { url: pageData.url, success: true };
-        })
+      return query(
+        `INSERT INTO Page (title, url, content, html, websiteId, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          pageData.title || pageData.url,
+          pageData.url,
+          pageData.content,
+          pageData.htmlContent,
+          website.id,
+        ]
+      )
+        .then(() => ({ url: pageData.url, success: true }))
         .catch((error: any) => {
           console.error(
             `[SYNC API] Error creating page for URL ${pageData.url}:`,
@@ -121,12 +116,11 @@ export async function POST(req: NextRequest) {
     const results = await Promise.allSettled(creationPromises);
     console.log(`[SYNC API] Finished processing ${results.length} pages.`);
 
-    // Update the website's lastSyncedAt timestamp
+    // Update the website's lastSyncedAt timestamp (best-effort)
     try {
-      // await prisma.website.update({
-      //   where: { id: website.id },
-      //   data: { lastSyncedAt: new Date() },
-      // });
+      await query(`UPDATE Website SET lastSyncedAt = NOW() WHERE id = ?`, [
+        website.id,
+      ]);
       console.log(
         `[SYNC API] Updated lastSyncedAt for website ID: ${website.id}`
       );
@@ -135,7 +129,6 @@ export async function POST(req: NextRequest) {
         `[SYNC API] Failed to update lastSyncedAt for website ID: ${website.id}:`,
         updateError
       );
-      // Continue even if timestamp update fails, but log it
     }
 
     // Count successful syncs

@@ -1,7 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
 import { auth } from "../../../../lib/auth";
+import { query } from "../../../../lib/db";
+
 export const dynamic = "force-dynamic";
+
+interface AiThread {
+  id: string;
+  threadId: string;
+  createdAt: Date;
+  website: {
+    id: string;
+    url: string;
+  };
+  messages: AiMessage[];
+}
+
+interface AiMessage {
+  id: string;
+  threadId: string;
+  role: string;
+  content: string;
+  createdAt: Date;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const session = await auth();
@@ -16,31 +37,41 @@ export async function GET(request: NextRequest) {
       return new NextResponse("Thread ID is required", { status: 400 });
     }
 
-    const thread = await prisma.aiThread.findUnique({
-      where: {
-        id: threadId,
-        website: {
-          userId: session.user.id,
-        },
-      },
-      include: {
-        website: {
-          select: {
-            id: true,
-            url: true,
-          },
-        },
-        messages: {
-          orderBy: {
-            createdAt: "asc",
-          },
-        },
-      },
-    });
+    // Get the thread and check if it belongs to the user
+    const threadResults = (await query(
+      `SELECT t.id, t.threadId, t.createdAt, w.id as website_id, w.url as website_url 
+       FROM AiThread t
+       JOIN Website w ON t.websiteId = w.id
+       WHERE t.id = ? AND w.userId = ?`,
+      [threadId, session.user.id]
+    )) as any[];
 
-    if (!thread) {
+    if (threadResults.length === 0) {
       return new NextResponse("Thread not found", { status: 404 });
     }
+
+    const threadData = threadResults[0];
+
+    // Get messages for this thread
+    const messages = (await query(
+      `SELECT id, threadId, role, content, createdAt 
+       FROM AiMessage 
+       WHERE threadId = ? 
+       ORDER BY createdAt ASC`,
+      [threadId]
+    )) as AiMessage[];
+
+    // Construct the thread object
+    const thread: AiThread = {
+      id: threadData.id,
+      threadId: threadData.threadId,
+      createdAt: threadData.createdAt,
+      website: {
+        id: threadData.website_id,
+        url: threadData.website_url,
+      },
+      messages: messages,
+    };
 
     const formattedSession = {
       id: thread.id,
@@ -49,7 +80,10 @@ export async function GET(request: NextRequest) {
         id: thread.website.id,
         domain: thread.website.url,
       },
-      startedAt: thread.createdAt.toISOString(),
+      startedAt:
+        thread.createdAt instanceof Date
+          ? thread.createdAt.toISOString()
+          : new Date(thread.createdAt).toISOString(),
       messages: thread.messages.map((msg) => {
         let content = msg.content;
         let metadata = {
@@ -104,7 +138,10 @@ export async function GET(request: NextRequest) {
           id: msg.id,
           type: msg.role as "user" | "ai",
           content: content,
-          timestamp: msg.createdAt.toISOString(),
+          timestamp:
+            msg.createdAt instanceof Date
+              ? msg.createdAt.toISOString()
+              : new Date(msg.createdAt).toISOString(),
           metadata: Object.values(metadata).some((v) => v !== undefined)
             ? metadata
             : undefined,

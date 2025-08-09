@@ -1,62 +1,54 @@
-import { PrismaClient } from "@prisma/client";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
-
-const prisma = new PrismaClient();
 
 export async function POST(request: Request) {
   try {
     const { websiteId } = await request.json();
 
-    await prisma.$transaction(async (tx) => {
-      // Get all posts and products
-      const posts = await tx.wordpressPost.findMany({
-        where: { websiteId },
-        select: { wpId: true },
-      });
-      const products = await tx.wordpressProduct.findMany({
-        where: { websiteId },
-        select: { wpId: true },
-      });
+    // Delete dependent rows using ordered deletes
+    // Delete comments tied to posts of this website
+    await query(
+      `DELETE wc FROM WordpressComment wc
+       JOIN WordpressPost wp ON wc.postId = wp.wpId
+       WHERE wp.websiteId = ?`,
+      [websiteId]
+    );
+    console.log("Deleted WordPress comments");
 
-      // First delete comments and reviews
-      await tx.wordpressComment.deleteMany({
-        where: {
-          postId: { in: posts.map((p) => p.wpId) },
-        },
-      });
-      console.log("Deleted WordPress comments");
+    // Delete reviews tied to products of this website
+    await query(
+      `DELETE wr FROM WordpressReview wr
+       JOIN WordpressProduct wprod ON wr.productId = wprod.wpId
+       WHERE wprod.websiteId = ?`,
+      [websiteId]
+    );
+    console.log("Deleted WordPress reviews");
 
-      await tx.wordpressReview.deleteMany({
-        where: {
-          productId: { in: products.map((p) => p.wpId) },
-        },
-      });
-      console.log("Deleted WordPress reviews");
+    // Custom fields
+    await query(`DELETE FROM WordpressCustomField WHERE websiteId = ?`, [
+      websiteId,
+    ]);
+    console.log("Deleted WordPress custom fields");
 
-      // Delete custom fields
-      await tx.wordpressCustomField.deleteMany({
-        where: { websiteId },
-      });
-      console.log("Deleted WordPress custom fields");
+    // Categories, tags, media, authors
+    await query(`DELETE FROM WordpressCategory WHERE websiteId = ?`, [
+      websiteId,
+    ]);
+    await query(`DELETE FROM WordpressTag WHERE websiteId = ?`, [websiteId]);
+    await query(`DELETE FROM WordpressMedia WHERE websiteId = ?`, [websiteId]);
+    await query(`DELETE FROM WordpressAuthor WHERE websiteId = ?`, [websiteId]);
+    console.log("Deleted WordPress metadata");
 
-      // Delete categories, tags, media, authors
-      await tx.wordpressCategory.deleteMany({ where: { websiteId } });
-      await tx.wordpressTag.deleteMany({ where: { websiteId } });
-      await tx.wordpressMedia.deleteMany({ where: { websiteId } });
-      await tx.wordpressAuthor.deleteMany({ where: { websiteId } });
-      console.log("Deleted WordPress metadata");
-
-      // Now delete the main content
-      await tx.wordpressPost.deleteMany({ where: { websiteId } });
-      console.log("Deleted WordPress posts");
-
-      await tx.wordpressPage.deleteMany({ where: { websiteId } });
-      console.log("Deleted WordPress pages");
-
-      await tx.wordpressProduct.deleteMany({ where: { websiteId } });
-      console.log("Deleted WordPress products");
-    });
+    // Main content
+    await query(`DELETE FROM WordpressPost WHERE websiteId = ?`, [websiteId]);
+    console.log("Deleted WordPress posts");
+    await query(`DELETE FROM WordpressPage WHERE websiteId = ?`, [websiteId]);
+    console.log("Deleted WordPress pages");
+    await query(`DELETE FROM WordpressProduct WHERE websiteId = ?`, [
+      websiteId,
+    ]);
+    console.log("Deleted WordPress products");
 
     return new Response(JSON.stringify({ success: true }), {
       status: 200,

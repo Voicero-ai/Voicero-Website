@@ -1,11 +1,9 @@
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";
+import { query } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
-
-const prisma = new PrismaClient();
 
 // Initialize Pinecone
 const pinecone = new Pinecone({
@@ -53,9 +51,11 @@ async function createEmbedding(text: string) {
 async function deleteWebsiteVectors(websiteId: string) {
   try {
     // First check if there's any vector config for this website
-    const vectorConfig = await prisma.vectorDbConfig.findUnique({
-      where: { websiteId },
-    });
+    const rows = (await query(
+      `SELECT websiteId FROM VectorDbConfig WHERE websiteId = ? LIMIT 1`,
+      [websiteId]
+    )) as { websiteId: string }[];
+    const vectorConfig = rows.length > 0 ? rows[0] : null;
 
     if (!vectorConfig) {
       console.log(
@@ -129,27 +129,55 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
     await deleteWebsiteVectors(websiteId);
 
     // 1. Pull WordPress Posts
-    const posts = await prisma.wordpressPost.findMany({
-      where: { websiteId },
-      include: {
-        author: true,
-        comments: true,
-      },
-    });
+    const posts = (await query(
+      `SELECT p.*, a.name as authorName
+       FROM WordpressPost p
+       LEFT JOIN WordpressAuthor a ON a.wpId = p.authorId
+       WHERE p.websiteId = ?`,
+      [websiteId]
+    )) as any[];
 
     // 2. Pull WordPress Pages
-    const pages = await prisma.wordpressPage.findMany({
-      where: { websiteId },
-    });
+    const pages = (await query(
+      `SELECT * FROM WordpressPage WHERE websiteId = ?`,
+      [websiteId]
+    )) as any[];
 
     // 3. Pull WordPress Products
-    const products = await prisma.wordpressProduct.findMany({
-      where: { websiteId },
-      include: {
-        reviews: true,
-        categories: true,
-      },
-    });
+    const products = (await query(
+      `SELECT * FROM WordpressProduct WHERE websiteId = ?`,
+      [websiteId]
+    )) as any[];
+    const productIds = products.map((p) => p.id);
+    const reviewsByProduct: Record<string, any[]> = {};
+    const categoriesByProduct: Record<string, any[]> = {};
+    if (productIds.length > 0) {
+      const revs = (await query(
+        `SELECT * FROM WordpressReview WHERE productId IN (
+           SELECT wpId FROM WordpressProduct WHERE id IN (${Array(
+             productIds.length
+           )
+             .fill("?")
+             .join(",")})
+        `,
+        productIds
+      )) as any[];
+      for (const r of revs) {
+        const key = String(r.productId);
+        (reviewsByProduct[key] ||= []).push(r);
+      }
+      const cats = (await query(
+        `SELECT wc.* , link.A as productId
+         FROM _WordpressProductToWordpressProductCategory link
+         JOIN WordpressProductCategory wc ON wc.id = link.B
+         WHERE link.A IN (${Array(productIds.length).fill("?").join(",")})`,
+        productIds
+      )) as any[];
+      for (const c of cats) {
+        const key = String(c.productId);
+        (categoriesByProduct[key] ||= []).push(c);
+      }
+    }
 
     // ------------------------------
     //  Vectorize each post
@@ -190,7 +218,11 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
     //  Vectorize each comment
     // ------------------------------
     for (const post of posts) {
-      for (const comment of post.comments) {
+      const comments = (await query(
+        `SELECT * FROM WordpressComment WHERE postId = ?`,
+        [post.wpId]
+      )) as any[];
+      for (const comment of comments) {
         try {
           const embedding = await createEmbedding(
             `Comment on post "${post.title}": ${comment.content}`
@@ -278,8 +310,12 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
               websiteId,
               price: product.price,
               dbId: product.id,
-              reviewIds: product.reviews.map((r) => `review-${r.wpId}`),
-              categoryIds: product.categories.map((c) => `category-${c.wpId}`),
+              reviewIds: (reviewsByProduct[String(product.wpId)] || []).map(
+                (r: any) => `review-${r.wpId}`
+              ),
+              categoryIds: (categoriesByProduct[String(product.id)] || []).map(
+                (c: any) => `category-${c.wpId}`
+              ),
               ...(product.shortDescription && {
                 shortDescription: product.shortDescription,
               }),
@@ -309,7 +345,11 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
     //  Vectorize each product's reviews
     // ------------------------------
     for (const product of products) {
-      for (const review of product.reviews) {
+      const reviews = (await query(
+        `SELECT * FROM WordpressReview WHERE productId = ?`,
+        [product.wpId]
+      )) as any[];
+      for (const review of reviews) {
         try {
           const embedding = await createEmbedding(
             `Review of product "${product.name}": ${review.review}`
@@ -346,23 +386,12 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
     }
 
     // Finally, update (or create) the VectorDbConfig row for this website
-    await prisma.website.update({
-      where: { id: websiteId },
-      data: {
-        VectorDbConfig: {
-          upsert: {
-            create: {
-              MainNamespace: websiteId,
-              QANamespace: `${websiteId}-qa`,
-            },
-            update: {
-              MainNamespace: websiteId,
-              QANamespace: `${websiteId}-qa`,
-            },
-          },
-        },
-      },
-    });
+    await query(
+      `INSERT INTO VectorDbConfig (id, websiteId, MainNamespace, QANamespace)
+       VALUES (UUID(), ?, ?, ?)
+       ON DUPLICATE KEY UPDATE MainNamespace = VALUES(MainNamespace), QANamespace = VALUES(QANamespace)`,
+      [websiteId, websiteId, `${websiteId}-qa`]
+    );
 
     return stats;
   } catch (error) {
@@ -404,15 +433,13 @@ export async function POST(request: Request) {
     }
 
     // Find which website this access key belongs to
-    const website = await prisma.website.findFirst({
-      where: {
-        accessKeys: {
-          some: {
-            key: accessKey,
-          },
-        },
-      },
-    });
+    const websiteRows = (await query(
+      `SELECT w.* FROM Website w
+       JOIN AccessKey ak ON ak.websiteId = w.id
+       WHERE ak.key = ? LIMIT 1`,
+      [accessKey]
+    )) as any[];
+    const website = websiteRows[0];
 
     if (!website) {
       return NextResponse.json(
@@ -478,53 +505,32 @@ export async function DELETE(request: Request) {
       await deleteWebsiteVectors(id);
       console.log("Successfully deleted vectors for website:", id);
 
-      // Delete all related WordPress data
-      await prisma.$transaction(async (tx) => {
-        // First get all posts and products for this website
-        const posts = await tx.wordpressPost.findMany({
-          where: { websiteId: id },
-          select: { wpId: true },
-        });
-        const products = await tx.wordpressProduct.findMany({
-          where: { websiteId: id },
-          select: { wpId: true },
-        });
+      // Delete WordPress data and website
+      // Delete comments by joining posts
+      await query(
+        `DELETE wc FROM WordpressComment wc
+         JOIN WordpressPost wp ON wp.wpId = wc.postId
+         WHERE wp.websiteId = ?`,
+        [id]
+      );
+      console.log("Deleted WordPress comments");
 
-        // Delete comments by post IDs
-        await tx.wordpressComment.deleteMany({
-          where: {
-            postId: {
-              in: posts.map((post) => post.wpId),
-            },
-          },
-        });
-        console.log("Deleted WordPress comments");
+      // Delete reviews by joining products
+      await query(
+        `DELETE wr FROM WordpressReview wr
+         JOIN WordpressProduct wp ON wp.wpId = wr.productId
+         WHERE wp.websiteId = ?`,
+        [id]
+      );
+      console.log("Deleted WordPress reviews");
 
-        // Delete reviews by product IDs
-        await tx.wordpressReview.deleteMany({
-          where: {
-            productId: {
-              in: products.map((product) => product.wpId),
-            },
-          },
-        });
-        console.log("Deleted WordPress reviews");
+      // Delete custom fields
+      await query(`DELETE FROM WordpressCustomField WHERE websiteId = ?`, [id]);
+      console.log("Deleted WordPress custom fields");
 
-        // Delete custom fields
-        await tx.wordpressCustomField.deleteMany({
-          where: { websiteId: id },
-        });
-        console.log("Deleted WordPress custom fields");
-
-        // Finally delete the website (this will cascade delete other related data)
-        const deletedWebsite = await tx.website.delete({
-          where: { id },
-        });
-        console.log(
-          "Successfully deleted website from database:",
-          deletedWebsite
-        );
-      });
+      // Finally delete the website (CASCADE removes related rows as defined)
+      await query(`DELETE FROM Website WHERE id = ?`, [id]);
+      console.log("Successfully deleted website from database");
 
       return Response.json({ success: true });
     } catch (deleteError) {

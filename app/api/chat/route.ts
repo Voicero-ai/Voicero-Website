@@ -1,17 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { cors } from "../../../lib/cors";
+import { query } from "../../../lib/db";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { PineconeStore } from "@langchain/pinecone";
 import { OpenAI } from "openai";
 import { pinecone } from "../../../lib/pinecone";
+
+// Define types for our data structures
+interface Website {
+  id: string;
+  aiAssistantId: string | null;
+  monthlyQueries: number;
+  queryLimit: number;
+  plan: string;
+}
+
+interface AiThread {
+  id: string;
+  threadId: string;
+  websiteId: string;
+}
+
+interface AiMessage {
+  id: string;
+  threadId: string;
+  role: string;
+  content: string;
+  type: string | null;
+  pageUrl: string | null;
+  scrollToText: string | null;
+}
+
+// Define a type for query results
+type QueryResult = any[] | { [key: string]: any };
 
 // Configure for long-running requests
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 minutes
 
-const prisma = new PrismaClient();
 const openai = new OpenAI();
 
 export async function OPTIONS(request: NextRequest) {
@@ -52,29 +79,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get request body and website lookup in parallel
-    const [
-      { message, context, threadId, isVoiceInput, pastPrompts = [] },
-      website,
-    ] = await Promise.all([
-      request.json(),
-      prisma.website.findFirst({
-        where: {
-          accessKeys: {
-            some: {
-              key: accessKey,
-            },
-          },
-        },
-        select: {
-          id: true,
-          aiAssistantId: true,
-          monthlyQueries: true,
-          queryLimit: true,
-          plan: true,
-        },
-      }),
-    ]);
+    // Get request body
+    const {
+      message,
+      context,
+      threadId,
+      isVoiceInput,
+      pastPrompts = [],
+    } = await request.json();
+
+    // Find website by access key
+    const websites = (await query(
+      `SELECT w.id, w.aiAssistantId, w.monthlyQueries, w.queryLimit, w.plan 
+       FROM Website w
+       JOIN AccessKey ak ON w.id = ak.websiteId
+       WHERE ak.key = ?`,
+      [accessKey]
+    )) as Website[];
+
+    const website = websites.length > 0 ? websites[0] : null;
 
     if (!website) {
       console.log("❌ Invalid access key - no website found");
@@ -123,21 +146,33 @@ export async function POST(request: NextRequest) {
       const slug = urlPath.split("/").filter(Boolean).pop() || "";
 
       contentPromise = Promise.all([
-        prisma.wordpressPage.findFirst({
-          where: { websiteId: website.id, slug },
+        query(
+          "SELECT content FROM WordpressPage WHERE websiteId = ? AND slug = ?",
+          [website.id, slug]
+        ).then((pages: QueryResult) => {
+          const pagesArray = pages as any[];
+          return pagesArray.length > 0 ? pagesArray[0].content : null;
         }),
-        prisma.wordpressPost.findFirst({
-          where: { websiteId: website.id, slug },
+        query(
+          "SELECT content FROM WordpressPost WHERE websiteId = ? AND slug = ?",
+          [website.id, slug]
+        ).then((posts: QueryResult) => {
+          const postsArray = posts as any[];
+          return postsArray.length > 0 ? postsArray[0].content : null;
         }),
-        prisma.wordpressProduct.findFirst({
-          where: { websiteId: website.id, slug },
+        query(
+          "SELECT description, shortDescription FROM WordpressProduct WHERE websiteId = ? AND slug = ?",
+          [website.id, slug]
+        ).then((products: QueryResult) => {
+          const productsArray = products as any[];
+          return productsArray.length > 0
+            ? `${productsArray[0].description}\n${
+                productsArray[0].shortDescription || ""
+              }`
+            : null;
         }),
-      ]).then(([page, post, product]) => {
-        if (page) return page.content;
-        if (post) return post.content;
-        if (product)
-          return `${product.description}\n${product.shortDescription || ""}`;
-        return null;
+      ]).then(([pageContent, postContent, productContent]) => {
+        return pageContent || postContent || productContent || null;
       });
     }
 
@@ -188,26 +223,33 @@ ${doc.metadata.content || doc.pageContent || ""}`;
 Current page: ${context.currentUrl}
 ${context.currentContent ? "Page content available" : "No page content"}`;
 
-    // Get or create thread and send messages in parallel
-    let aiThread = threadId
-      ? await prisma.aiThread.findFirst({
-          where: {
-            OR: [{ id: threadId }, { threadId: threadId }],
-            websiteId: website.id,
-          },
-        })
-      : null;
+    // Get or create thread
+    let aiThread: AiThread | null = null;
+    if (threadId) {
+      const threads = (await query(
+        `SELECT * FROM AiThread WHERE (id = ? OR threadId = ?) AND websiteId = ?`,
+        [threadId, threadId, website.id]
+      )) as AiThread[];
+      aiThread = threads.length > 0 ? threads[0] : null;
+    }
 
     let openAiThreadId;
     if (!aiThread) {
       const openAiThread = await openai.beta.threads.create();
       openAiThreadId = openAiThread.id;
-      aiThread = await prisma.aiThread.create({
-        data: {
-          threadId: openAiThreadId,
-          websiteId: website.id,
-        },
-      });
+
+      const result = await query(
+        "INSERT INTO AiThread (id, threadId, websiteId, createdAt, lastMessageAt) VALUES (UUID(), ?, ?, NOW(), NOW())",
+        [openAiThreadId, website.id]
+      );
+
+      // Get the newly created thread
+      const newThreads = (await query(
+        "SELECT * FROM AiThread WHERE threadId = ?",
+        [openAiThreadId]
+      )) as AiThread[];
+
+      aiThread = newThreads[0];
     } else {
       openAiThreadId = aiThread.threadId;
     }
@@ -301,36 +343,33 @@ ${context.currentContent ? "Page content available" : "No page content"}`;
     console.log("🤖 AI Response:", aiResponse);
 
     // Save assistant response to database
-    await prisma.aiMessage.create({
-      data: {
-        threadId: aiThread.id,
-        role: "assistant",
-        content: JSON.stringify(aiResponse),
-        type: "text",
-      },
-    });
+    await query(
+      "INSERT INTO AiMessage (id, threadId, role, content, type, createdAt) VALUES (UUID(), ?, ?, ?, ?, NOW())",
+      [aiThread.id, "assistant", JSON.stringify(aiResponse), "text"]
+    );
 
     // After successful AI response, increment the monthly queries counter only for first message in thread
-    const existingUserMessages = await prisma.aiMessage.count({
-      where: {
-        threadId: aiThread.id,
-        role: "user"
-      }
+    const existingUserMessages = await query(
+      "SELECT COUNT(*) as count FROM AiMessage WHERE threadId = ? AND role = 'user'",
+      [aiThread.id]
+    ).then((result: QueryResult) => {
+      const resultArray = result as any[];
+      return resultArray[0]?.count || 0;
     });
 
     // Only bill if this is the first user message in the thread (per-thread billing)
     if (existingUserMessages === 0) {
-      await prisma.website.update({
-        where: { id: website.id },
-        data: {
-          monthlyQueries: {
-            increment: 1,
-          },
-        },
-      });
-      console.log(`💰 Billing: First message in thread ${aiThread.id} - incrementing monthly queries`);
+      await query(
+        "UPDATE Website SET monthlyQueries = monthlyQueries + 1 WHERE id = ?",
+        [website.id]
+      );
+      console.log(
+        `💰 Billing: First message in thread ${aiThread.id} - incrementing monthly queries`
+      );
     } else {
-      console.log(`💰 Billing: Follow-up message in thread ${aiThread.id} - no additional charge (${existingUserMessages} existing user messages)`);
+      console.log(
+        `💰 Billing: Follow-up message in thread ${aiThread.id} - no additional charge (${existingUserMessages} existing user messages)`
+      );
     }
 
     // After getting the AI response, stream it back

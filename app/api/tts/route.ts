@@ -3,9 +3,9 @@
 import { NextResponse } from "next/server";
 import { cors } from "../../../lib/cors";
 import { NextRequest } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { query } from "../../../lib/db";
+
 export const dynamic = "force-dynamic";
-const prisma = new PrismaClient();
 
 // ElevenLabs API configuration
 const ELEVEN_LABS_API_URL = "https://api.elevenlabs.io/v1/text-to-speech";
@@ -18,6 +18,10 @@ const VOICE_SETTINGS = {
   style_intensity: 0.5, // Changed from style to style_intensity
   use_speaker_boost: true,
 };
+
+interface Website {
+  id: string;
+}
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -52,25 +56,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find the website associated with this access key
-    const website = await prisma.website.findFirst({
-      where: {
-        accessKeys: {
-          some: {
-            key: accessKey,
-          },
-        },
-      },
-    });
+    // Find the website associated with this access key using direct SQL
+    const websites = (await query(
+      `SELECT w.id FROM Website w
+       JOIN AccessKey ak ON w.id = ak.websiteId
+       WHERE ak.key = ?
+       LIMIT 1`,
+      [accessKey]
+    )) as Website[];
 
-    console.log("Website found:", website ? "yes" : "no"); // Debug log
+    console.log("Website found:", websites.length > 0 ? "yes" : "no"); // Debug log
 
-    if (!website) {
+    if (websites.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Invalid access key" }, { status: 401 })
       );
     }
+
+    const website = websites[0];
 
     // Get the text from the request body
     const body = await request.json();

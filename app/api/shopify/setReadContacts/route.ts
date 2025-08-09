@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import { query } from "../../../../lib/db";
 import { cors } from "../../../../lib/cors";
 export const dynamic = "force-dynamic";
-const prisma = new PrismaClient();
+
+interface AccessKey {
+  websiteId: string;
+}
+
+interface Contact {
+  id: string;
+  read: boolean;
+}
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -49,37 +57,31 @@ export async function POST(request: NextRequest) {
     }
 
     // First find the website ID using the access key
-    const accessKeyRecord = await prisma.accessKey.findUnique({
-      where: {
-        key: accessKey,
-      },
-      select: {
-        websiteId: true,
-      },
-    });
+    const accessKeyRecords = (await query(
+      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
+      [accessKey]
+    )) as AccessKey[];
 
-    if (!accessKeyRecord) {
+    if (accessKeyRecords.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Invalid access key" }, { status: 401 })
       );
     }
 
-    // Find the contact to ensure it exists and belongs to the website owner
-    const contact = await prisma.contact.findFirst({
-      where: {
-        id,
-        user: {
-          websites: {
-            some: {
-              id: accessKeyRecord.websiteId,
-            },
-          },
-        },
-      },
-    });
+    const accessKeyRecord = accessKeyRecords[0];
 
-    if (!contact) {
+    // Find the contact to ensure it exists and belongs to the website owner
+    const contacts = (await query(
+      `SELECT c.id 
+       FROM Contact c
+       JOIN User u ON c.userId = u.id
+       JOIN Website w ON w.userId = u.id
+       WHERE c.id = ? AND w.id = ?`,
+      [id, accessKeyRecord.websiteId]
+    )) as { id: string }[];
+
+    if (contacts.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Contact not found" }, { status: 404 })
@@ -87,14 +89,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Update the contact to mark as read
-    const updatedContact = await prisma.contact.update({
-      where: {
-        id,
-      },
-      data: {
-        read: true,
-      },
-    });
+    await query("UPDATE Contact SET `read` = TRUE WHERE id = ?", [id]);
+
+    // Get the updated contact
+    const updatedContacts = (await query(
+      "SELECT id, `read` FROM Contact WHERE id = ?",
+      [id]
+    )) as Contact[];
+
+    const updatedContact = updatedContacts[0];
 
     return cors(
       request,

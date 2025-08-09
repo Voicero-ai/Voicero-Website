@@ -1,7 +1,19 @@
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
+
+interface User {
+  id: string;
+  email: string;
+  emailVerified: boolean | number;
+}
+
+interface VerifiedDevice {
+  id: string;
+  userId: string;
+  deviceId: string;
+}
 
 export async function POST(request: Request) {
   try {
@@ -20,18 +32,16 @@ export async function POST(request: Request) {
     );
 
     // Check if the user exists
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        email: true,
-        emailVerified: true,
-      },
-    });
+    const users = (await query(
+      "SELECT id, email, emailVerified FROM User WHERE id = ?",
+      [userId]
+    )) as User[];
 
-    if (!user) {
+    if (users.length === 0) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
+
+    const user = users[0];
 
     // If email is not verified, always require verification
     if (!user.emailVerified) {
@@ -42,15 +52,13 @@ export async function POST(request: Request) {
     }
 
     // Check if this device is already verified for this user
-    const verifiedDevice = await prisma.verifiedDevice.findFirst({
-      where: {
-        userId: userId,
-        deviceId: deviceId,
-      },
-    });
+    const verifiedDevices = (await query(
+      "SELECT id, userId, deviceId FROM VerifiedDevice WHERE userId = ? AND deviceId = ?",
+      [userId, deviceId]
+    )) as VerifiedDevice[];
 
     // If device is not verified, require verification
-    if (!verifiedDevice) {
+    if (verifiedDevices.length === 0) {
       console.log(`Device ${deviceId} not verified for user ${userId}`);
       return NextResponse.json({
         needsVerification: true,

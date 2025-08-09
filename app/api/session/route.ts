@@ -1,11 +1,50 @@
 // app/api/session/route.ts
 
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { cors } from "../../../lib/cors";
+import { query } from "../../../lib/db";
 
 export const dynamic = "force-dynamic";
-const prisma = new PrismaClient();
+
+// Define interfaces for database entities
+interface Session {
+  id: string;
+  websiteId: string;
+  shopifyCustomerId: string | null;
+  textOpen: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  threads: AiThread[];
+  customer?: ShopifyCustomer;
+}
+
+interface AiThread {
+  id: string;
+  threadId: string;
+  title: string;
+  websiteId: string;
+  createdAt: Date;
+  lastMessageAt: Date;
+  messages: AiMessage[];
+}
+
+interface AiMessage {
+  id: string;
+  threadId: string;
+  role: string;
+  content: string;
+  createdAt: Date;
+}
+
+interface ShopifyCustomer {
+  id: string;
+  shopifyId: string;
+  websiteId: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+}
 
 export async function OPTIONS(request: NextRequest) {
   // CORS preflight
@@ -60,16 +99,14 @@ export async function POST(request: NextRequest) {
     let finalShopifyCustomerId = shopifyCustomerId || null;
     if (shopifyId && !shopifyCustomerId) {
       console.log(`Looking for Shopify customer with ID: ${shopifyId}`);
-      const shopifyCustomer = await prisma.shopifyCustomer.findFirst({
-        where: {
-          websiteId,
-          shopifyId: shopifyId.toString(),
-        },
-      });
+      const shopifyCustomers = (await query(
+        "SELECT id FROM ShopifyCustomer WHERE websiteId = ? AND shopifyId = ?",
+        [websiteId, shopifyId.toString()]
+      )) as { id: string }[];
 
-      if (shopifyCustomer) {
-        console.log(`Found Shopify customer: ${shopifyCustomer.id}`);
-        finalShopifyCustomerId = shopifyCustomer.id;
+      if (shopifyCustomers.length > 0) {
+        console.log(`Found Shopify customer: ${shopifyCustomers[0].id}`);
+        finalShopifyCustomerId = shopifyCustomers[0].id;
       } else {
         console.log(`No Shopify customer found with ID: ${shopifyId}`);
       }
@@ -82,43 +119,97 @@ export async function POST(request: NextRequest) {
       console.log("No pageUrl provided in POST request");
     }
 
-    console.log(`Creating new session for website ${websiteId}...`);
-    const session = await prisma.session.create({
-      data: {
-        websiteId,
-        shopifyCustomerId: finalShopifyCustomerId,
-        textOpen: false,
-        threads: {
-          create: {
-            threadId: crypto.randomUUID(),
-            title: "New Conversation",
-            websiteId,
-          },
-        },
-      },
-      include: {
-        threads: {
-          include: { messages: true },
-          orderBy: { lastMessageAt: "desc" },
-        },
-        ...(finalShopifyCustomerId ? { customer: true } : {}),
-      },
-    });
+    // Generate a new UUID for the thread
+    const threadId = crypto.randomUUID();
 
-    // Log pageUrl, but don't create UrlMovement record anymore
-    if (pageUrl) {
-      console.log(`Page URL for session ${session.id}: ${pageUrl}`);
-    } else {
-      const refererUrl = request.headers.get("referer");
-      if (refererUrl) {
-        console.log(`Referer URL for session ${session.id}: ${refererUrl}`);
-      }
+    console.log(`Creating new session for website ${websiteId}...`);
+
+    // Create a new session
+    const sessionResult = await query(
+      "INSERT INTO Session (websiteId, shopifyCustomerId, textOpen) VALUES (?, ?, ?)",
+      [websiteId, finalShopifyCustomerId, false]
+    );
+
+    const sessionId = (sessionResult as any).insertId;
+
+    // Create a new thread for this session
+    const threadResult = await query(
+      "INSERT INTO AiThread (threadId, title, websiteId) VALUES (?, ?, ?)",
+      [threadId, "New Conversation", websiteId]
+    );
+
+    const threadDbId = (threadResult as any).insertId;
+
+    // Associate the thread with the session
+    await query("INSERT INTO _AiThreadToSession (A, B) VALUES (?, ?)", [
+      threadDbId,
+      sessionId,
+    ]);
+
+    // Fetch the complete session with threads and messages
+    const sessions = (await query(
+      `SELECT s.*, t.id as thread_id, t.threadId as thread_uuid, t.title, t.websiteId as thread_websiteId, 
+       t.createdAt as thread_createdAt, t.lastMessageAt as thread_lastMessageAt
+       FROM Session s
+       LEFT JOIN _AiThreadToSession ats ON s.id = ats.B
+       LEFT JOIN AiThread t ON ats.A = t.id
+       WHERE s.id = ?
+       ORDER BY t.lastMessageAt DESC`,
+      [sessionId]
+    )) as any[];
+
+    if (sessions.length === 0) {
+      return cors(
+        request,
+        NextResponse.json(
+          { error: "Failed to create session" },
+          { status: 500 }
+        )
+      );
     }
 
-    // Return both session and its initial thread
-    const thread = session.threads[0];
+    // Reconstruct the session object
+    const session: any = {
+      id: sessions[0].id,
+      websiteId: sessions[0].websiteId,
+      shopifyCustomerId: sessions[0].shopifyCustomerId,
+      textOpen: sessions[0].textOpen === 1,
+      createdAt: sessions[0].createdAt,
+      updatedAt: sessions[0].updatedAt,
+      threads: [],
+    };
 
+    // Get any messages for the thread
+    const messages = (await query(
+      "SELECT * FROM AiMessage WHERE threadId = ? ORDER BY createdAt ASC",
+      [threadDbId]
+    )) as AiMessage[];
 
+    // Add thread to session
+    const thread = {
+      id: sessions[0].thread_id,
+      threadId: sessions[0].thread_uuid,
+      title: sessions[0].title,
+      websiteId: sessions[0].thread_websiteId,
+      createdAt: sessions[0].thread_createdAt,
+      lastMessageAt:
+        sessions[0].thread_lastMessageAt || sessions[0].thread_createdAt,
+      messages: messages,
+    };
+
+    session.threads.push(thread);
+
+    // Get customer info if linked
+    if (finalShopifyCustomerId) {
+      const customers = (await query(
+        "SELECT * FROM ShopifyCustomer WHERE id = ?",
+        [finalShopifyCustomerId]
+      )) as ShopifyCustomer[];
+
+      if (customers.length > 0) {
+        session.customer = customers[0];
+      }
+    }
 
     return cors(
       request,
@@ -141,14 +232,11 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   // Support fetching by sessionId OR by websiteId (most recent session)
   try {
-
-
     const { searchParams } = new URL(request.url);
     const sessionId = searchParams.get("sessionId");
     const websiteId = searchParams.get("websiteId");
     const shopifyId = searchParams.get("shopifyId");
     const pageUrl = searchParams.get("pageUrl");
-
 
     // Log URL but don't create UrlMovement record
     if (sessionId && pageUrl) {
@@ -168,35 +256,80 @@ export async function GET(request: NextRequest) {
       console.log(`Looking for session with Shopify ID: ${shopifyId}`);
 
       // First find the ShopifyCustomer
-      const shopifyCustomer = await prisma.shopifyCustomer.findFirst({
-        where: {
-          websiteId,
-          shopifyId: shopifyId.toString(),
-        },
-      });
+      const shopifyCustomers = (await query(
+        "SELECT * FROM ShopifyCustomer WHERE websiteId = ? AND shopifyId = ?",
+        [websiteId, shopifyId.toString()]
+      )) as ShopifyCustomer[];
 
-      if (shopifyCustomer) {
+      if (shopifyCustomers.length > 0) {
+        const shopifyCustomer = shopifyCustomers[0];
         console.log(`Found Shopify customer: ${shopifyCustomer.id}`);
 
         // Find the most recent session for this customer
-        const customerSession = await prisma.session.findFirst({
-          where: {
-            shopifyCustomerId: shopifyCustomer.id,
-            websiteId,
-          },
-          include: {
-            threads: {
-              include: { messages: true },
-              orderBy: { lastMessageAt: "desc" },
-            },
-            customer: true,
-          },
-          orderBy: { createdAt: "desc" },
-        });
+        const customerSessions = (await query(
+          `SELECT s.*, t.id as thread_id, t.threadId as thread_uuid, t.title, t.websiteId as thread_websiteId, 
+           t.createdAt as thread_createdAt, t.lastMessageAt as thread_lastMessageAt
+           FROM Session s
+           LEFT JOIN _AiThreadToSession ats ON s.id = ats.B
+           LEFT JOIN AiThread t ON ats.A = t.id
+           WHERE s.shopifyCustomerId = ? AND s.websiteId = ?
+           ORDER BY s.createdAt DESC, t.lastMessageAt DESC`,
+          [shopifyCustomer.id, websiteId]
+        )) as any[];
 
-        if (customerSession) {
+        if (customerSessions.length > 0) {
           console.log(
-            `Found existing session for Shopify customer: ${customerSession.id}`
+            `Found existing session for Shopify customer: ${customerSessions[0].id}`
+          );
+
+          // Reconstruct the session object
+          const customerSession: any = {
+            id: customerSessions[0].id,
+            websiteId: customerSessions[0].websiteId,
+            shopifyCustomerId: customerSessions[0].shopifyCustomerId,
+            textOpen: customerSessions[0].textOpen === 1,
+            createdAt: customerSessions[0].createdAt,
+            updatedAt: customerSessions[0].updatedAt,
+            threads: [],
+            customer: shopifyCustomer,
+          };
+
+          // Group threads by ID
+          const threadMap = new Map<string, any>();
+          for (const row of customerSessions) {
+            if (row.thread_id && !threadMap.has(row.thread_id)) {
+              threadMap.set(row.thread_id, {
+                id: row.thread_id,
+                threadId: row.thread_uuid,
+                title: row.title,
+                websiteId: row.thread_websiteId,
+                createdAt: row.thread_createdAt,
+                lastMessageAt: row.thread_lastMessageAt || row.thread_createdAt,
+                messages: [],
+              });
+            }
+          }
+
+          // Get messages for all threads
+          const threadIds = Array.from(threadMap.keys());
+          for (const threadDbId of threadIds) {
+            const messages = (await query(
+              "SELECT * FROM AiMessage WHERE threadId = ? ORDER BY createdAt ASC",
+              [threadDbId]
+            )) as AiMessage[];
+
+            const thread = threadMap.get(threadDbId);
+            if (thread) {
+              thread.messages = messages;
+              customerSession.threads.push(thread);
+            }
+          }
+
+          // Sort threads by lastMessageAt
+          customerSession.threads.sort(
+            (a: any, b: any) =>
+              new Date(b.lastMessageAt).getTime() -
+              new Date(a.lastMessageAt).getTime()
           );
 
           let threadToUse = null;
@@ -217,17 +350,34 @@ export async function GET(request: NextRequest) {
             console.log(
               `Creating new thread for session ${customerSession.id}...`
             );
-            threadToUse = await prisma.aiThread.create({
-              data: {
-                threadId: crypto.randomUUID(),
-                title: "New Conversation",
-                websiteId,
-                sessions: {
-                  connect: { id: customerSession.id },
-                },
-              },
-              include: { messages: true },
-            });
+
+            // Generate a new UUID for the thread
+            const newThreadId = crypto.randomUUID();
+
+            // Create a new thread
+            const threadResult = await query(
+              "INSERT INTO AiThread (threadId, title, websiteId) VALUES (?, ?, ?)",
+              [newThreadId, "New Conversation", websiteId]
+            );
+
+            const newThreadDbId = (threadResult as any).insertId;
+
+            // Associate the thread with the session
+            await query("INSERT INTO _AiThreadToSession (A, B) VALUES (?, ?)", [
+              newThreadDbId,
+              customerSession.id,
+            ]);
+
+            // Create thread object
+            threadToUse = {
+              id: newThreadDbId,
+              threadId: newThreadId,
+              title: "New Conversation",
+              websiteId,
+              createdAt: new Date(),
+              lastMessageAt: new Date(),
+              messages: [],
+            };
 
             // Add the new thread to the session's threads list
             customerSession.threads.unshift(threadToUse);
@@ -259,22 +409,83 @@ export async function GET(request: NextRequest) {
 
     // 1) If client passed sessionId, fetch that exact session
     if (sessionId) {
-      const session = await prisma.session.findUnique({
-        where: { id: sessionId },
-        include: {
-          threads: {
-            include: { messages: true },
-            orderBy: { lastMessageAt: "desc" },
-          },
-          customer: true,
-        },
-      });
+      const sessions = (await query(
+        `SELECT s.*, t.id as thread_id, t.threadId as thread_uuid, t.title, t.websiteId as thread_websiteId, 
+         t.createdAt as thread_createdAt, t.lastMessageAt as thread_lastMessageAt
+         FROM Session s
+         LEFT JOIN _AiThreadToSession ats ON s.id = ats.B
+         LEFT JOIN AiThread t ON ats.A = t.id
+         WHERE s.id = ?
+         ORDER BY t.lastMessageAt DESC`,
+        [sessionId]
+      )) as any[];
 
-      if (!session) {
+      if (sessions.length === 0) {
         return cors(
           request,
           NextResponse.json({ error: "Session not found" }, { status: 404 })
         );
+      }
+
+      // Reconstruct the session object
+      const session: any = {
+        id: sessions[0].id,
+        websiteId: sessions[0].websiteId,
+        shopifyCustomerId: sessions[0].shopifyCustomerId,
+        textOpen: sessions[0].textOpen === 1,
+        createdAt: sessions[0].createdAt,
+        updatedAt: sessions[0].updatedAt,
+        threads: [],
+      };
+
+      // Group threads by ID
+      const threadMap = new Map<string, any>();
+      for (const row of sessions) {
+        if (row.thread_id && !threadMap.has(row.thread_id)) {
+          threadMap.set(row.thread_id, {
+            id: row.thread_id,
+            threadId: row.thread_uuid,
+            title: row.title,
+            websiteId: row.thread_websiteId,
+            createdAt: row.thread_createdAt,
+            lastMessageAt: row.thread_lastMessageAt || row.thread_createdAt,
+            messages: [],
+          });
+        }
+      }
+
+      // Get messages for all threads
+      const threadIds = Array.from(threadMap.keys());
+      for (const threadDbId of threadIds) {
+        const messages = (await query(
+          "SELECT * FROM AiMessage WHERE threadId = ? ORDER BY createdAt ASC",
+          [threadDbId]
+        )) as AiMessage[];
+
+        const thread = threadMap.get(threadDbId);
+        if (thread) {
+          thread.messages = messages;
+          session.threads.push(thread);
+        }
+      }
+
+      // Sort threads by lastMessageAt
+      session.threads.sort(
+        (a: any, b: any) =>
+          new Date(b.lastMessageAt).getTime() -
+          new Date(a.lastMessageAt).getTime()
+      );
+
+      // Get customer info if linked
+      if (session.shopifyCustomerId) {
+        const customers = (await query(
+          "SELECT * FROM ShopifyCustomer WHERE id = ?",
+          [session.shopifyCustomerId]
+        )) as ShopifyCustomer[];
+
+        if (customers.length > 0) {
+          session.customer = customers[0];
+        }
       }
 
       let threadToUse = null;
@@ -293,17 +504,34 @@ export async function GET(request: NextRequest) {
       // Create a new thread if no recent thread exists
       if (!threadToUse) {
         console.log(`Creating new thread for session ${session.id}...`);
-        threadToUse = await prisma.aiThread.create({
-          data: {
-            threadId: crypto.randomUUID(),
-            title: "New Conversation",
-            websiteId: session.websiteId,
-            sessions: {
-              connect: { id: session.id },
-            },
-          },
-          include: { messages: true },
-        });
+
+        // Generate a new UUID for the thread
+        const newThreadId = crypto.randomUUID();
+
+        // Create a new thread
+        const threadResult = await query(
+          "INSERT INTO AiThread (threadId, title, websiteId) VALUES (?, ?, ?)",
+          [newThreadId, "New Conversation", session.websiteId]
+        );
+
+        const newThreadDbId = (threadResult as any).insertId;
+
+        // Associate the thread with the session
+        await query("INSERT INTO _AiThreadToSession (A, B) VALUES (?, ?)", [
+          newThreadDbId,
+          session.id,
+        ]);
+
+        // Create thread object
+        threadToUse = {
+          id: newThreadDbId,
+          threadId: newThreadId,
+          title: "New Conversation",
+          websiteId: session.websiteId,
+          createdAt: new Date(),
+          lastMessageAt: new Date(),
+          messages: [],
+        };
 
         // Add the new thread to the session's threads list
         session.threads.unshift(threadToUse);
@@ -337,23 +565,83 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const session = await prisma.session.findFirst({
-      where: { websiteId },
-      include: {
-        threads: {
-          include: { messages: true },
-          orderBy: { lastMessageAt: "desc" },
-        },
-        customer: true,
-      },
-      orderBy: { createdAt: "desc" },
-    });
+    const sessions = (await query(
+      `SELECT s.*, t.id as thread_id, t.threadId as thread_uuid, t.title, t.websiteId as thread_websiteId, 
+       t.createdAt as thread_createdAt, t.lastMessageAt as thread_lastMessageAt
+       FROM Session s
+       LEFT JOIN _AiThreadToSession ats ON s.id = ats.B
+       LEFT JOIN AiThread t ON ats.A = t.id
+       WHERE s.websiteId = ?
+       ORDER BY s.createdAt DESC, t.lastMessageAt DESC`,
+      [websiteId]
+    )) as any[];
 
-    if (!session) {
+    if (sessions.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "No session found" }, { status: 404 })
       );
+    }
+
+    // Reconstruct the session object
+    const session: any = {
+      id: sessions[0].id,
+      websiteId: sessions[0].websiteId,
+      shopifyCustomerId: sessions[0].shopifyCustomerId,
+      textOpen: sessions[0].textOpen === 1,
+      createdAt: sessions[0].createdAt,
+      updatedAt: sessions[0].updatedAt,
+      threads: [],
+    };
+
+    // Group threads by ID
+    const threadMap = new Map<string, any>();
+    for (const row of sessions) {
+      if (row.thread_id && !threadMap.has(row.thread_id)) {
+        threadMap.set(row.thread_id, {
+          id: row.thread_id,
+          threadId: row.thread_uuid,
+          title: row.title,
+          websiteId: row.thread_websiteId,
+          createdAt: row.thread_createdAt,
+          lastMessageAt: row.thread_lastMessageAt || row.thread_createdAt,
+          messages: [],
+        });
+      }
+    }
+
+    // Get messages for all threads
+    const threadIds = Array.from(threadMap.keys());
+    for (const threadDbId of threadIds) {
+      const messages = (await query(
+        "SELECT * FROM AiMessage WHERE threadId = ? ORDER BY createdAt ASC",
+        [threadDbId]
+      )) as AiMessage[];
+
+      const thread = threadMap.get(threadDbId);
+      if (thread) {
+        thread.messages = messages;
+        session.threads.push(thread);
+      }
+    }
+
+    // Sort threads by lastMessageAt
+    session.threads.sort(
+      (a: any, b: any) =>
+        new Date(b.lastMessageAt).getTime() -
+        new Date(a.lastMessageAt).getTime()
+    );
+
+    // Get customer info if linked
+    if (session.shopifyCustomerId) {
+      const customers = (await query(
+        "SELECT * FROM ShopifyCustomer WHERE id = ?",
+        [session.shopifyCustomerId]
+      )) as ShopifyCustomer[];
+
+      if (customers.length > 0) {
+        session.customer = customers[0];
+      }
     }
 
     let threadToUse = null;
@@ -372,17 +660,34 @@ export async function GET(request: NextRequest) {
     // Create a new thread if no recent thread exists
     if (!threadToUse) {
       console.log(`Creating new thread for session ${session.id}...`);
-      threadToUse = await prisma.aiThread.create({
-        data: {
-          threadId: crypto.randomUUID(),
-          title: "New Conversation",
-          websiteId,
-          sessions: {
-            connect: { id: session.id },
-          },
-        },
-        include: { messages: true },
-      });
+
+      // Generate a new UUID for the thread
+      const newThreadId = crypto.randomUUID();
+
+      // Create a new thread
+      const threadResult = await query(
+        "INSERT INTO AiThread (threadId, title, websiteId) VALUES (?, ?, ?)",
+        [newThreadId, "New Conversation", websiteId]
+      );
+
+      const newThreadDbId = (threadResult as any).insertId;
+
+      // Associate the thread with the session
+      await query("INSERT INTO _AiThreadToSession (A, B) VALUES (?, ?)", [
+        newThreadDbId,
+        session.id,
+      ]);
+
+      // Create thread object
+      threadToUse = {
+        id: newThreadDbId,
+        threadId: newThreadId,
+        title: "New Conversation",
+        websiteId,
+        createdAt: new Date(),
+        lastMessageAt: new Date(),
+        messages: [],
+      };
 
       // Add the new thread to the session's threads list
       session.threads.unshift(threadToUse);

@@ -1,8 +1,13 @@
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
-import { compare } from "bcryptjs";
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
+
+interface User {
+  id: string;
+  email: string;
+  emailVerified: boolean | number;
+}
 
 export async function POST(request: Request) {
   try {
@@ -18,19 +23,20 @@ export async function POST(request: Request) {
 
     // Find user by email or username
     const isEmail = login.includes("@");
-    const user = await prisma.user.findFirst({
-      where: isEmail ? { email: login } : { username: login },
-      select: {
-        id: true,
-        email: true,
-        emailVerified: true,
-      },
-    });
+    const users = (await query(
+      `SELECT id, email, emailVerified 
+       FROM User 
+       WHERE ${isEmail ? "email = ?" : "username = ?"}
+       LIMIT 1`,
+      [login]
+    )) as User[];
 
-    if (!user) {
+    if (users.length === 0) {
       // Don't reveal that the user doesn't exist for security
       return NextResponse.json({ needsVerification: false }, { status: 200 });
     }
+
+    const user = users[0];
 
     // Return whether the user needs verification
     return NextResponse.json({

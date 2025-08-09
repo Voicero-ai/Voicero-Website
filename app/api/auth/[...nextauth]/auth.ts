@@ -1,7 +1,7 @@
 import { AuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
-import prisma from "../../../../lib/prisma";
+import { query } from "../../../../lib/db";
 import { JWT } from "next-auth/jwt";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +20,14 @@ interface UserWithVerification {
   emailVerified?: boolean;
 }
 
+interface User {
+  id: string;
+  email: string;
+  username: string;
+  password: string;
+  emailVerified?: boolean;
+}
+
 export const authOptions: AuthOptions = {
   providers: [
     CredentialsProvider({
@@ -34,20 +42,18 @@ export const authOptions: AuthOptions = {
         }
 
         const isEmail = credentials.login.includes("@");
-        const user = await prisma.user.findFirst({
-          where: isEmail
-            ? { email: credentials.login }
-            : { username: credentials.login },
-          select: {
-            id: true,
-            password: true,
-            email: true,
-            username: true,
-            emailVerified: true,
-          },
-        });
+        const users = (await query(
+          `SELECT id, password, email, username, emailVerified 
+           FROM User 
+           WHERE ${isEmail ? "email = ?" : "username = ?"}
+           LIMIT 1`,
+          [credentials.login]
+        )) as User[];
 
-        if (!user) throw new Error("No user found with that email/username");
+        if (users.length === 0)
+          throw new Error("No user found with that email/username");
+
+        const user = users[0];
 
         const isPasswordValid = await compare(
           credentials.password,
