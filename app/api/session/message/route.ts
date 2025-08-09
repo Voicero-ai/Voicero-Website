@@ -114,14 +114,21 @@ export async function POST(req: NextRequest) {
       content = message;
     }
 
-    // Create a new message
-    const messageResult = await query(
-      `INSERT INTO AiMessage (threadId, role, content, type, pageUrl, scrollToText)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [mostRecentThread.id, "assistant", content, type, pageUrl, scrollToText]
+    // Create a new message with explicit UUID primary key
+    const messageId = crypto.randomUUID();
+    await query(
+      `INSERT INTO AiMessage (id, threadId, role, content, type, pageUrl, scrollToText)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        messageId,
+        mostRecentThread.id,
+        "assistant",
+        content,
+        type,
+        pageUrl,
+        scrollToText,
+      ]
     );
-
-    const messageId = (messageResult as any).insertId;
 
     // Update the lastMessageAt timestamp of the thread
     await query("UPDATE AiThread SET lastMessageAt = ? WHERE id = ?", [

@@ -119,30 +119,28 @@ export async function POST(request: NextRequest) {
       console.log("No pageUrl provided in POST request");
     }
 
-    // Generate a new UUID for the thread
+    // Generate new UUIDs for the thread (DB primary key and public threadId)
+    const newThreadDbId = crypto.randomUUID();
     const threadId = crypto.randomUUID();
 
     console.log(`Creating new session for website ${websiteId}...`);
 
-    // Create a new session
-    const sessionResult = await query(
-      "INSERT INTO Session (websiteId, shopifyCustomerId, textOpen) VALUES (?, ?, ?)",
-      [websiteId, finalShopifyCustomerId, false]
+    // Create a new session with explicit UUID primary key
+    const sessionId = crypto.randomUUID();
+    await query(
+      "INSERT INTO Session (id, websiteId, shopifyCustomerId, textOpen, createdAt) VALUES (?, ?, ?, ?, NOW())",
+      [sessionId, websiteId, finalShopifyCustomerId, false]
     );
 
-    const sessionId = (sessionResult as any).insertId;
-
-    // Create a new thread for this session
-    const threadResult = await query(
-      "INSERT INTO AiThread (threadId, title, websiteId) VALUES (?, ?, ?)",
-      [threadId, "New Conversation", websiteId]
+    // Create a new thread for this session with explicit UUID primary key
+    await query(
+      "INSERT INTO AiThread (id, threadId, title, websiteId, createdAt, lastMessageAt) VALUES (?, ?, ?, ?, NOW(), NOW())",
+      [newThreadDbId, threadId, "New Conversation", websiteId]
     );
-
-    const threadDbId = (threadResult as any).insertId;
 
     // Associate the thread with the session
     await query("INSERT INTO _AiThreadToSession (A, B) VALUES (?, ?)", [
-      threadDbId,
+      newThreadDbId,
       sessionId,
     ]);
 
@@ -182,18 +180,17 @@ export async function POST(request: NextRequest) {
     // Get any messages for the thread
     const messages = (await query(
       "SELECT * FROM AiMessage WHERE threadId = ? ORDER BY createdAt ASC",
-      [threadDbId]
+      [newThreadDbId]
     )) as AiMessage[];
 
     // Add thread to session
     const thread = {
-      id: sessions[0].thread_id,
-      threadId: sessions[0].thread_uuid,
-      title: sessions[0].title,
-      websiteId: sessions[0].thread_websiteId,
-      createdAt: sessions[0].thread_createdAt,
-      lastMessageAt:
-        sessions[0].thread_lastMessageAt || sessions[0].thread_createdAt,
+      id: newThreadDbId,
+      threadId: threadId,
+      title: "New Conversation",
+      websiteId: websiteId,
+      createdAt: new Date(),
+      lastMessageAt: new Date(),
       messages: messages,
     };
 
@@ -354,13 +351,12 @@ export async function GET(request: NextRequest) {
             // Generate a new UUID for the thread
             const newThreadId = crypto.randomUUID();
 
-            // Create a new thread
-            const threadResult = await query(
-              "INSERT INTO AiThread (threadId, title, websiteId) VALUES (?, ?, ?)",
-              [newThreadId, "New Conversation", websiteId]
+            // Create a new thread with explicit UUID primary key
+            const newThreadDbId = crypto.randomUUID();
+            await query(
+              "INSERT INTO AiThread (id, threadId, title, websiteId, createdAt, lastMessageAt) VALUES (?, ?, ?, ?, NOW(), NOW())",
+              [newThreadDbId, newThreadId, "New Conversation", websiteId]
             );
-
-            const newThreadDbId = (threadResult as any).insertId;
 
             // Associate the thread with the session
             await query("INSERT INTO _AiThreadToSession (A, B) VALUES (?, ?)", [
@@ -508,13 +504,12 @@ export async function GET(request: NextRequest) {
         // Generate a new UUID for the thread
         const newThreadId = crypto.randomUUID();
 
-        // Create a new thread
-        const threadResult = await query(
-          "INSERT INTO AiThread (threadId, title, websiteId) VALUES (?, ?, ?)",
-          [newThreadId, "New Conversation", session.websiteId]
+        // Create a new thread with explicit UUID primary key
+        const newThreadDbId = crypto.randomUUID();
+        await query(
+          "INSERT INTO AiThread (id, threadId, title, websiteId, createdAt, lastMessageAt) VALUES (?, ?, ?, ?, NOW(), NOW())",
+          [newThreadDbId, newThreadId, "New Conversation", session.websiteId]
         );
-
-        const newThreadDbId = (threadResult as any).insertId;
 
         // Associate the thread with the session
         await query("INSERT INTO _AiThreadToSession (A, B) VALUES (?, ?)", [
@@ -664,13 +659,12 @@ export async function GET(request: NextRequest) {
       // Generate a new UUID for the thread
       const newThreadId = crypto.randomUUID();
 
-      // Create a new thread
-      const threadResult = await query(
-        "INSERT INTO AiThread (threadId, title, websiteId) VALUES (?, ?, ?)",
-        [newThreadId, "New Conversation", websiteId]
+      // Create a new thread with explicit UUID primary key
+      const newThreadDbId = crypto.randomUUID();
+      await query(
+        "INSERT INTO AiThread (id, threadId, title, websiteId, createdAt, lastMessageAt) VALUES (?, ?, ?, ?, NOW(), NOW())",
+        [newThreadDbId, newThreadId, "New Conversation", websiteId]
       );
-
-      const newThreadDbId = (threadResult as any).insertId;
 
       // Associate the thread with the session
       await query("INSERT INTO _AiThreadToSession (A, B) VALUES (?, ?)", [

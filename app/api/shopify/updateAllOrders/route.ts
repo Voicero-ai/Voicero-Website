@@ -224,11 +224,13 @@ export async function POST(request: NextRequest) {
         if (order.lineItems?.edges) {
           for (const edge of order.lineItems.edges) {
             const item = edge.node;
+            const lineItemId = crypto.randomUUID();
             await query(
               `INSERT INTO ShopifyOrderLineItem 
-                (orderId, name, quantity, variantTitle, variantPrice) 
-              VALUES (?, ?, ?, ?, ?)`,
+                (id, orderId, name, quantity, variantTitle, variantPrice) 
+              VALUES (?, ?, ?, ?, ?, ?)`,
               [
+                lineItemId,
                 existingOrder.id,
                 item.name || null,
                 item.quantity || null,
@@ -239,13 +241,15 @@ export async function POST(request: NextRequest) {
           }
         }
       } else {
-        // Create new order
-        const result = await query(
+        // Create new order with explicit UUID primary key
+        const newOrderId = crypto.randomUUID();
+        await query(
           `INSERT INTO ShopifyOrder 
-            (shopifyId, name, createdAt, displayFulfillmentStatus, websiteId, 
+            (id, shopifyId, name, createdAt, displayFulfillmentStatus, websiteId, 
             totalPriceAmount, totalPriceCurrencyCode, customerEmail, customerFirstName, customerLastName) 
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
+            newOrderId,
             order.id,
             order.name,
             new Date(order.createdAt),
@@ -259,18 +263,17 @@ export async function POST(request: NextRequest) {
           ]
         );
 
-        // Get the newly created order ID
-        const newOrderId = (result as any).insertId;
-
         // Create line items for the new order
         if (order.lineItems?.edges) {
           for (const edge of order.lineItems.edges) {
             const item = edge.node;
+            const lineItemId = crypto.randomUUID();
             await query(
               `INSERT INTO ShopifyOrderLineItem 
-                (orderId, name, quantity, variantTitle, variantPrice) 
-              VALUES (?, ?, ?, ?, ?)`,
+                (id, orderId, name, quantity, variantTitle, variantPrice) 
+              VALUES (?, ?, ?, ?, ?, ?)`,
               [
+                lineItemId,
                 newOrderId,
                 item.name || null,
                 item.quantity || null,
