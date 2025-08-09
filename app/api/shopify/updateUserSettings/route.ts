@@ -89,15 +89,43 @@ export async function POST(request: NextRequest) {
     // Determine target websiteId: prefer provided, fallback to access key's websiteId
     const websiteId = providedWebsiteId || accessKeyRecord.websiteId;
 
-    // If providedWebsiteId was sent and doesn't match, forbid
+    // If providedWebsiteId was sent and doesn't match, ensure both websites belong to the same user
     if (providedWebsiteId && accessKeyRecord.websiteId !== providedWebsiteId) {
-      return cors(
-        request,
-        NextResponse.json(
-          { error: "Unauthorized to update this website's user" },
-          { status: 403 }
-        )
+      const [accessKeyWebsiteResult, providedWebsiteResult] = await Promise.all(
+        [
+          query("SELECT userId FROM Website WHERE id = ?", [
+            accessKeyRecord.websiteId,
+          ]),
+          query("SELECT userId FROM Website WHERE id = ?", [providedWebsiteId]),
+        ]
       );
+
+      const accessKeyWebsites = accessKeyWebsiteResult as Website[];
+      const providedWebsites = providedWebsiteResult as Website[];
+
+      if (providedWebsites.length === 0) {
+        return cors(
+          request,
+          NextResponse.json({ error: "Website not found" }, { status: 404 })
+        );
+      }
+
+      if (accessKeyWebsites.length === 0) {
+        return cors(
+          request,
+          NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+        );
+      }
+
+      if (accessKeyWebsites[0].userId !== providedWebsites[0].userId) {
+        return cors(
+          request,
+          NextResponse.json(
+            { error: "Unauthorized to update this website's user" },
+            { status: 403 }
+          )
+        );
+      }
     }
 
     // Find the website and its associated user
