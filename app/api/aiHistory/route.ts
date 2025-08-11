@@ -59,6 +59,29 @@ interface AiThread {
   sessions: Session[];
 }
 
+// Structured report we now expect from the AI
+interface AiHistoryReport {
+  ai_usage_analysis: string; // two paragraphs
+  chat_review: {
+    good_count: number;
+    needs_work_count: number;
+    good_definition: string;
+    needs_work_definition: string;
+    good_thread_ids: string[]; // AiThread.id
+    needs_work_thread_ids: string[]; // AiThread.id
+  };
+  whats_working: string[]; // bullets
+  pain_points: { title: string; description: string }[];
+  quick_wins: string[]; // bullets
+  kpi_snapshot: {
+    total_threads: number;
+    helpful_percent: number; // 0-100
+    needs_work_percent: number; // 0-100
+    avg_user_messages_when_good: number;
+    avg_user_messages_when_bad: number;
+  };
+}
+
 interface Website {
   id: string;
   analysis: string | null;
@@ -127,24 +150,25 @@ export async function POST(request: NextRequest) {
 
     // Check if we need to generate a new analysis
     const now = new Date();
-    const twoDaysAgo = new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000); // 1 day ago
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const oneDayAgo = new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000); // 1 day cache window
     const needsNewAnalysis =
       website.allowMultiAIReview || // Always generate new analysis if allowMultiAIReview is true
       !website.lastAnalysedAt ||
-      new Date(website.lastAnalysedAt) < twoDaysAgo ||
+      new Date(website.lastAnalysedAt) < oneDayAgo ||
       !website.analysis;
 
     // If we already have an analysis and it's not time for a new one, return it
     if (!needsNewAnalysis && website.analysis) {
-      // Fetch the most recent threads for display regardless
+      // Fetch threads in the last 30 days for display
       const aiThreads = (await query(
-        `SELECT at.*, COUNT(am.id) as messageCount 
+        `SELECT at.*, COUNT(am.id) as messageCount
          FROM AiThread at
-         LEFT JOIN AiMessage am ON at.id = am.threadId
-         WHERE at.websiteId = ?
+         LEFT JOIN AiMessage am ON at.id = am.threadId AND am.createdAt >= ?
+         WHERE at.websiteId = ? AND at.lastMessageAt >= ?
          GROUP BY at.id
          ORDER BY at.lastMessageAt DESC`,
-        [website.id]
+        [thirtyDaysAgo, website.id, thirtyDaysAgo]
       )) as AiThread[];
 
       // For each thread, fetch its messages
@@ -152,9 +176,9 @@ export async function POST(request: NextRequest) {
         // Get messages
         const messages = (await query(
           `SELECT * FROM AiMessage 
-           WHERE threadId = ? 
+           WHERE threadId = ? AND createdAt >= ?
            ORDER BY createdAt ASC`,
-          [thread.id]
+          [thread.id, thirtyDaysAgo]
         )) as AiMessage[];
         thread.messages = messages;
 
@@ -181,27 +205,9 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Filter out threads with fewer than 4 messages
-      const filteredThreads = aiThreads.filter(
-        (thread) => thread.messageCount >= 4
-      );
-
-      // Get the 10 most recent filtered threads
-      let recentThreads = filteredThreads.slice(0, 10);
-
-      // If we have fewer than 10 threads, add threads with fewer messages
-      if (recentThreads.length < 10) {
-        const remainingThreads = aiThreads
-          .filter((thread) => thread.messageCount < 4)
-          .sort(
-            (a, b) =>
-              new Date(b.lastMessageAt).getTime() -
-              new Date(a.lastMessageAt).getTime()
-          )
-          .slice(0, 10 - recentThreads.length);
-
-        recentThreads = [...recentThreads, ...remainingThreads];
-      }
+      // Use all threads within the 30-day window
+      const windowThreads = aiThreads;
+      const recentThreads = windowThreads;
 
       // Format threads with all their messages
       const formattedThreads = recentThreads.map((thread) => ({
@@ -230,27 +236,40 @@ export async function POST(request: NextRequest) {
         })),
       }));
 
+      // Parse cached analysis as JSON if possible (new structured format)
+      let parsedReport: AiHistoryReport | string | null = null;
+      try {
+        parsedReport = website.analysis
+          ? (JSON.parse(website.analysis) as AiHistoryReport)
+          : null;
+      } catch {
+        parsedReport = website.analysis || null;
+      }
+
       return cors(
         request,
         NextResponse.json({
           success: true,
-          threadCount: filteredThreads.length,
+          windowStart: thirtyDaysAgo,
+          windowEnd: now,
+          threadCount: windowThreads.length,
           threads: formattedThreads,
-          analysis: website.analysis,
+          report: parsedReport,
+          analysis: parsedReport, // legacy alias
           lastAnalysedAt: website.lastAnalysedAt,
         })
       );
     }
 
-    // Fetch ALL AI threads for this website with their complete messages
+    // Fetch threads for the last 30 days for this website with their complete messages
     const aiThreads = (await query(
       `SELECT at.*, COUNT(am.id) as messageCount 
        FROM AiThread at
-       LEFT JOIN AiMessage am ON at.id = am.threadId
-       WHERE at.websiteId = ?
+       LEFT JOIN AiMessage am ON at.id = am.threadId AND am.createdAt >= ?
+       WHERE at.websiteId = ? AND at.lastMessageAt >= ?
        GROUP BY at.id
        ORDER BY at.lastMessageAt DESC`,
-      [website.id]
+      [thirtyDaysAgo, website.id, thirtyDaysAgo]
     )) as AiThread[];
 
     // For each thread, fetch its messages
@@ -258,9 +277,9 @@ export async function POST(request: NextRequest) {
       // Get messages
       const messages = (await query(
         `SELECT * FROM AiMessage 
-         WHERE threadId = ? 
+         WHERE threadId = ? AND createdAt >= ?
          ORDER BY createdAt ASC`,
-        [thread.id]
+        [thread.id, thirtyDaysAgo]
       )) as AiMessage[];
       thread.messages = messages;
 
@@ -287,27 +306,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Filter out threads with fewer than 4 messages
-    const filteredThreads = aiThreads.filter(
-      (thread) => thread.messageCount >= 4
-    );
-
-    // Get the 10 most recent filtered threads
-    let recentThreads = filteredThreads.slice(0, 10);
-
-    // If we have fewer than 10 threads, add threads with fewer messages
-    if (recentThreads.length < 10) {
-      const remainingThreads = aiThreads
-        .filter((thread) => thread.messageCount < 4)
-        .sort(
-          (a, b) =>
-            new Date(b.lastMessageAt).getTime() -
-            new Date(a.lastMessageAt).getTime()
-        )
-        .slice(0, 10 - recentThreads.length);
-
-      recentThreads = [...recentThreads, ...remainingThreads];
-    }
+    // Use all threads within the 30-day window
+    const windowThreads = aiThreads;
+    const recentThreads = windowThreads;
 
     // Format threads with all their messages
     const formattedThreads = recentThreads.map((thread) => ({
@@ -336,84 +337,112 @@ export async function POST(request: NextRequest) {
       })),
     }));
 
-    // Gather all Shopify customer data related to this websiteId
-    const shopifyCustomers = (await query(
-      `SELECT * FROM ShopifyCustomer WHERE websiteId = ?`,
-      [website.id]
-    )) as ShopifyCustomer[];
+    // NOTE: We no longer need full Shopify customer graphs for this report.
 
-    // For each customer, get their orders
-    for (const customer of shopifyCustomers) {
-      const orders = (await query(
-        `SELECT * FROM ShopifyCustomerOrder WHERE customerId = ?`,
-        [customer.id]
-      )) as ShopifyOrder[];
-      customer.orders = orders;
+    // Create a strict JSON analysis prompt for GPT-5-mini
+    const analysisPrompt = `You are an analytics engine. Analyze the provided AI chat threads (last 30 days only) and return a single JSON object with this exact schema and keys:
+{
+  "ai_usage_analysis": string, // exactly two concise paragraphs
+  "chat_review": {
+    "good_count": number,
+    "needs_work_count": number,
+    "good_definition": string,
+    "needs_work_definition": string,
+    "good_thread_ids": string[],
+    "needs_work_thread_ids": string[]
+  },
+  "whats_working": string[],
+  "pain_points": { "title": string, "description": string }[],
+  "quick_wins": string[],
+  "kpi_snapshot": {
+    "total_threads": number,
+    "helpful_percent": number,
+    "needs_work_percent": number,
+    "avg_user_messages_when_good": number,
+    "avg_user_messages_when_bad": number
+  }
+}
 
-      // For each order, get line items
-      for (const order of orders) {
-        const lineItems = (await query(
-          `SELECT * FROM ShopifyCustomerLineItem WHERE orderId = ?`,
-          [order.id]
-        )) as ShopifyLineItem[];
-        order.lineItems = lineItems;
-      }
-    }
+Classification guidance:
+- "Good" means the AI provided clear, correct answers, successful task flows, or effective handoffs.
+- "Needs-work" means repetition, contradictions, unresolved asks, incorrect info, or visible user frustration.
 
-    // Create an analysis prompt for GPT-4.1-mini
-    const analysisPrompt = `
-    Provide a brief, focused analysis of these customer conversations and Shopify data:
-    
-    ### Chat Threads
-    ${JSON.stringify(formattedThreads, null, 2)}
-    
-    ### Shopify Customer Data
-    ${JSON.stringify(shopifyCustomers, null, 2)}
-    
-    In 3-5 bullet points, highlight:
-    • Key patterns in customer questions
-    • Most valuable insights about customer behavior
-    • Actionable opportunities to improve customer experience
-    `;
+Constraints:
+- Consider only messages inside each thread that fall within the last 30 days window.
+- Use the thread's object \`id\` for thread identifiers in arrays.
+- Compute averages based on number of user-role messages per thread in each bucket.
+- Return only JSON. No markdown, no explanations.
 
-    // Call GPT-4.1-mini for analysis
-    let analysis = "Analysis not available";
+Section semantics:
+- "whats_working": Short bullet points describing consistent strengths observed in the last 30 days.
+- "quick_wins": Current strengths that are performing exceptionally well right now. Phrase positively as accomplishments (what the AI is doing well), not recommendations. Avoid words like "should", "could", or suggestions in this section.
+`;
+
+    // Call GPT-5-mini for structured analysis
+    let reportJsonString = "";
+    let parsedReport: AiHistoryReport | null = null;
+    let analysisErrorMessage: string | null = null;
     try {
       const response = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
+        model: "gpt-5-mini",
         messages: [
           {
             role: "system",
             content:
-              "You're a concise e-commerce analyst. Provide only the most important insights in bullet-point format. Be direct and specific. Focus on actionable patterns that would help improve sales and customer experience.",
+              "You output only valid JSON and follow the user's schema exactly. If uncertain, be conservative. Respond ONLY with the JSON object; no extra text.",
           },
           {
             role: "user",
-            content: analysisPrompt,
+            content: `${analysisPrompt}\n\n### Chat Threads (30 days)\n${JSON.stringify(
+              formattedThreads,
+              null,
+              2
+            )}`,
           },
         ],
-        max_tokens: 750,
       });
+      reportJsonString = response.choices?.[0]?.message?.content?.trim() || "";
+      parsedReport = reportJsonString
+        ? (JSON.parse(reportJsonString) as AiHistoryReport)
+        : null;
 
-      analysis = response.choices[0].message.content || "No analysis generated";
-
-      // Save the analysis and update lastAnalysedAt
+      // Save the structured report JSON and update lastAnalysedAt
       await query(
         `UPDATE Website SET analysis = ?, lastAnalysedAt = ? WHERE id = ?`,
-        [analysis, now, website.id]
+        [reportJsonString || "{}", now, website.id]
       );
-    } catch (aiError) {
+    } catch (aiError: any) {
       console.error("AI analysis error:", aiError);
-      analysis = "Error generating analysis. Please try again later.";
+      analysisErrorMessage =
+        aiError?.error?.message || aiError?.message || null;
+      reportJsonString = "";
+      parsedReport = null;
     }
 
     return cors(
       request,
       NextResponse.json({
         success: true,
-        threadCount: filteredThreads.length,
+        windowStart: thirtyDaysAgo,
+        windowEnd: now,
+        threadCount: windowThreads.length,
         threads: formattedThreads,
-        analysis: analysis,
+        report:
+          parsedReport ??
+          (analysisErrorMessage
+            ? {
+                error: "Failed to generate report",
+                message: analysisErrorMessage,
+              }
+            : { error: "Failed to generate report" }),
+        analysis:
+          parsedReport ??
+          (analysisErrorMessage
+            ? {
+                error: "Failed to generate report",
+                message: analysisErrorMessage,
+              }
+            : { error: "Failed to generate report" }), // legacy alias
         lastAnalysedAt: now,
       })
     );

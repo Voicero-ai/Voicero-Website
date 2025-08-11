@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "../../../../lib/db";
 import { Pinecone } from "@pinecone-database/pinecone";
-import { OpenAIEmbeddings } from "@langchain/openai";
-import { Client } from "@opensearch-project/opensearch";
+import {
+  buildHybridQueryVectors,
+  shouldFallbackToCollections,
+} from "@/lib/sparse/hybrid_query_tuning";
 import { cors } from "../../../../lib/cors";
 import OpenAI from "openai";
 export const dynamic = "force-dynamic";
@@ -17,118 +19,7 @@ const pinecone = new Pinecone({
 });
 const openai = new OpenAI();
 
-// Initialize OpenSearch client
-const opensearch = new Client({
-  nodes: [process.env.OPENSEARCH_DOMAIN_ENDPOINT!],
-  auth: {
-    username: process.env.OPENSEARCH_USERNAME!,
-    password: process.env.OPENSEARCH_PASSWORD!,
-  },
-  ssl: {
-    rejectUnauthorized: true,
-  },
-});
-
-// Helper function to generate sparse vectors using OpenSearch
-async function generateSparseVectors(text: string) {
-  const indexName = `temp-analysis-${Date.now()}-${Math.random()
-    .toString(36)
-    .substring(2, 15)}`;
-
-  try {
-    // Create temporary index with BM25-like settings
-    await opensearch.indices.create({
-      index: indexName,
-      body: {
-        settings: {
-          analysis: {
-            analyzer: {
-              custom_analyzer: {
-                type: "custom",
-                tokenizer: "standard",
-                filter: ["lowercase", "stop", "porter_stem", "length"],
-              },
-            },
-          },
-        },
-        mappings: {
-          properties: {
-            content: {
-              type: "text",
-              analyzer: "custom_analyzer",
-              term_vector: "with_positions_offsets_payloads",
-              similarity: "BM25",
-            },
-          },
-        },
-      },
-    });
-
-    // Index the document
-    await opensearch.index({
-      index: indexName,
-      body: { content: text },
-      refresh: true,
-    });
-
-    // Get term vectors with BM25 stats
-    const response = await opensearch.transport.request({
-      method: "GET",
-      path: `/${indexName}/_termvectors`,
-      body: {
-        doc: { content: text },
-        fields: ["content"],
-        term_statistics: true,
-        field_statistics: true,
-      },
-    });
-
-    const terms = response.body.term_vectors?.content?.terms || {};
-    const sparseValues: number[] = [];
-    const sparseIndices: number[] = [];
-
-    // Sort by BM25 score and take top terms
-    Object.entries(terms)
-      .sort((a, b) => {
-        const scoreA = (a[1] as any).score || 0;
-        const scoreB = (b[1] as any).score || 0;
-        return scoreB - scoreA;
-      })
-      .slice(0, 1000)
-      .forEach(([_, stats], idx) => {
-        const tf = (stats as any).term_freq || 0;
-        const docFreq = (stats as any).doc_freq || 1;
-        const score = tf * Math.log(1 + 1 / docFreq);
-        sparseIndices.push(idx);
-        sparseValues.push(score);
-      });
-
-    // Normalize values to [0,1] range
-    const maxValue = Math.max(...sparseValues);
-    if (maxValue > 0) {
-      for (let i = 0; i < sparseValues.length; i++) {
-        sparseValues[i] = sparseValues[i] / maxValue;
-      }
-    }
-
-    return {
-      indices: sparseIndices,
-      values: sparseValues,
-    };
-  } catch (error) {
-    console.error("Error generating sparse vectors:", error);
-    return {
-      indices: [0],
-      values: [1],
-    };
-  } finally {
-    try {
-      await opensearch.indices.delete({ index: indexName });
-    } catch (error) {
-      console.error("Error cleaning up temporary index:", error);
-    }
-  }
-}
+// Deterministic sparse vector generator remains unchanged for documents; query path uses hybrid builder
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -170,20 +61,18 @@ export async function POST(request: NextRequest) {
 
     const website = websites[0];
 
-    // Initialize embeddings
-    const embeddings = new OpenAIEmbeddings({
-      modelName: "text-embedding-3-large",
-    });
-
     // Combine conversation history with current query for better context
     const lastMessages = conversationHistory.slice(-6); // Get last 6 messages
     const combinedQuery = [...lastMessages, query].join(" ");
 
-    // Generate dense vector for the combined query
-    const queryEmbedding = await embeddings.embedQuery(combinedQuery);
-
-    // Generate sparse vector for the combined query
-    const sparseVectors = await generateSparseVectors(combinedQuery);
+    // Build hybrid query vectors (query-only path; no reindexing required)
+    const { denseScaled, sparseScaled } = await buildHybridQueryVectors(
+      combinedQuery,
+      {
+        alpha: 0.5,
+        featureSpace: 2_000_003,
+      }
+    );
 
     // Initialize Pinecone index
     const index = pinecone.Index("voicero-hybrid");
@@ -198,10 +87,35 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Optional fallback for ultra-generic queries
+    if (shouldFallbackToCollections(sparseScaled)) {
+      return cors(
+        request,
+        NextResponse.json({
+          response: {
+            action: "redirect",
+            answer: "Here’s our catalog to browse items.",
+            category: "discovery",
+            pageId: "collections",
+            pageTitle: "Shop All",
+            question: query,
+            scrollText: "",
+            subcategory: "content_overview",
+            type: type,
+            url: `${website.url}/collections/all`,
+          },
+          context: {
+            mainContent: null,
+            exampleQAs: [],
+          },
+        })
+      );
+    }
+
     // Perform hybrid search with increased limit to get enough QAs
     const searchResponse = await index.namespace(website.id).query({
-      vector: queryEmbedding,
-      sparseVector: sparseVectors,
+      vector: denseScaled,
+      sparseVector: sparseScaled,
       topK: 20,
       includeMetadata: true,
       filter: contentType ? { type: contentType } : undefined,

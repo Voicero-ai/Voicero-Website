@@ -68,6 +68,9 @@
     },
     "app/api/cron/reminder-unread-contacts/route.ts": {
       "maxDuration": 300
+    },
+    "app/api/websites/get/route.ts": {
+      "maxDuration": 300
     }
   },
   "crons": [

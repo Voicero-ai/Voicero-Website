@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/lib/db";
+import { getWebsiteAIOverview, RevenueSummary } from "@/lib/websiteAIGet";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../../lib/auth";
 
@@ -124,8 +125,162 @@ export async function GET(request: NextRequest) {
     // Fetch and process content based on website type
     const content = await fetchWebsiteContent(website, stats);
 
-    // Build the response
-    const responseData = buildResponseData(website, stats, content);
+    // Build the response (include threads for action drill-down)
+    const responseData = buildResponseData(
+      website,
+      stats,
+      content,
+      validThreads
+    );
+
+    // Compute revenue increase from detected purchases and attach AI overview (last 4 weeks)
+    console.time("ai-overview-fetch");
+    const aiOverview = await getWebsiteAIOverview(website.id);
+    console.timeEnd("ai-overview-fetch");
+
+    // Build revenue summary using site content and detected purchases
+    const revenueSummary: RevenueSummary = {
+      amount: 0,
+      currency: "USD",
+      breakdown: { threads: 0, percent_of_total_threads: 0, aov: 0 },
+    };
+
+    try {
+      console.time("revenue-calc");
+      const purchases = (stats as any).purchases as {
+        byThread: Map<string, Set<string>>;
+        raw: Array<{
+          threadId: string;
+          url?: string;
+          handle?: string;
+          productId?: string;
+          productName?: string;
+          createdAt?: string;
+        }>;
+      };
+      console.log("Revenue Calc: raw purchases:", purchases.raw);
+      console.log(
+        "Revenue Calc: byThread sizes:",
+        Array.from(purchases.byThread.entries()).map(([tid, set]) => ({
+          threadId: tid,
+          count: set.size,
+          keys: Array.from(set.values()).slice(0, 5),
+        }))
+      );
+
+      // Count unique threads using raw entries to avoid any edge cases
+      const threadIdsWithPurchases = Array.from(
+        new Set(purchases.raw.map((p) => p.threadId))
+      );
+      revenueSummary.breakdown.threads = threadIdsWithPurchases.length;
+      revenueSummary.breakdown.percent_of_total_threads =
+        responseData.globalStats.totalTextChats +
+          responseData.globalStats.totalVoiceChats >
+        0
+          ? Math.round(
+              (threadIdsWithPurchases.length /
+                (responseData.globalStats.totalTextChats +
+                  responseData.globalStats.totalVoiceChats)) *
+                100
+            )
+          : 0;
+
+      // Build price lookups from full content data (contains price/variants)
+      const handleToPrice = new Map<string, number>();
+      const idToPrice = new Map<string, number>();
+      const titleToPrice = new Map<string, number>();
+      try {
+        const allProducts: any[] = Array.isArray(content?.products)
+          ? [...(content.products as any[])]
+          : [];
+        console.log(
+          "Revenue Calc: total products available:",
+          allProducts.length
+        );
+        for (const p of allProducts) {
+          const handle: string | undefined =
+            p.handle || (p.url ? extractHandle(p.url, "products") : undefined);
+          const id: string | undefined = p.id ? String(p.id) : undefined;
+          const title: string | undefined = p.title
+            ? String(p.title)
+            : undefined;
+          const price: number | undefined =
+            typeof p.price === "number"
+              ? p.price
+              : typeof p.variants?.[0]?.price === "number"
+              ? p.variants[0].price
+              : undefined;
+          if (typeof price === "number") {
+            if (handle) handleToPrice.set(handle.toLowerCase(), price);
+            if (id) idToPrice.set(id, price);
+            if (title)
+              titleToPrice.set(
+                title.toLowerCase().replace(/\s+/g, " ").trim(),
+                price
+              );
+          }
+        }
+        console.log("Revenue Calc: lookup sizes", {
+          handleToPrice: handleToPrice.size,
+          idToPrice: idToPrice.size,
+          titleToPrice: titleToPrice.size,
+        });
+      } catch {}
+
+      let totalAmount = 0;
+      const matchedKeys: Array<{ key: string; price: number }> = [];
+      const unmatchedKeys: string[] = [];
+      for (const entry of Array.from(purchases.byThread.entries())) {
+        const set = entry[1];
+        for (const rawKey of Array.from(set.values())) {
+          let price: number | undefined;
+          let key = rawKey || "";
+          // If it's a URL or path, extract handle
+          let handle = key.includes("/") ? extractHandle(key, "products") : key;
+          if (handle) {
+            price = handleToPrice.get(handle.toLowerCase());
+          }
+          // Try by id
+          if (price === undefined && key) {
+            price = idToPrice.get(String(key));
+          }
+          // Try by normalized title
+          if (price === undefined && key) {
+            const norm = key.toLowerCase().replace(/\s+/g, " ").trim();
+            price = titleToPrice.get(norm);
+          }
+          if (typeof price === "number") {
+            matchedKeys.push({ key, price });
+            totalAmount += price;
+          } else {
+            unmatchedKeys.push(key);
+          }
+        }
+      }
+      revenueSummary.amount = Math.round(totalAmount * 100) / 100;
+      revenueSummary.breakdown.aov =
+        threadIdsWithPurchases.length > 0
+          ? Math.round((totalAmount / threadIdsWithPurchases.length) * 100) /
+            100
+          : 0;
+      console.log(
+        "Revenue Calc: matched keys sample:",
+        matchedKeys.slice(0, 10)
+      );
+      console.log(
+        "Revenue Calc: unmatched keys sample:",
+        unmatchedKeys.slice(0, 10)
+      );
+      console.log("Revenue Calc: totalAmount, AOV, threads:", {
+        totalAmount: revenueSummary.amount,
+        aov: revenueSummary.breakdown.aov,
+        threads: revenueSummary.breakdown.threads,
+      });
+      console.timeEnd("revenue-calc");
+    } catch {}
+
+    (responseData as any).aiOverview = aiOverview;
+    (responseData as any).aiOverviewRevenue = revenueSummary;
 
     console.timeEnd("website-get-route");
     return NextResponse.json(responseData, { status: 200 });
@@ -352,11 +507,56 @@ function initializeStats() {
       totalAiPurchases: 0,
       totalAiClicks: 0,
     },
+    purchases: {
+      // Map of threadId -> Set of product identifiers (handles/urls)
+      byThread: new Map<string, Set<string>>(),
+      raw: [] as Array<{
+        threadId: string;
+        url?: string;
+        handle?: string;
+        productId?: string;
+        productName?: string;
+        createdAt?: string;
+      }>,
+    },
+    actionsDetails: {
+      redirect: [] as Array<{
+        threadId: string;
+        url?: string;
+        normalizedUrl?: string;
+        messageId: string;
+        createdAt: string;
+      }>,
+      scroll: [] as Array<{
+        threadId: string;
+        sectionId?: string;
+        scrollToText?: string | null;
+        messageId: string;
+        createdAt: string;
+      }>,
+      purchase: [] as Array<{
+        threadId: string;
+        url?: string;
+        handle?: string;
+        productId?: string;
+        productName?: string;
+        messageId: string;
+        createdAt: string;
+      }>,
+      click: [] as Array<{
+        threadId: string;
+        url?: string;
+        buttonText?: string;
+        css_selector?: string;
+        messageId: string;
+        createdAt: string;
+      }>,
+    },
   };
 }
 
 function processThreadsAndMessages(aiThreads: Thread[], stats: any) {
-  const { redirectMaps, globalStats } = stats;
+  const { redirectMaps, globalStats, purchases, actionsDetails } = stats;
 
   // Reset counters to ensure they're accurate
   globalStats.totalVoiceChats = 0;
@@ -383,7 +583,13 @@ function processThreadsAndMessages(aiThreads: Thread[], stats: any) {
 
       // Process assistant messages for actions and redirects
       if (message.role === "assistant") {
-        processAssistantMessage(message, redirectMaps, globalStats);
+        processAssistantMessage(
+          message,
+          redirectMaps,
+          globalStats,
+          purchases,
+          actionsDetails
+        );
       }
     });
 
@@ -419,7 +625,19 @@ function normalizeUrl(url: string) {
 function processAssistantMessage(
   message: Message,
   redirectMaps: any,
-  globalStats: any
+  globalStats: any,
+  purchases?: {
+    byThread: Map<string, Set<string>>;
+    raw: Array<{
+      threadId: string;
+      url?: string;
+      handle?: string;
+      productId?: string;
+      productName?: string;
+      createdAt?: string;
+    }>;
+  },
+  actionsDetails?: any
 ) {
   const {
     productRedirects,
@@ -520,16 +738,96 @@ function processAssistantMessage(
               (urlRedirectCounts.get(normalizedUrl) || 0) + 1
             );
             countRedirectByType(normalizedUrl);
+            if (actionsDetails && message.threadId) {
+              actionsDetails.redirect.push({
+                threadId: message.threadId,
+                url: redirectUrl,
+                normalizedUrl,
+                messageId: message.id,
+                createdAt: message.createdAt.toISOString(),
+              });
+            }
           }
           break;
         case "scroll":
           globalStats.totalAiScrolls++;
+          if (actionsDetails && message.threadId) {
+            actionsDetails.scroll.push({
+              threadId: message.threadId,
+              sectionId: contentObj.action_context?.section_id,
+              scrollToText: contentObj.action_context?.exact_text ?? null,
+              messageId: message.id,
+              createdAt: message.createdAt.toISOString(),
+            });
+          }
           break;
         case "purchase":
           globalStats.totalAiPurchases++;
+          try {
+            const ctx = contentObj.action_context || {};
+            const url: string | undefined =
+              ctx.url || ctx.product_url || undefined;
+            const productHandle = url
+              ? extractHandle(url, "products")
+              : undefined;
+            const productId: string | undefined =
+              ctx.product_id || ctx.id || undefined;
+            const productName: string | undefined =
+              ctx.product_name || ctx.title || undefined;
+            console.log("Purchase action detected:", {
+              threadId: message.threadId,
+              url,
+              productHandle,
+              productId,
+              productName,
+            });
+            if (purchases && message.threadId) {
+              if (!purchases.byThread.has(message.threadId)) {
+                purchases.byThread.set(message.threadId, new Set<string>());
+              }
+              const set = purchases.byThread.get(message.threadId)!;
+              // Prefer explicit identifiers in order: handle, id, name, url
+              const key =
+                productHandle || productId || productName || url || "unknown";
+              set.add(key);
+              console.log("Purchase recorded with key:", {
+                threadId: message.threadId,
+                key,
+              });
+              purchases.raw.push({
+                threadId: message.threadId,
+                url: url ?? undefined,
+                handle: productHandle ?? undefined,
+                productId: productId ?? undefined,
+                productName: productName ?? undefined,
+                createdAt: message.createdAt.toISOString(),
+              });
+            }
+            if (actionsDetails && message.threadId) {
+              actionsDetails.purchase.push({
+                threadId: message.threadId,
+                url: url ?? undefined,
+                handle: productHandle ?? undefined,
+                productId: productId ?? undefined,
+                productName: productName ?? undefined,
+                messageId: message.id,
+                createdAt: message.createdAt.toISOString(),
+              });
+            }
+          } catch {}
           break;
         case "click":
           globalStats.totalAiClicks++;
+          if (actionsDetails && message.threadId) {
+            actionsDetails.click.push({
+              threadId: message.threadId,
+              url: contentObj.action_context?.url,
+              buttonText: contentObj.action_context?.button_text,
+              css_selector: contentObj.action_context?.css_selector,
+              messageId: message.id,
+              createdAt: message.createdAt.toISOString(),
+            });
+          }
           break;
       }
     }
@@ -559,16 +857,81 @@ function processAssistantMessage(
           (urlRedirectCounts.get(normalizedUrl) || 0) + 1
         );
         countRedirectByType(normalizedUrl);
+        if (actionsDetails && message.threadId) {
+          actionsDetails.redirect.push({
+            threadId: message.threadId,
+            url,
+            normalizedUrl,
+            messageId: message.id,
+            createdAt: message.createdAt.toISOString(),
+          });
+        }
       });
     }
 
     // Check for action strings if JSON parsing failed
     if (message.content.includes('"action":"scroll"'))
       globalStats.totalAiScrolls++;
-    if (message.content.includes('"action":"purchase"'))
+    if (message.content.includes('"action":"purchase"')) {
       globalStats.totalAiPurchases++;
-    if (message.content.includes('"action":"click"'))
+      if (purchases && message.threadId) {
+        // Best-effort URL extraction for purchase
+        const urlRegex =
+          /https?:\/\/[^\s)]+|(?:\/(?:pages|products|blogs|collections)\/[^\s)]+)/g;
+        const urls = message.content.match(urlRegex);
+        const url = urls && urls.length > 0 ? urls[0] : undefined;
+        const handle = url
+          ? extractHandle(url, "products") ?? undefined
+          : undefined;
+        // Try to parse name/id even if JSON parsing failed
+        let productId: string | undefined;
+        let productName: string | undefined;
+        try {
+          const maybeJson = JSON.parse(message.content);
+          productId =
+            maybeJson?.action_context?.product_id ||
+            maybeJson?.action_context?.id;
+          productName =
+            maybeJson?.action_context?.product_name ||
+            maybeJson?.action_context?.title;
+        } catch {}
+        console.log("Purchase (fallback) detected:", {
+          threadId: message.threadId,
+          url,
+          handle,
+          productId,
+          productName,
+        });
+        if (!purchases.byThread.has(message.threadId)) {
+          purchases.byThread.set(message.threadId, new Set<string>());
+        }
+        const set = purchases.byThread.get(message.threadId)!;
+        const key = handle || productId || productName || url || "unknown";
+        set.add(key);
+        console.log("Purchase (fallback) recorded with key:", {
+          threadId: message.threadId,
+          key,
+        });
+        purchases.raw.push({
+          threadId: message.threadId,
+          url: url ?? undefined,
+          handle: handle ?? undefined,
+          productId: productId ?? undefined,
+          productName: productName ?? undefined,
+          createdAt: message.createdAt.toISOString(),
+        });
+      }
+    }
+    if (message.content.includes('"action":"click"')) {
       globalStats.totalAiClicks++;
+      if (actionsDetails && message.threadId) {
+        actionsDetails.click.push({
+          threadId: message.threadId,
+          messageId: message.id,
+          createdAt: message.createdAt.toISOString(),
+        });
+      }
+    }
   }
 }
 
@@ -1076,7 +1439,12 @@ async function fetchWebsiteContent(website: any, stats: any) {
   return content;
 }
 
-function buildResponseData(website: any, stats: any, content: any) {
+function buildResponseData(
+  website: any,
+  stats: any,
+  content: any,
+  threads: Thread[]
+) {
   const { globalStats, redirectMaps } = stats;
 
   // Log statistics discrepancy for debugging
@@ -1095,7 +1463,7 @@ function buildResponseData(website: any, stats: any, content: any) {
     );
   }
 
-  return {
+  const base = {
     id: website.id,
     domain: website.url,
     type: website.type,
@@ -1158,11 +1526,12 @@ function buildResponseData(website: any, stats: any, content: any) {
       products: content.products.map((p: any) => ({
         id: p.id,
         shopifyId: p.shopifyId ? p.shopifyId.toString() : undefined,
-        handle: extractHandle(p.url, "products"),
+        handle: extractHandle(p.url, "products") || p.handle || undefined,
         title: p.title || "",
         description: p.description || "",
         url: p.url,
         aiRedirects: p.aiRedirects,
+        price: typeof p.price === "number" ? p.price : p.variants?.[0]?.price,
       })),
       blogPosts: content.blogPosts.map((p: any) => ({
         id: p.id,
@@ -1203,7 +1572,63 @@ function buildResponseData(website: any, stats: any, content: any) {
         appliesTo: d.appliesTo || "",
       })),
     },
+  } as any;
+
+  // Expose action details for UI to render clickable lists per action type
+  base.actionDetails = stats.actionsDetails || {
+    redirect: [],
+    scroll: [],
+    purchase: [],
+    click: [],
   };
+
+  // Embed full messages for each action entry so the frontend can render conversations directly
+  try {
+    const threadMap = new Map(threads.map((t) => [t.id, t]));
+    const enrich = (arr: any[]) => {
+      if (!Array.isArray(arr)) return;
+      for (const entry of arr) {
+        const threadId: string | undefined = entry?.threadId;
+        const thread = threadId ? threadMap.get(threadId) : undefined;
+        if (thread && Array.isArray((thread as any).messages)) {
+          entry.messages = (thread as any).messages;
+        }
+      }
+    };
+    enrich(base.actionDetails.redirect as any[]);
+    enrich(base.actionDetails.scroll as any[]);
+    enrich(base.actionDetails.purchase as any[]);
+    enrich(base.actionDetails.click as any[]);
+  } catch {}
+
+  // Keep original product title/handle to help frontend link purchase entries to products
+  try {
+    base.fullContent = content;
+  } catch {}
+
+  // Group full conversations by action type with their matching action entries
+  try {
+    const threadMap = new Map(threads.map((t) => [t.id, t]));
+    const mapThreadsForAction = (key: string) => {
+      const arr =
+        (base.actionDetails?.[key] as Array<{ threadId: string }>) || [];
+      const ids = new Set(arr.map((e: any) => e.threadId).filter(Boolean));
+      return Array.from(ids)
+        .map((id) => ({
+          thread: threadMap.get(id),
+          actions: arr.filter((e: any) => e.threadId === id),
+        }))
+        .filter((x) => x.thread);
+    };
+    base.actionConversations = {
+      redirect: mapThreadsForAction("redirect"),
+      scroll: mapThreadsForAction("scroll"),
+      purchase: mapThreadsForAction("purchase"),
+      click: mapThreadsForAction("click"),
+    };
+  } catch {}
+
+  return base;
 }
 
 // Helper function to extract and normalize handle from a URL

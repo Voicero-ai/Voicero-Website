@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AiThread, AiMessage } from "@prisma/client";
 import { Pinecone } from "@pinecone-database/pinecone";
-import { OpenAIEmbeddings } from "@langchain/openai";
-import { Client } from "@opensearch-project/opensearch";
+import {
+  buildHybridQueryVectors,
+  shouldFallbackToCollections,
+} from "@/lib/sparse/hybrid_query_tuning";
+// Removed OpenSearch; using deterministic sparse generator for documents only
+import { generateSparseVectorsStable } from "@/lib/sparse/stable";
 import { cors } from "../../../../lib/cors";
 import OpenAI from "openai";
 import {
@@ -39,17 +43,9 @@ const pinecone = new Pinecone({
 });
 const openai = new OpenAI();
 
-// Initialize OpenSearch client
-const opensearch = new Client({
-  nodes: [process.env.OPENSEARCH_DOMAIN_ENDPOINT!],
-  auth: {
-    username: process.env.OPENSEARCH_USERNAME!,
-    password: process.env.OPENSEARCH_PASSWORD!,
-  },
-  ssl: {
-    rejectUnauthorized: true,
-  },
-});
+// OpenSearch removed
+
+// Hybrid scaling is handled within buildHybridQueryVectors for query path
 
 // Helper function to check if this is the first user message in thread (for per-thread billing)
 async function isFirstUserMessageInThread(threadId: string): Promise<boolean> {
@@ -206,111 +202,25 @@ type PreviousContext = {
   isConversationContinuation?: boolean; // Add this to track conversation flow
 };
 
-// Helper function to generate sparse vectors using OpenSearch
-async function generateSparseVectors(
+// Deterministic sparse vector generator wrapper (optionally augments with classification terms)
+function generateSparseVectors(
   text: string,
   classification: QuestionClassification | null = null
 ) {
-  const indexName = `temp-analysis-${Date.now()}-${Math.random()
-    .toString(36)
-    .substring(2, 15)}`;
-
-  try {
-    // Create temporary index with BM25-like settings
-    await opensearch.indices.create({
-      index: indexName,
-      body: {
-        settings: {
-          analysis: {
-            analyzer: {
-              custom_analyzer: {
-                type: "custom",
-                tokenizer: "standard",
-                filter: ["lowercase", "stop", "porter_stem", "length"],
-              },
-            },
-          },
-        },
-      } as any,
-    });
-
-    // Add classification terms with higher weight if available
-    const content = classification
-      ? `${text} ${classification.type} ${classification.type} ${classification.type} ${classification.category} ${classification.category} ${classification["sub-category"]} ${classification["sub-category"]}`
-      : text;
-
-    // Index the document
-    await opensearch.index({
-      index: indexName,
-      body: { content },
-      refresh: true,
-    });
-
-    // Get term vectors with BM25 stats
-    const response = await opensearch.transport.request({
-      method: "GET",
-      path: `/${indexName}/_termvectors`,
-      body: {
-        doc: { content },
-        fields: ["content"],
-        term_statistics: true,
-        field_statistics: true,
-      },
-    });
-
-    const terms = response.body.term_vectors?.content?.terms || {};
-    const sparseValues: number[] = [];
-    const sparseIndices: number[] = [];
-
-    // Sort by BM25 score and take top terms
-    Object.entries(terms)
-      .sort((a: any, b: any) => {
-        const scoreA = (a[1] || {}).score || 0;
-        const scoreB = (b[1] || {}).score || 0;
-        return scoreB - scoreA;
-      })
-      .slice(0, 1000)
-      .forEach(([_, stats]: any, idx: number) => {
-        const tf = (stats || {}).term_freq || 0;
-        const docFreq = (stats || {}).doc_freq || 1;
-        const score = tf * Math.log(1 + 1 / docFreq);
-        sparseIndices.push(idx);
-        sparseValues.push(score);
-      });
-
-    // Normalize values to [0,1] range
-    const maxValue = Math.max(...sparseValues);
-    if (maxValue > 0) {
-      for (let i = 0; i < sparseValues.length; i++) {
-        sparseValues[i] = sparseValues[i] / maxValue;
-      }
-    }
-
-    return {
-      indices: sparseIndices,
-      values: sparseValues,
-    };
-  } catch (error) {
-    console.error("Error generating sparse vectors:", error);
-    return {
-      indices: [0],
-      values: [1],
-    };
-  } finally {
-    try {
-      await opensearch.indices.delete({ index: indexName });
-    } catch (error) {
-      console.error("Error cleaning up temporary index:", error);
-    }
-  }
+  const augmented = classification
+    ? `${text} ${classification.type} ${classification.type} ${classification.category} ${classification.category} ${classification["sub-category"]}`
+    : text;
+  return generateSparseVectorsStable(augmented);
 }
 
 // Function to classify question using two specialized classifiers
 async function classifyQuestion(
   question: string,
   previousContext: PreviousContext | null = null,
-  pageData: any = null
+  pageData: any = null,
+  responseId?: string
 ): Promise<QuestionClassification | null> {
+  const tClassifyTotalStart = Date.now();
   // We'll run two specialized classifiers in parallel for better performance
   // Check if the question is ambiguous and could benefit from previous context
   const ambiguousWords = [
@@ -330,6 +240,8 @@ async function classifyQuestion(
     "here",
     "there",
   ];
+
+  // hybrid weighting defined at module scope
 
   const confirmationResponses = [
     "yes",
@@ -727,11 +639,13 @@ GET_ORDERS vs TRACK_ORDER vs ORDER ACTIONS:
 
   try {
     // Run both classifiers in parallel for better performance
+    console.log("doing classify (2x gpt-5-nano)", { responseId });
+    const tNanoStart = Date.now();
     const [contentClassifierCompletion, actionClassifierCompletion] =
       await Promise.all([
         // Content classifier - focuses on what the question is about
         openai.chat.completions.create({
-          model: "gpt-5-mini",
+          model: "gpt-5-nano",
           messages: [
             { role: "system", content: CONTENT_CLASSIFIER_PROMPT },
             {
@@ -749,7 +663,7 @@ GET_ORDERS vs TRACK_ORDER vs ORDER ACTIONS:
 
         // Action classifier - focuses on what action should be taken
         openai.chat.completions.create({
-          model: "gpt-5-mini",
+          model: "gpt-5-nano",
           messages: [
             { role: "system", content: ACTION_CLASSIFIER_PROMPT },
             {
@@ -769,6 +683,8 @@ GET_ORDERS vs TRACK_ORDER vs ORDER ACTIONS:
           ],
         }),
       ]);
+    const nanoMs = Date.now() - tNanoStart;
+    console.log("done classify (2x gpt-5-nano)", { ms: nanoMs, responseId });
 
     // Extract content from both completions
     const contentClassifierContent =
@@ -829,6 +745,8 @@ GET_ORDERS vs TRACK_ORDER vs ORDER ACTIONS:
       classification.content_targets.exact_text = userSpecifiedText;
     }
 
+    const totalMs = Date.now() - tClassifyTotalStart;
+    console.log("done classify (total)", { ms: totalMs, responseId });
     return classification;
   } catch (error) {
     console.error("Error classifying question:", error);
@@ -2099,6 +2017,11 @@ function validateAndFixUrl(
     }
   }
 
+  // Special case: Shopify's all-products collection
+  if (url === "/collections/all") {
+    return "/collections/all";
+  }
+
   if (!intendedHandle) {
     console.log("No handle extracted from URL:", url);
     return "";
@@ -2415,6 +2338,8 @@ export async function POST(request: NextRequest) {
   };
 
   let website: WebsiteWithAutoSettings | null = null;
+  const t0 = Date.now();
+  const timeMarks: Record<string, number> = {};
 
   try {
     // Clone the request before reading it so we can log the raw body
@@ -2447,6 +2372,8 @@ export async function POST(request: NextRequest) {
       pageData,
       interactionType,
     } = body;
+
+    const currentResponseId = responseId || crypto.randomUUID();
 
     console.log("Received interaction type:", interactionType);
 
@@ -3315,11 +3242,21 @@ export async function POST(request: NextRequest) {
     let useAllNamespaces = false;
 
     // Classify the question first to determine interaction type
+    console.log("doing classify (2x gpt-5-nano)", {
+      responseId: currentResponseId,
+    });
+    const tClassifyStart = Date.now();
     const classification = await classifyQuestion(
       message,
       enhancedPreviousContext,
-      pageData
+      pageData,
+      currentResponseId
     );
+    timeMarks.classifyMs = Date.now() - tClassifyStart;
+    console.log("done classify", {
+      ms: timeMarks.classifyMs,
+      responseId: currentResponseId,
+    });
     if (!classification) {
       return cors(
         request,
@@ -3380,6 +3317,52 @@ export async function POST(request: NextRequest) {
     console.log(
       `Classification type/category: ${classification.type}/${classification.category}`
     );
+
+    // Heuristic override: if the user intent clearly targets shopping/browsing products or collections,
+    // force the interaction type to 'sales' so we query the sales namespaces.
+    const shopRegex =
+      /\b(shop|store|products?|catalog|collections?|browse|buy|purchase|add to cart|checkout)\b/i;
+    const contentTargets = (classification as any)?.content_targets || {};
+    const targetUrl = (
+      contentTargets.destination_url ||
+      contentTargets.url ||
+      ""
+    )
+      .toString()
+      .toLowerCase();
+    const targetPageName = (contentTargets.page_name || "")
+      .toString()
+      .toLowerCase();
+    const urlLooksLikeShop = /\/collections|\/products|shopify|shop/.test(
+      targetUrl
+    );
+    const pageLooksLikeShop = /shop|store|products|collections/.test(
+      targetPageName
+    );
+    const contentTypeImpliesSales =
+      classification.type === "product" || classification.type === "collection";
+    const actionImpliesSales =
+      classification.action_intent === "purchase" ||
+      (classification.action_intent === "redirect" &&
+        (urlLooksLikeShop || pageLooksLikeShop));
+    const messageImpliesSales = shopRegex.test(message);
+
+    const shouldForceSales =
+      contentTypeImpliesSales || actionImpliesSales || messageImpliesSales;
+
+    if (
+      effectiveInteractionType !== "sales" &&
+      shouldForceSales &&
+      !useAllNamespaces
+    ) {
+      console.log("doing override: interaction_type->sales", {
+        responseId: currentResponseId,
+      });
+      effectiveInteractionType = "sales";
+      console.log("done override: interaction_type->sales", {
+        responseId: currentResponseId,
+      });
+    }
 
     if (effectiveInteractionType && !useAllNamespaces) {
       // Use interaction type for namespace: websiteId-sales, websiteId-support, etc.
@@ -3690,25 +3673,85 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Initialize embeddings
-    const embeddings = new OpenAIEmbeddings({
-      modelName: "text-embedding-3-large",
+    // Detect generic browse intent
+    const genericBrowse = /what.*(stuff|have|sell|carry|offer)/i.test(message);
+
+    // Build hybrid vectors for the base query (query path only)
+    console.log("doing hybrid vectors (base)", {
+      responseId: currentResponseId,
+    });
+    const tEmbedQueryStart = Date.now();
+    const { denseScaled: queryDense, sparseScaled: querySparse } =
+      await buildHybridQueryVectors(message, {
+        alpha: genericBrowse ? 0.6 : 0.5,
+        featureSpace: 2_000_003,
+      });
+    timeMarks.embedQueryMs = Date.now() - tEmbedQueryStart;
+    timeMarks.sparseQueryMs = 0;
+    console.log("done hybrid vectors (base)", {
+      ms: timeMarks.embedQueryMs,
+      sparseTerms: querySparse.indices.length,
+      denseDims: queryDense.length,
+      responseId: currentResponseId,
     });
 
-    // Generate vectors for the query with classification
-    const queryEmbedding = await embeddings.embedQuery(message);
-    const sparseVectors = await generateSparseVectors(message, classification);
+    // Minimal hybrid on/off log
+    console.log("doing hybrid query", {
+      sparseTerms: querySparse.indices.length,
+      denseDims: queryDense.length,
+    });
 
     // Create enhanced query using provided previous context
     const enhancedQuery = previousContext
       ? `${message} ${previousContext.question} ${previousContext.answer}`
       : message;
 
-    const enhancedEmbedding = await embeddings.embedQuery(enhancedQuery);
-    const enhancedSparseVectors = await generateSparseVectors(
-      enhancedQuery,
-      classification
-    );
+    console.log("doing hybrid vectors (enhanced)", {
+      responseId: currentResponseId,
+    });
+    const tEmbedEnhancedStart = Date.now();
+    const { denseScaled: enhancedDense, sparseScaled: enhancedSparse } =
+      await buildHybridQueryVectors(enhancedQuery, {
+        alpha: genericBrowse ? 0.6 : 0.5,
+        featureSpace: 2_000_003,
+      });
+    timeMarks.embedEnhancedMs = Date.now() - tEmbedEnhancedStart;
+    timeMarks.sparseEnhancedMs = 0;
+    console.log("done hybrid vectors (enhanced)", {
+      ms: timeMarks.embedEnhancedMs,
+      sparseTerms: enhancedSparse.indices.length,
+      denseDims: enhancedDense.length,
+      responseId: currentResponseId,
+    });
+
+    // Fallback for ultra-generic queries
+    if (shouldFallbackToCollections(querySparse)) {
+      const response = {
+        action: "redirect",
+        answer: "Here’s our catalog to browse items.",
+        category: "discovery",
+        pageId: "collections",
+        pageTitle: "Shop All",
+        question: message,
+        scrollText: "",
+        subcategory: "content_overview",
+        type: type,
+        url: `${website.url}/collections/all`,
+      } as const;
+
+      return cors(
+        request,
+        NextResponse.json({
+          response,
+          threadId: threadId || crypto.randomUUID(),
+          context: {
+            mainContent: null,
+            relevantQAs: [],
+          },
+          success: true,
+        })
+      );
+    }
 
     // Define search functions outside the block to avoid strict mode errors
     const performMainSearch = async () => {
@@ -3745,22 +3788,25 @@ export async function POST(request: NextRequest) {
             if (classification && classification.type === "collection") {
               // Use the actual query terms for collection search
               const collectionQuery = `${message} ${classification.type}`;
-              const collectionEmbedding = await embeddings.embedQuery(
-                collectionQuery
-              );
-              const collectionSparseVectors = await generateSparseVectors(
-                collectionQuery,
-                classification
-              );
+              const {
+                denseScaled: collectionDense,
+                sparseScaled: collectionSparse,
+              } = await buildHybridQueryVectors(collectionQuery, {
+                alpha: genericBrowse ? 0.6 : 0.5,
+                featureSpace: 2_000_003,
+              });
 
               const collectionSearchResponse = await pinecone
                 .index("voicero-hybrid")
                 .namespace(typeNamespace)
                 .query({
-                  vector: collectionEmbedding,
-                  sparseVector: collectionSparseVectors,
+                  vector: collectionDense,
+                  sparseVector: collectionSparse,
                   topK: 7, // Reduced to get top results from each namespace
                   includeMetadata: true,
+                  filter: genericBrowse
+                    ? { type: { $in: ["collection", "product"] } }
+                    : undefined,
                 });
 
               // Add results if they exist
@@ -3770,15 +3816,21 @@ export async function POST(request: NextRequest) {
             }
 
             // Perform hybrid search in this namespace
+            const tNsSearchStart = Date.now();
             const searchResponse = await pinecone
               .index("voicero-hybrid")
               .namespace(typeNamespace)
               .query({
-                vector: queryEmbedding,
-                sparseVector: sparseVectors,
+                vector: queryDense,
+                sparseVector: querySparse,
                 topK: 7, // Reduced to get top results from each namespace
                 includeMetadata: true,
+                filter: genericBrowse
+                  ? { type: { $in: ["collection", "product"] } }
+                  : undefined,
               });
+            timeMarks[`ns:${typeNamespace}:searchMs`] =
+              Date.now() - tNsSearchStart;
 
             // Add results if they exist
             if (searchResponse?.matches?.length > 0) {
@@ -3859,35 +3911,46 @@ export async function POST(request: NextRequest) {
         if (classification && classification.type === "collection") {
           // Use the actual query terms for collection search
           const collectionQuery = `${message} ${classification.type}`;
-          const collectionEmbedding = await embeddings.embedQuery(
-            collectionQuery
-          );
-          const collectionSparseVectors = await generateSparseVectors(
-            collectionQuery,
-            classification
-          );
+          const {
+            denseScaled: collectionDense,
+            sparseScaled: collectionSparse,
+          } = await buildHybridQueryVectors(collectionQuery, {
+            alpha: genericBrowse ? 0.6 : 0.5,
+            featureSpace: 2_000_003,
+          });
 
+          const tMainCollectionSearchStart = Date.now();
           collectionSearchResponse = await pinecone
             .index("voicero-hybrid")
             .namespace(mainNamespace)
             .query({
-              vector: collectionEmbedding,
-              sparseVector: collectionSparseVectors,
+              vector: collectionDense,
+              sparseVector: collectionSparse,
               topK: 20,
               includeMetadata: true,
+              filter: genericBrowse
+                ? { type: { $in: ["collection", "product"] } }
+                : undefined,
             });
+          timeMarks.mainCollectionSearchMs =
+            Date.now() - tMainCollectionSearchStart;
         }
 
         // Perform hybrid search in main namespace
+        const tMainSearchStart = Date.now();
         const mainSearchResponse = await pinecone
           .index("voicero-hybrid")
           .namespace(mainNamespace)
           .query({
-            vector: queryEmbedding,
-            sparseVector: sparseVectors,
+            vector: queryDense,
+            sparseVector: querySparse,
             topK: 20,
             includeMetadata: true,
+            filter: genericBrowse
+              ? { type: { $in: ["collection", "product"] } }
+              : undefined,
           });
+        timeMarks.mainSearchMs = Date.now() - tMainSearchStart;
 
         // Log the results from main namespace
         if (mainSearchResponse?.matches?.length > 0) {
@@ -3919,7 +3982,8 @@ export async function POST(request: NextRequest) {
         }
 
         // If we have collection results, merge them with main results for final response
-        let finalMainResults = [...mainSearchResponse.matches];
+        let finalMainResults = [...(mainSearchResponse.matches || [])];
+        const MIN_MAIN_RESULTS = 3;
         if (collectionSearchResponse) {
           console.log(
             `Found ${collectionSearchResponse.matches.length} collection-specific results in namespace ${mainNamespace}`
@@ -3931,6 +3995,95 @@ export async function POST(request: NextRequest) {
               finalMainResults.push(collectionResult);
             }
           });
+        }
+
+        // Supplement with other main namespaces (no QA) when using general or support
+        if (
+          !useAllNamespaces &&
+          (effectiveInteractionType === "general" ||
+            effectiveInteractionType === "support")
+        ) {
+          console.log("doing cross-namespace supplement (main only)", {
+            responseId: currentResponseId,
+          });
+          const otherTypes = ["sales", "support", "general"].filter(
+            (t) => t !== effectiveInteractionType
+          );
+          const tSuppStart = Date.now();
+          const supplementPromises = otherTypes.map((t) =>
+            pinecone
+              .index("voicero-hybrid")
+              .namespace(`${website!.id}-${t}`)
+              .query({
+                vector: queryDense,
+                sparseVector: querySparse,
+                topK: 7,
+                includeMetadata: true,
+                filter: genericBrowse
+                  ? { type: { $in: ["collection", "product"] } }
+                  : undefined,
+              })
+          );
+          const supplementResults = await Promise.allSettled(
+            supplementPromises
+          );
+          const seenIds = new Set(finalMainResults.map((r) => r.id));
+          for (const res of supplementResults) {
+            if (res.status === "fulfilled" && res.value?.matches?.length) {
+              for (const m of res.value.matches) {
+                if (!seenIds.has(m.id)) {
+                  seenIds.add(m.id);
+                  finalMainResults.push(m);
+                }
+              }
+            }
+          }
+          timeMarks.supplementMainMs = Date.now() - tSuppStart;
+          console.log("done cross-namespace supplement", {
+            ms: timeMarks.supplementMainMs,
+            responseId: currentResponseId,
+          });
+        }
+
+        // Fallback: broaden search if specific namespace is insufficient
+        const insufficientResults =
+          finalMainResults.length < MIN_MAIN_RESULTS ||
+          (finalMainResults[0]?.score ?? 0) < 0.2;
+
+        if (insufficientResults) {
+          console.log(
+            `Fallback triggered: insufficient results in ${mainNamespace}. Searching across all namespaces.`
+          );
+          const types = ["sales", "support", "general"];
+          const altResults: any[] = [];
+          for (const type of types) {
+            const typeNamespace = `${website!.id}-${type}`;
+            try {
+              const alt = await pinecone
+                .index("voicero-hybrid")
+                .namespace(typeNamespace)
+                .query({
+                  vector: queryDense,
+                  sparseVector: querySparse,
+                  topK: 7,
+                  includeMetadata: true,
+                  filter: genericBrowse
+                    ? { type: { $in: ["collection", "product"] } }
+                    : undefined,
+                });
+              if (alt?.matches?.length) altResults.push(...alt.matches);
+            } catch (e) {
+              console.error(`Fallback search error in ${typeNamespace}:`, e);
+            }
+          }
+
+          const seen = new Set(finalMainResults.map((r) => r.id));
+          for (const r of altResults) {
+            if (!seen.has(r.id)) {
+              seen.add(r.id);
+              finalMainResults.push(r);
+            }
+          }
         }
 
         // Ensure classification is not null before calling rerankMainResults
@@ -3984,15 +4137,18 @@ export async function POST(request: NextRequest) {
 
           try {
             // Perform hybrid search in this QA namespace
+            const tQaNsSearchStart = Date.now();
             const qaSearchResponse = await pinecone
               .index("voicero-hybrid")
               .namespace(typeQaNamespace)
               .query({
-                vector: enhancedEmbedding,
-                sparseVector: enhancedSparseVectors,
+                vector: enhancedDense,
+                sparseVector: enhancedSparse,
                 topK: 7, // Reduced to get top results from each namespace
                 includeMetadata: true,
               });
+            timeMarks[`ns:${typeQaNamespace}:qaSearchMs`] =
+              Date.now() - tQaNsSearchStart;
 
             // Add results if they exist
             if (qaSearchResponse?.matches?.length > 0) {
@@ -4087,15 +4243,17 @@ export async function POST(request: NextRequest) {
         );
 
         // Perform hybrid search in QA namespace with enhanced query
+        const tQaSearchStart = Date.now();
         const qaSearchResponse = await pinecone
           .index("voicero-hybrid")
           .namespace(qaNamespace)
           .query({
-            vector: enhancedEmbedding,
-            sparseVector: enhancedSparseVectors,
+            vector: enhancedDense,
+            sparseVector: enhancedSparse,
             topK: 20,
             includeMetadata: true,
           });
+        timeMarks.qaSearchMs = Date.now() - tQaSearchStart;
 
         // Add default classification to QA results before reranking
         qaSearchResponse.matches = qaSearchResponse.matches.map((result) => {
@@ -4164,31 +4322,75 @@ export async function POST(request: NextRequest) {
     };
 
     // Execute both search operations in parallel
+    console.log("doing pinecone search (parallel main+qa)", {
+      responseId: currentResponseId,
+    });
+    const tSearchRerankStart = Date.now();
     const [rerankedMainResults, rerankedQAResults] = await Promise.all([
       performMainSearch(),
       performQASearch(),
     ]);
+    timeMarks.searchAndRerankMs = Date.now() - tSearchRerankStart;
+    {
+      const nsCount = Object.keys(timeMarks).filter((k) =>
+        k.startsWith("ns:")
+      ).length;
+      console.log("done pinecone search (parallel)", {
+        ms: timeMarks.searchAndRerankMs,
+        mainMs: timeMarks.mainSearchMs,
+        qaMs: timeMarks.qaSearchMs,
+        namespaces: nsCount,
+        responseId: currentResponseId,
+      });
+    }
 
-    // Take top results from each set
-    const topMainResults = rerankedMainResults.slice(0, 2);
-    const topQAResults = rerankedQAResults.slice(0, 3);
+    // Take top results from each set (use 5)
+    const topMainResults = rerankedMainResults.slice(0, 5);
+    const topQAResults = rerankedQAResults.slice(0, 5);
 
-    // Prepare context for AI
+    // Slim doc formatter: keep only essential fields
+    const slimDoc = (r: any) => {
+      const md = r?.metadata || {};
+      const title = md.title || md.question || md.handle || "";
+      const rawSnippet = md.description || md.content || md.answer || "";
+      const snippet = (typeof rawSnippet === "string" ? rawSnippet : "")
+        .replace(/\s+/g, " ")
+        .slice(0, 200);
+      const url = md.url || md.productUrl || "";
+      const type = md.type || md.contentType || "";
+      return {
+        title,
+        snippet,
+        url,
+        type,
+        relevanceScore: r.rerankScore,
+        classificationMatch: r.classificationMatch,
+      };
+    };
+
+    const slimMain = topMainResults.map(slimDoc);
+    const qaBullets = topQAResults.map((r: any) => {
+      const q = r?.metadata?.question || "";
+      const a = (r?.metadata?.answer || "")
+        .toString()
+        .replace(/\s+/g, " ")
+        .slice(0, 120);
+      return `- ${q ? `${q}: ` : ""}${a}`;
+    });
+
+    // Prepare trimmed context for AI
     const context = {
-      mainContent: topMainResults.map((r) => ({
-        ...r.metadata,
-        relevanceScore: r.rerankScore,
-        classificationMatch: r.classificationMatch,
-      })),
-      relevantQAs: topQAResults.map((r) => ({
-        question: r.metadata?.question,
-        answer: r.metadata?.answer,
-        url: r.metadata?.url || r.metadata?.productUrl,
-        relevanceScore: r.rerankScore,
-        classificationMatch: r.classificationMatch,
-      })),
-      previousContext,
-      classification,
+      mainContent: slimMain,
+      relevantQAs: qaBullets,
+      previousContext: null,
+      classification: classification
+        ? {
+            type: classification.type,
+            category: classification.category,
+            "sub-category": classification["sub-category"],
+            action_intent: classification.action_intent,
+          }
+        : null,
       currentPageUrl: currentPageUrl || null,
     };
 
@@ -4204,114 +4406,14 @@ export async function POST(request: NextRequest) {
       classification?.action_intent
     );
 
-    // Build minimal context without previous conversation; rely on previous_response_id
-    const messageContext = {
-      mainContent: context.mainContent.map((item) => {
-        if (item.type === "product") {
-          return {
-            bodyHtml: item.bodyHtml,
-            description: item.description,
-            handle: item.handle,
-            productId: item.productId,
-            priceRangeMin: item.priceRangeMin,
-            priceRangeMax: item.priceRangeMax,
-            type: item.type,
-            title: item.title,
-            status: item.status,
-            totalInventory: item.totalInventory,
-            variantInventories: item.variantInventories,
-            variantPrices: item.variantPrices,
-            variantTitles: item.variantTitles,
-            relevanceScore: item.relevanceScore,
-            classificationMatch: item.classificationMatch,
-          };
-        } else if (item.type === "collection") {
-          return {
-            collectionId: item.collectionId,
-            description: item.description,
-            handle: item.handle,
-            productHandles: item.productHandles,
-            productIds: item.productIds,
-            productTitles: item.productTitles,
-            title: item.title,
-            type: item.type,
-            relevanceScore: item.relevanceScore,
-            classificationMatch: item.classificationMatch,
-          };
-        } else if (item.type === "page") {
-          return {
-            content: item.content,
-            handle: item.handle,
-            isPublished: item.isPublished,
-            pageId: item.pageId,
-            title: item.title,
-            type: item.type,
-            relevanceScore: item.relevanceScore,
-            classificationMatch: item.classificationMatch,
-          };
-        }
-        // For other types (post, discount), return the full item
-        return item;
-      }),
-      relevantQAs: context.relevantQAs,
-      classification,
-      currentPageUrl: currentPageUrl || null,
-    };
+    // Final message context (already trimmed)
+    const messageContext = context;
 
-    // Add logging to see what's being sent to the AI
-    const filteredMainContent = context.mainContent.map((item) => {
-      if (item.type === "product") {
-        return {
-          bodyHtml: item.bodyHtml,
-          description: item.description,
-          handle: item.handle,
-          productId: item.productId,
-          priceRangeMin: item.priceRangeMin,
-          priceRangeMax: item.priceRangeMax,
-          type: item.type,
-          title: item.title,
-          status: item.status,
-          totalInventory: item.totalInventory,
-          variantInventories: item.variantInventories,
-          variantPrices: item.variantPrices,
-          variantTitles: item.variantTitles,
-          relevanceScore: item.relevanceScore,
-          classificationMatch: item.classificationMatch,
-        };
-      } else if (item.type === "collection") {
-        return {
-          collectionId: item.collectionId,
-          description: item.description,
-          handle: item.handle,
-          productHandles: item.productHandles,
-          productIds: item.productIds,
-          productTitles: item.productTitles,
-          title: item.title,
-          type: item.type,
-          relevanceScore: item.relevanceScore,
-          classificationMatch: item.classificationMatch,
-        };
-      } else if (item.type === "page") {
-        return {
-          content: item.content,
-          handle: item.handle,
-          isPublished: item.isPublished,
-          pageId: item.pageId,
-          title: item.title,
-          type: item.type,
-          relevanceScore: item.relevanceScore,
-          classificationMatch: item.classificationMatch,
-        };
-      }
-      // For other types (post, discount), return the full item
-      return item;
-    });
-
-    // Format the previous context for display - include up to 4 recent messages
+    // Format the previous context for display - include up to 2 recent turns
     const formattedPreviousConversation =
       pastContext && pastContext.length > 0
         ? pastContext
-            .slice(-Math.min(4, pastContext.length))
+            .slice(-Math.min(2, pastContext.length))
             .map((message) => ({
               role: message.role || (message.question ? "user" : "assistant"),
               content: message.question
@@ -4342,34 +4444,35 @@ export async function POST(request: NextRequest) {
           }
         : null;
 
-    // Add logging with the expanded context (without past conversation)
-    console.dir(
-      {
-        currentPage: currentPageUrl || "Not provided",
-        relevantPageData: relevantPageData || "None",
-        context: {
-          mainContent: filteredMainContent,
-          relevantQAs: context.relevantQAs,
-          classification,
-        },
-        userMessage: message,
-      },
-      { depth: null, colors: true }
-    );
+    // Minimal log of trimmed context
+    console.log("done building slim context", {
+      main: slimMain.length,
+      qa: qaBullets.length,
+    });
 
     // Use OpenAI Responses API (GPT-5)
+    console.log("doing gpt-5-mini", { responseId: currentResponseId });
+    const tModelStart = Date.now();
     const completion = await openai.responses.create({
-      model: "gpt-5",
+      model: "gpt-5-mini",
       instructions:
         SYSTEM_PROMPT +
         "\n\nIMPORTANT: Respond with ONLY the raw JSON object. Do NOT wrap the response in ```json or ``` markers.",
       input: `${currentPageUrl ? `Current page: ${currentPageUrl}\n\n` : ""}${
-        pageData ? `Complete Page Data: ${JSON.stringify(pageData)}\n\n` : ""
+        relevantPageData
+          ? `Relevant Page Data: ${JSON.stringify(relevantPageData)}\n\n`
+          : ""
       }Context: ${JSON.stringify(messageContext)}\n\nQuestion: ${message}`,
       // Keep as plain text; SDK types may not expose response_format yet. We enforce JSON in the prompt.
       previous_response_id: (previousResponseId || responseId) ?? undefined,
     });
 
+    timeMarks.modelCallMs = Date.now() - tModelStart;
+    console.log("done gpt-5-mini", {
+      ms: timeMarks.modelCallMs,
+      responseId_in: currentResponseId,
+      responseId_out: (completion as any)?.id,
+    });
     // Robust output extraction per latest SDK result shape
     const outputText =
       (completion as any).output_text ??
@@ -4541,37 +4644,75 @@ export async function POST(request: NextRequest) {
         parsedResponse.action === "redirect" &&
         parsedResponse.action_context?.url
       ) {
-        const availableData = {
-          mainContent: context.mainContent || [],
-          relevantQAs: context.relevantQAs || [],
-          pageData: null, // We don't have access to pageData in this scope
-        };
-
-        const validatedUrl = validateAndFixUrl(
-          parsedResponse.action_context.url,
-          message,
-          classification,
-          availableData
-        );
-
-        // If validation failed (returned empty string), prevent redirect
-        if (!validatedUrl) {
-          console.log(
-            `❌ URL validation failed for: ${parsedResponse.action_context.url}`
+        try {
+          const storeOrigin = new URL(website.url).origin;
+          const targetUrlStr = parsedResponse.action_context.url as string;
+          const target = new URL(targetUrlStr, storeOrigin);
+          const sameOrigin = target.origin === storeOrigin;
+          const isCollectionPath = /^\/collections(\/.*)?$/.test(
+            target.pathname
           );
-          parsedResponse.action = "none";
-          parsedResponse.action_context = {};
-          // Keep the original answer but add a note about the page not being found
-          parsedResponse.answer =
-            parsedResponse.answer +
-            " (Note: The specific page you're looking for wasn't found, but I hope this information helps!)";
-        } else if (validatedUrl !== parsedResponse.action_context.url) {
-          console.log(
-            `✅ URL corrected from: ${parsedResponse.action_context.url} to: ${validatedUrl}`
+          if (sameOrigin && isCollectionPath) {
+            console.log("done url fast-validate (collections)", {
+              url: target.toString(),
+              responseId: currentResponseId,
+            });
+            parsedResponse.action_context.url = target.toString();
+          } else {
+            const availableData = {
+              mainContent: context.mainContent || [],
+              relevantQAs: context.relevantQAs || [],
+              pageData: null,
+            };
+            const validatedUrl = validateAndFixUrl(
+              parsedResponse.action_context.url,
+              message,
+              classification,
+              availableData
+            );
+
+            if (!validatedUrl) {
+              console.log(
+                `❌ URL validation failed for: ${parsedResponse.action_context.url}`
+              );
+              parsedResponse.action = "none";
+              parsedResponse.action_context = {};
+              parsedResponse.answer =
+                parsedResponse.answer +
+                " (Note: The specific page you're looking for wasn't found, but I hope this information helps!)";
+            } else if (validatedUrl !== parsedResponse.action_context.url) {
+              console.log(
+                `✅ URL corrected from: ${parsedResponse.action_context.url} to: ${validatedUrl}`
+              );
+              parsedResponse.action_context.url = validatedUrl;
+            } else {
+              console.log(`✅ URL validated successfully: ${validatedUrl}`);
+            }
+          }
+        } catch (e) {
+          const availableData = {
+            mainContent: context.mainContent || [],
+            relevantQAs: context.relevantQAs || [],
+            pageData: null,
+          };
+          const validatedUrl = validateAndFixUrl(
+            parsedResponse.action_context.url,
+            message,
+            classification,
+            availableData
           );
-          parsedResponse.action_context.url = validatedUrl;
-        } else {
-          console.log(`✅ URL validated successfully: ${validatedUrl}`);
+          if (!validatedUrl) {
+            console.log(
+              `❌ URL validation failed for: ${parsedResponse.action_context.url}`
+            );
+            parsedResponse.action = "none";
+            parsedResponse.action_context = {};
+            parsedResponse.answer =
+              parsedResponse.answer +
+              " (Note: The specific page you're looking for wasn't found, but I hope this information helps!)";
+          } else if (validatedUrl !== parsedResponse.action_context.url) {
+            parsedResponse.action_context.url = validatedUrl;
+          }
         }
       }
 
@@ -4899,6 +5040,7 @@ export async function POST(request: NextRequest) {
     // Return success response
     console.log("Formatted Response:", formattedResponse);
 
+    timeMarks.totalMs = Date.now() - t0;
     return cors(
       request,
       NextResponse.json({
@@ -4910,6 +5052,7 @@ export async function POST(request: NextRequest) {
           relevantQAs: context.relevantQAs,
           classification,
         },
+        timings: timeMarks,
         success: true,
       })
     );

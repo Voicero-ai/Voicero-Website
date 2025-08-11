@@ -12,13 +12,15 @@ import {
   BUTTON_CLICK_PROMPT,
   SCROLL_AND_HIGHLIGHT_PROMPT,
   GENERATE_IMAGE_PROMPT,
+  PURCHASE_PROMPT,
+  ORDER_MANAGEMENT_PROMPT,
+} from "@/lib/systemPrompts";
+import {
   WORDPRESS_PAGE_PROMPT,
   WORDPRESS_BLOG_PROMPT,
   WORDPRESS_PRODUCT_PROMPT,
   WORDPRESS_MANAGE_USER_PROMPT,
-  PURCHASE_PROMPT,
-  ORDER_MANAGEMENT_PROMPT,
-} from "@/lib/systemPrompts";
+} from "@/lib/systemPromptsWordPress";
 import {
   normalizeReturnReason,
   coerceReturnReasonNote,
