@@ -113,14 +113,12 @@ export async function getWebsiteAIOverview(
       `SELECT * FROM AiMessage WHERE threadId = ? AND createdAt >= ? ORDER BY createdAt ASC`,
       [thread.id, fourWeeksAgo]
     )) as AiMessageRow[];
-    // @ts-ignore add dynamic field for serialization
     (thread as any).messages = messages;
 
     const sessions = (await query(
       `SELECT s.* FROM Session s JOIN _AiThreadToSession ats ON s.id = ats.B WHERE ats.A = ?`,
       [thread.id]
     )) as SessionRow[];
-    // @ts-ignore add dynamic field for serialization
     (thread as any).sessions = sessions;
   }
 

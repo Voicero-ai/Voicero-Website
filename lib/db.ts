@@ -56,6 +56,5 @@ export async function query(sql: string, params: any[] = []) {
   }
 }
 
-export default {
-  query,
-};
+const db = { query };
+export default db;

@@ -59,7 +59,6 @@ export default function ContactQuery() {
   const [contact, setContact] = useState<ContactDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [markingAsRead, setMarkingAsRead] = useState(false);
   const [markingAsReplied, setMarkingAsReplied] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -77,7 +76,17 @@ export default function ContactQuery() {
 
         // Mark as read if not already read
         if (data && !data.read) {
-          markAsRead();
+          try {
+            const markResponse = await fetch(
+              `/api/contacts/mark-read?id=${contactId}`,
+              { method: "POST" }
+            );
+            if (markResponse.ok) {
+              setContact({ ...data, read: true });
+            }
+          } catch (e) {
+            // ignore
+          }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong");
@@ -88,25 +97,6 @@ export default function ContactQuery() {
 
     fetchContact();
   }, [contactId]);
-
-  const markAsRead = async () => {
-    if (!contactId || markingAsRead) return;
-
-    try {
-      setMarkingAsRead(true);
-      const response = await fetch(`/api/contacts/mark-read?id=${contactId}`, {
-        method: "POST",
-      });
-
-      if (response.ok && contact) {
-        setContact({ ...contact, read: true });
-      }
-    } catch (err) {
-      console.error("Failed to mark as read:", err);
-    } finally {
-      setMarkingAsRead(false);
-    }
-  };
 
   const markAsReplied = async () => {
     if (!contactId || markingAsReplied) return;
@@ -148,12 +138,9 @@ export default function ContactQuery() {
 
     try {
       setDeleting(true);
-      const response = await fetch(
-        `/api/contacts/delete?id=${contactId}`,
-        {
-          method: "DELETE",
-        }
-      );
+      const response = await fetch(`/api/contacts/delete?id=${contactId}`, {
+        method: "DELETE",
+      });
 
       if (response.ok) {
         router.push("/app/contacts");

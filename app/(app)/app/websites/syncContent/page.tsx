@@ -111,14 +111,16 @@ export default function SyncContent() {
             });
 
             // Also add to discoveredUrlMap for normalizing
-            const newMap = new Map(discoveredUrlMap);
-            existingUrls.forEach((url: string) => {
-              const normalizedUrl = normalizeUrl(url);
-              if (!newMap.has(normalizedUrl)) {
-                newMap.set(normalizedUrl, url);
-              }
+            setDiscoveredUrlMap((prev) => {
+              const newMap = new Map<string, string>(prev);
+              existingUrls.forEach((url: string) => {
+                const normalizedUrl = normalizeUrl(url);
+                if (!newMap.has(normalizedUrl)) {
+                  newMap.set(normalizedUrl, url);
+                }
+              });
+              return newMap;
             });
-            setDiscoveredUrlMap(newMap);
           }
         }
       } catch (err) {
@@ -306,7 +308,7 @@ export default function SyncContent() {
                 /* Error processing href */
               }
             });
-            } else {
+          } else {
             console.warn(
               `[FAIL ${fetchMethod}] Fetch failed for ${url}: ${response.status}`
             );
@@ -388,7 +390,7 @@ export default function SyncContent() {
                   /* Error processing href */
                 }
               });
-              } else {
+            } else {
               console.warn(
                 `[FAIL ${puppeteerMethod}] Retry fetch failed for ${url}: ${responsePuppeteer.status}`
               );
@@ -419,7 +421,7 @@ export default function SyncContent() {
               )
             : 0
         );
-        }
+      }
 
       // Final UI / State Update - Store pagesToSync for the handleSync function
       setPagesToSync(localPagesToSync); // Set the state with extracted data
