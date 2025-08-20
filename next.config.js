@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: "standalone",
+  // output: "standalone", // Temporarily disabled to fix path resolution
   serverExternalPackages: ["sharp"],
 
   images: {
@@ -19,9 +19,7 @@ const nextConfig = {
     return [
       {
         source: "/api/:path*", // every API route
-        headers: [
-          { key: "Connection", value: "keep-alive" }
-        ],
+        headers: [{ key: "Connection", value: "keep-alive" }],
       },
     ];
   },
