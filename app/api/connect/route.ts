@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cors } from '../../../lib/cors';
-import { query } from '../../../lib/db';
-import { verifyToken, getWebsiteIdFromToken } from '../../../lib/token-verifier';
+import { cors } from "../../../lib/cors";
+import { query } from "../../../lib/db";
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +45,11 @@ interface Website {
   iconMessage: string | null;
   allowMultiAIReview: boolean;
   clickMessage: string | null;
+  showHome: boolean;
+  showNews: boolean;
+  showHelp: boolean;
+  showVoiceAI: boolean;
+  showTextAI: boolean;
 }
 
 interface PopUpQuestion {
@@ -116,14 +124,11 @@ export async function GET(request: NextRequest) {
     if (authHeader?.startsWith("Bearer ")) {
       // Verify the Bearer token
       const isTokenValid = await verifyToken(authHeader);
-      
+
       if (isTokenValid) {
         // Get the website ID from the verified token
         websiteId = await getWebsiteIdFromToken(authHeader);
-        console.log(
-          "Website ID from token:",
-          websiteId || "none"
-        );
+        console.log("Website ID from token:", websiteId || "none");
       }
     }
 
@@ -136,7 +141,7 @@ export async function GET(request: NextRequest) {
         "Access token from URL params:",
         accessToken ? accessToken.substring(0, 10) + "..." : "none"
       );
-      
+
       if (accessToken) {
         // For backward compatibility, try to find website by access token
         const websites = (await query(
@@ -145,7 +150,7 @@ export async function GET(request: NextRequest) {
            WHERE ak.\`key\` = ?`,
           [accessToken]
         )) as Website[];
-        
+
         if (websites.length > 0) {
           websiteId = websites[0].id;
         }
@@ -157,13 +162,16 @@ export async function GET(request: NextRequest) {
       console.log("No valid token or access key found");
       return cors(
         request,
-        NextResponse.json({ error: "No valid token or access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "No valid token or access key provided" },
+          { status: 401 }
+        )
       );
     }
 
     // Find the website using the website ID
     const websites = (await query(
-      `SELECT w.* FROM Website w WHERE w.id = ?`,
+      `SELECT w.*, w.showHome, w.showNews, w.showHelp, w.showVoiceAI, w.showTextAI FROM Website w WHERE w.id = ?`,
       [websiteId]
     )) as Website[];
 
@@ -370,6 +378,12 @@ export async function GET(request: NextRequest) {
           iconMessage: website.iconMessage,
           allowMultiAIReview: website.allowMultiAIReview,
           clickMessage: website.clickMessage,
+          // Interface settings
+          showHome: Boolean(website.showHome),
+          showNews: Boolean(website.showNews),
+          showHelp: Boolean(website.showHelp),
+          showVoiceAI: Boolean(website.showVoiceAI),
+          showTextAI: Boolean(website.showTextAI),
           _count: contentCounts,
           // Include all content IDs for Shopify
           content: website.type === "Shopify" ? shopifyContent : undefined,
