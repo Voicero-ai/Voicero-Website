@@ -36,16 +36,30 @@ function fixImportsInFile(filePath) {
   
   // Replace @/lib/ imports with relative paths
   const libImportRegex = /from\s+['"]@\/lib\/([^'"]+)['"]/g;
-  const newContent = content.replace(libImportRegex, (match, importPath) => {
+  let newContent = content.replace(libImportRegex, (match, importPath) => {
     modified = true;
     return `from '${relativePath}/lib/${importPath}'`;
   });
 
   // Replace @/app/ imports with relative paths
   const appImportRegex = /import\s+['"]@\/app\/([^'"]+)['"]/g;
-  const finalContent = newContent.replace(appImportRegex, (match, importPath) => {
+  newContent = newContent.replace(appImportRegex, (match, importPath) => {
     modified = true;
     return `import '${relativePath}/app/${importPath}'`;
+  });
+  
+  // Replace @/components/ imports with relative paths
+  const componentsImportRegex = /from\s+['"]@\/components\/([^'"]+)['"]/g;
+  newContent = newContent.replace(componentsImportRegex, (match, importPath) => {
+    modified = true;
+    return `from '${relativePath}/components/${importPath}'`;
+  });
+  
+  // Replace @/components/SEO imports (special case)
+  const seoImportRegex = /from\s+['"]@\/components\/SEO['"]/g;
+  const finalContent = newContent.replace(seoImportRegex, (match) => {
+    modified = true;
+    return `from '${relativePath}/components/SEO'`;
   });
 
   if (modified) {

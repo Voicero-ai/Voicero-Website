@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 import Script from "next/script";
 import { headers } from "next/headers";
-import { WebsiteSchema } from "@/components/SEO";
-import { OrganizationSchema } from "@/components/SEO";
+import { WebsiteSchema } from '../components/SEO';
+import { OrganizationSchema } from '../components/SEO';
 
 export const metadata: Metadata = {
   title:
