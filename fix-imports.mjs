@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,12 +11,12 @@ const __dirname = path.dirname(__filename);
 function getAllFiles(dirPath, arrayOfFiles = []) {
   const files = fs.readdirSync(dirPath);
 
-  files.forEach(file => {
+  files.forEach((file) => {
     const fullPath = path.join(dirPath, file);
     if (fs.statSync(fullPath).isDirectory()) {
       arrayOfFiles = getAllFiles(fullPath, arrayOfFiles);
     } else {
-      if (fullPath.endsWith('.ts') || fullPath.endsWith('.tsx')) {
+      if (fullPath.endsWith(".ts") || fullPath.endsWith(".tsx")) {
         arrayOfFiles.push(fullPath);
       }
     }
@@ -28,13 +28,28 @@ function getAllFiles(dirPath, arrayOfFiles = []) {
 // Function to fix imports in a file
 function fixImportsInFile(filePath) {
   console.log(`Processing ${filePath}...`);
-  let content = fs.readFileSync(filePath, 'utf8');
+  let content = fs.readFileSync(filePath, "utf8");
   let modified = false;
 
   // Get the relative path from the file to the root
   const relativePath = path.relative(path.dirname(filePath), __dirname);
-  
-  // Replace @/lib/ imports with relative paths
+
+  // Special case for lib directory internal imports
+  if (filePath.includes("/lib/")) {
+    // For files inside lib directory, use relative paths to other lib files
+    const libInternalImportRegex = /from\s+['"]@\/lib\/([^'"]+)['"]/g;
+    content = content.replace(libInternalImportRegex, (match, importPath) => {
+      modified = true;
+      // Calculate the relative path within the lib directory
+      const fileDir = path.dirname(filePath);
+      const targetPath = path.join(__dirname, "lib", importPath);
+      const relPath = path.relative(fileDir, path.dirname(targetPath));
+      const fileName = path.basename(targetPath);
+      return `from '${relPath ? relPath + "/" : "./"}${fileName}'`;
+    });
+  }
+
+  // Replace @/lib/ imports with relative paths for non-lib files
   const libImportRegex = /from\s+['"]@\/lib\/([^'"]+)['"]/g;
   let newContent = content.replace(libImportRegex, (match, importPath) => {
     modified = true;
@@ -47,14 +62,17 @@ function fixImportsInFile(filePath) {
     modified = true;
     return `import '${relativePath}/app/${importPath}'`;
   });
-  
+
   // Replace @/components/ imports with relative paths
   const componentsImportRegex = /from\s+['"]@\/components\/([^'"]+)['"]/g;
-  newContent = newContent.replace(componentsImportRegex, (match, importPath) => {
-    modified = true;
-    return `from '${relativePath}/components/${importPath}'`;
-  });
-  
+  newContent = newContent.replace(
+    componentsImportRegex,
+    (match, importPath) => {
+      modified = true;
+      return `from '${relativePath}/components/${importPath}'`;
+    }
+  );
+
   // Replace @/components/SEO imports (special case)
   const seoImportRegex = /from\s+['"]@\/components\/SEO['"]/g;
   const finalContent = newContent.replace(seoImportRegex, (match) => {
@@ -63,7 +81,7 @@ function fixImportsInFile(filePath) {
   });
 
   if (modified) {
-    fs.writeFileSync(filePath, finalContent, 'utf8');
+    fs.writeFileSync(filePath, finalContent, "utf8");
     console.log(`✅ Fixed imports in ${filePath}`);
     return true;
   }
@@ -73,21 +91,28 @@ function fixImportsInFile(filePath) {
 
 // Main function
 function main() {
-  console.log('Starting to fix imports...');
-  
+  console.log("Starting to fix imports...");
+
   // Get all TypeScript files in the app directory
-  const appDir = path.join(__dirname, 'app');
-  const allFiles = getAllFiles(appDir);
-  
+  const appDir = path.join(__dirname, "app");
+  const appFiles = getAllFiles(appDir);
+
+  // Get all TypeScript files in the lib directory
+  const libDir = path.join(__dirname, "lib");
+  const libFiles = getAllFiles(libDir);
+
+  // Combine all files
+  const allFiles = [...appFiles, ...libFiles];
+
   let fixedCount = 0;
-  
+
   // Fix imports in each file
-  allFiles.forEach(file => {
+  allFiles.forEach((file) => {
     if (fixImportsInFile(file)) {
       fixedCount++;
     }
   });
-  
+
   console.log(`\nDone! Fixed imports in ${fixedCount} files.`);
 }
 

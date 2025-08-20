@@ -2,7 +2,7 @@ import { Pinecone } from "@pinecone-database/pinecone";
 import {
   buildHybridQueryVectors,
   shouldFallbackToCollections,
-} from "@/lib/sparse/hybrid_query_tuning";
+} from './sparse/hybrid_query_tuning';
 
 // Types for the search functions
 export type QuestionClassification = {
