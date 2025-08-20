@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cors } from "../../../lib/cors";
-import { query } from "../../../lib/db";
+import { cors } from "@/lib/cors";
+import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -108,45 +109,62 @@ export async function GET(request: NextRequest) {
     const response = new NextResponse();
 
     // Try to get token from Authorization header first
-    let accessKey = null;
+    let websiteId = null;
     const authHeader = request.headers.get("authorization");
     console.log("Auth header received:", authHeader); // Debug log
 
     if (authHeader?.startsWith("Bearer ")) {
-      // Extract the access key from the header
-      accessKey = authHeader.split(" ")[1];
-      console.log(
-        "Access key from header:",
-        accessKey?.substring(0, 10) + "..."
-      );
+      // Verify the Bearer token
+      const isTokenValid = await verifyToken(authHeader);
+      
+      if (isTokenValid) {
+        // Get the website ID from the verified token
+        websiteId = await getWebsiteIdFromToken(authHeader);
+        console.log(
+          "Website ID from token:",
+          websiteId || "none"
+        );
+      }
     }
 
     // If no valid header, try to get from URL params
-    if (!accessKey) {
+    if (!websiteId) {
       // Get the URL search params
       const url = new URL(request.url);
-      accessKey = url.searchParams.get("access_token");
+      const accessToken = url.searchParams.get("access_token");
       console.log(
-        "Access key from URL params:",
-        accessKey ? accessKey.substring(0, 10) + "..." : "none"
+        "Access token from URL params:",
+        accessToken ? accessToken.substring(0, 10) + "..." : "none"
       );
+      
+      if (accessToken) {
+        // For backward compatibility, try to find website by access token
+        const websites = (await query(
+          `SELECT w.* FROM Website w
+           JOIN AccessKey ak ON w.id = ak.websiteId
+           WHERE ak.\`key\` = ?`,
+          [accessToken]
+        )) as Website[];
+        
+        if (websites.length > 0) {
+          websiteId = websites[0].id;
+        }
+      }
     }
 
-    // If still no access key, return 401
-    if (!accessKey) {
-      console.log("No access key found in header or URL params");
+    // If still no website ID, return 401
+    if (!websiteId) {
+      console.log("No valid token or access key found");
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json({ error: "No valid token or access key provided" }, { status: 401 })
       );
     }
 
-    // Find the website associated with this access key
+    // Find the website using the website ID
     const websites = (await query(
-      `SELECT w.* FROM Website w
-       JOIN AccessKey ak ON w.id = ak.websiteId
-       WHERE ak.\`key\` = ?`,
-      [accessKey]
+      `SELECT w.* FROM Website w WHERE w.id = ?`,
+      [websiteId]
     )) as Website[];
 
     console.log("Website found:", websites.length > 0 ? "yes" : "no"); // Debug log
@@ -154,7 +172,7 @@ export async function GET(request: NextRequest) {
     if (websites.length === 0) {
       return cors(
         request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
 

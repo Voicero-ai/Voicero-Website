@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cors } from "../../../../lib/cors";
-import { query } from "../../../../lib/db";
+import { cors } from "@/lib/cors";
+import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -22,26 +23,30 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
+    const isTokenValid = await verifyToken(authHeader);
 
-    if (!authHeader?.startsWith("Bearer ")) {
+    if (!isTokenValid) {
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
+    // Get the website ID from the verified token
+    const websiteId = await getWebsiteIdFromToken(authHeader);
 
-    if (!accessKey) {
+    if (!websiteId) {
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
 
@@ -74,20 +79,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // First find the website ID using the access key
-    const accessKeys = (await query(
-      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
-      [accessKey]
-    )) as AccessKey[];
+    // Verify website exists
+    const websiteExists = (await query(
+      "SELECT id FROM Website WHERE id = ?",
+      [websiteId]
+    )) as Website[];
 
-    if (accessKeys.length === 0) {
+    if (websiteExists.length === 0) {
       return cors(
         request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
-
-    const websiteId = accessKeys[0].websiteId;
 
     // Prepare update data
     const updateFields = ["plan = ?", "queryLimit = ?"];
@@ -112,24 +115,23 @@ export async function POST(request: NextRequest) {
     ]);
 
     // Get the updated website
-    const websites = (await query(
+    const updatedWebsite = (await query(
       "SELECT id, plan, queryLimit, renewsOn, color FROM Website WHERE id = ?",
       [websiteId]
     )) as Website[];
 
-    const website = websites[0];
+    if (updatedWebsite.length === 0) {
+      return cors(
+        request,
+        NextResponse.json({ error: "Failed to retrieve updated website" }, { status: 500 })
+      );
+    }
 
     return cors(
       request,
       NextResponse.json({
         success: true,
-        website: {
-          id: website.id,
-          plan: website.plan,
-          queryLimit: website.queryLimit,
-          renewsOn: website.renewsOn,
-          color: website.color,
-        },
+        website: updatedWebsite[0],
       })
     );
   } catch (error) {

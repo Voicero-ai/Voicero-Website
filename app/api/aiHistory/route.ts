@@ -1,6 +1,9 @@
-import { NextResponse, NextRequest } from "next/server";
-import { cors } from "../../../lib/cors";
-import { query } from "../../../lib/db";
+import { NextRequest, NextResponse } from "next/server";
+import { cors } from "@/lib/cors";
+import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/lib/auth";
 import OpenAI from "openai";
 export const dynamic = "force-dynamic";
 
@@ -96,29 +99,99 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the authorization header
+    // Support multiple auth modes: session OR bearer token
     const authHeader = request.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return cors(
-        request,
-        NextResponse.json(
-          { error: "Missing or invalid authorization header" },
-          { status: 401 }
-        )
-      );
+    const { searchParams } = new URL(request.url);
+
+    // Parse optional JSON body safely
+    let bodyWebsiteId: string | null = null;
+    let bodyType: string | null = null;
+    try {
+      const parsed = await request.json();
+      bodyWebsiteId = parsed?.websiteId ?? null;
+      bodyType = parsed?.type ?? null;
+    } catch (_) {
+      // no body provided
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
-    if (!accessKey) {
-      return cors(
-        request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
-      );
+    // Accept websiteId from either body or query (?websiteId= / ?id=)
+    let websiteId: string | null =
+      bodyWebsiteId || searchParams.get("websiteId") || searchParams.get("id");
+
+    // Try session-based auth first
+    let userId: string | null = null;
+    const session = await getServerSession(authOptions);
+    if (session?.user?.email) {
+      const users = (await query(
+        `SELECT id FROM User WHERE email = ? LIMIT 1`,
+        [session.user.email]
+      )) as { id: string }[];
+      if (users.length > 0) {
+        userId = users[0].id;
+      }
     }
 
-    // Get request body
-    const { websiteId, type } = await request.json();
+    if (userId && websiteId) {
+      // Verify website ownership for session user
+      const ownershipRows = (await query(
+        `SELECT id, userId FROM Website WHERE id = ? LIMIT 1`,
+        [websiteId]
+      )) as { id: string; userId: string }[];
+      const owner = ownershipRows[0];
+      if (!owner) {
+        return cors(
+          request,
+          NextResponse.json({ error: "Website not found" }, { status: 404 })
+        );
+      }
+      if (owner.userId !== userId) {
+        return cors(
+          request,
+          NextResponse.json(
+            { error: "Unauthorized to access this website" },
+            { status: 403 }
+          )
+        );
+      }
+    } else {
+      // Fallback to Bearer token auth
+      const isTokenValid = await verifyToken(authHeader);
+      if (!isTokenValid) {
+        return cors(
+          request,
+          NextResponse.json(
+            {
+              error:
+                "Unauthorized. Please log in or provide a valid access key.",
+            },
+            { status: 401 }
+          )
+        );
+      }
+
+      const websiteIdFromToken = await getWebsiteIdFromToken(authHeader);
+      if (!websiteIdFromToken) {
+        return cors(
+          request,
+          NextResponse.json(
+            { error: "Could not determine website ID from token" },
+            { status: 400 }
+          )
+        );
+      }
+
+      if (websiteId && websiteId !== websiteIdFromToken) {
+        return cors(
+          request,
+          NextResponse.json(
+            { error: "Unauthorized to access this website" },
+            { status: 403 }
+          )
+        );
+      }
+      websiteId = websiteIdFromToken;
+    }
+
     if (!websiteId) {
       return cors(
         request,
@@ -126,37 +199,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const isWordPress = type === "WordPress";
+    const isWordPress = bodyType === "WordPress"; // kept for potential future logic
 
-    // Verify website access
-    const websites = (await query(
-      `SELECT w.* FROM Website w
-       JOIN AccessKey ak ON w.id = ak.websiteId
-       WHERE w.id = ? AND ak.\`key\` = ?`,
-      [websiteId, accessKey]
-    )) as Website[];
+    // Verify website exists and get website data
+    const websites = (await query(`SELECT w.* FROM Website w WHERE w.id = ?`, [
+      websiteId,
+    ])) as Website[];
 
     if (!websites.length) {
       return cors(
         request,
-        NextResponse.json(
-          { error: "Invalid access key or website ID" },
-          { status: 401 }
-        )
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
 
     const website = websites[0];
 
-    // Check if we need to generate a new analysis
+    // Always generate a new analysis (no caching)
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const oneDayAgo = new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000); // 1 day cache window
-    const needsNewAnalysis =
-      website.allowMultiAIReview || // Always generate new analysis if allowMultiAIReview is true
-      !website.lastAnalysedAt ||
-      new Date(website.lastAnalysedAt) < oneDayAgo ||
-      !website.analysis;
+    const needsNewAnalysis = true;
 
     // If we already have an analysis and it's not time for a new one, return it
     if (!needsNewAnalysis && website.analysis) {

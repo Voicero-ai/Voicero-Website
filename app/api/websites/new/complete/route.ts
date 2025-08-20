@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "../../../../../lib/stripe";
 import { query } from "@/lib/db";
+import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
 
@@ -58,13 +59,22 @@ export async function GET(request: Request) {
   const websiteId = websites[0]?.id;
 
   if (websiteId) {
+    // Hash the access key before storage
+    const hashedAccessKey = await hashAccessKey(websiteData.accessKey);
+
+    // Store the hashed access key
     await query(
-      `INSERT INTO AccessKey (id, \`key\`, websiteId, createdAt) VALUES (UUID(), ?, ?, NOW())`,
-      [websiteData.accessKey, websiteId]
+      `INSERT INTO AccessKey (id, name, key, websiteId) VALUES (UUID(), ?, ?, ?)`,
+      ["Default Access Key", hashedAccessKey, websiteId]
     );
   }
 
   return NextResponse.redirect(
     `${process.env.NEXT_PUBLIC_APP_URL}/app/websites`
   );
+}
+
+// Hash the access key before storage
+async function hashAccessKey(accessKey: string): Promise<string> {
+  return await bcrypt.hash(accessKey, 12);
 }

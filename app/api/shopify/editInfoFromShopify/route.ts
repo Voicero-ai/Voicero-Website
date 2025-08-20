@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { query } from "../../../../lib/db";
-import { cors } from "../../../../lib/cors";
+import { cors } from "@/lib/cors";
+import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+
 export const dynamic = "force-dynamic";
 
 interface AccessKey {
@@ -36,32 +38,36 @@ export async function POST(request: NextRequest) {
   try {
     console.log("Received editInfoFromShopify request");
 
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
-    console.log("Auth header:", authHeader?.substring(0, 20) + "...");
+    const isTokenValid = await verifyToken(authHeader);
 
-    if (!authHeader?.startsWith("Bearer ")) {
-      console.log("Invalid auth header format");
+    if (!isTokenValid) {
+      console.log("Invalid token");
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
-    console.log("Access key:", accessKey?.substring(0, 10) + "...");
+    // Get the website ID from the verified token
+    const websiteId = await getWebsiteIdFromToken(authHeader);
 
-    if (!accessKey) {
-      console.log("No access key found");
+    if (!websiteId) {
+      console.log("Could not determine website ID from token");
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
+
+    console.log("Website ID from token:", websiteId);
 
     // Get request body
     const body = await request.json();
@@ -117,26 +123,24 @@ export async function POST(request: NextRequest) {
       parsedPopUpQuestions = [];
     }
 
-    // Find the website ID using the access key
-    const accessKeyRecords = (await query(
-      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
-      [accessKey]
-    )) as AccessKey[];
+    // Verify website exists
+    const websiteExists = (await query(
+      "SELECT id FROM Website WHERE id = ?",
+      [websiteId]
+    )) as Website[];
 
     console.log(
-      "Access key record found:",
-      accessKeyRecords.length > 0 ? "yes" : "no"
+      "Website found:",
+      websiteExists.length > 0 ? "yes" : "no"
     );
 
-    if (accessKeyRecords.length === 0) {
-      console.log("No access key record found");
+    if (websiteExists.length === 0) {
+      console.log("Website not found");
       return cors(
         request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
-
-    const accessKeyRecord = accessKeyRecords[0];
 
     console.log(
       "Updating website with data (only provided fields will be updated):",
@@ -183,28 +187,28 @@ export async function POST(request: NextRequest) {
       const sql = `UPDATE Website SET ${updateFragments.join(
         ", "
       )} WHERE id = ?`;
-      updateParams.push(accessKeyRecord.websiteId);
+      updateParams.push(websiteId);
       await query(sql, updateParams);
     }
 
     if (popUpQuestionsProvided) {
       // Delete existing pop-up questions
       await query("DELETE FROM PopUpQuestion WHERE websiteId = ?", [
-        accessKeyRecord.websiteId,
+        websiteId,
       ]);
 
       // Insert new pop-up questions
       for (const q of parsedPopUpQuestions) {
         await query(
           "INSERT INTO PopUpQuestion (question, websiteId) VALUES (?, ?)",
-          [q.question, accessKeyRecord.websiteId]
+          [q.question, websiteId]
         );
       }
     }
 
     // Get the updated website
     const websites = (await query("SELECT * FROM Website WHERE id = ?", [
-      accessKeyRecord.websiteId,
+      websiteId,
     ])) as Website[];
 
     const website = websites[0];
@@ -212,7 +216,7 @@ export async function POST(request: NextRequest) {
     // Get the pop-up questions
     const popUpQuestionsResult = (await query(
       "SELECT * FROM PopUpQuestion WHERE websiteId = ?",
-      [accessKeyRecord.websiteId]
+      [websiteId]
     )) as PopUpQuestion[];
 
     console.log("Website updated successfully:", {

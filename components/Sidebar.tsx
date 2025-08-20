@@ -25,7 +25,6 @@ const menuItems = [
   { name: "Access Keys", icon: FaKey, path: "/app/access-keys" },
   { name: "Chats", icon: FaComments, path: "/app/chats" },
   { name: "Websites", icon: FaGlobe, path: "/app/websites" },
-  { name: "Contacts", icon: FaHeadset, path: "/app/contacts" },
   { name: "Documentation", icon: FaBook, path: "/docs" },
   { name: "Settings", icon: FaCog, path: "/app/settings" },
 ];
@@ -34,28 +33,6 @@ const Sidebar = () => {
   const { user } = useUser();
   const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(0);
-
-  // Fetch unread contacts count
-  useEffect(() => {
-    const fetchUnreadContacts = async () => {
-      try {
-        const response = await fetch("/api/contacts/unread");
-        if (response.ok) {
-          const data = await response.json();
-          setUnreadCount(data.count);
-        }
-      } catch (error) {
-        console.error("Failed to fetch unread contacts:", error);
-      }
-    };
-
-    fetchUnreadContacts();
-
-    // Poll for new unread contacts every minute
-    const interval = setInterval(fetchUnreadContacts, 60000);
-    return () => clearInterval(interval);
-  }, []);
 
   const UserProfile = () => (
     <div className="flex items-center gap-3 px-4 py-2">
@@ -82,8 +59,6 @@ const Sidebar = () => {
     path: string;
   }) => {
     const isActive = pathname === item.path;
-    const isContacts = item.name === "Contacts";
-    const showBadge = isContacts && unreadCount > 0;
 
     return (
       <li key={item.path}>
@@ -100,11 +75,6 @@ const Sidebar = () => {
           >
             <item.icon className="w-5 h-5" />
             <span>{item.name}</span>
-            {showBadge && (
-              <span className="ml-auto bg-brand-accent text-white text-xs font-bold rounded-full h-5 min-w-[20px] flex items-center justify-center px-1">
-                {unreadCount > 9 ? "9+" : unreadCount}
-              </span>
-            )}
           </motion.div>
         </Link>
       </li>

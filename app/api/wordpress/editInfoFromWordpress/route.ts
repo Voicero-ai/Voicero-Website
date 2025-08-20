@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-import { cors } from "../../../../lib/cors";
+import { cors } from "@/lib/cors";
+import prisma from "@/lib/prisma";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+
 export const dynamic = "force-dynamic";
-const prisma = new PrismaClient();
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -10,34 +11,38 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    console.log("Received editInfoFromShopify request");
+    console.log("Received editInfoFromWordpress request");
 
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
-    console.log("Auth header:", authHeader?.substring(0, 20) + "...");
+    const isTokenValid = await verifyToken(authHeader);
 
-    if (!authHeader?.startsWith("Bearer ")) {
-      console.log("Invalid auth header format");
+    if (!isTokenValid) {
+      console.log("Invalid token");
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
-    console.log("Access key:", accessKey?.substring(0, 10) + "...");
+    // Get the website ID from the verified token
+    const websiteId = await getWebsiteIdFromToken(authHeader);
 
-    if (!accessKey) {
-      console.log("No access key found");
+    if (!websiteId) {
+      console.log("Could not determine website ID from token");
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
+
+    console.log("Website ID from token:", websiteId);
 
     // Get request body
     const body = await request.json();
@@ -89,23 +94,20 @@ export async function POST(request: NextRequest) {
       parsedPopUpQuestions = [];
     }
 
-    // Find the website ID using the access key
-    const accessKeyRecord = await prisma.accessKey.findUnique({
+    // Verify website exists
+    const website = await prisma.website.findUnique({
       where: {
-        key: accessKey,
-      },
-      select: {
-        websiteId: true,
+        id: websiteId,
       },
     });
 
-    console.log("Access key record found:", accessKeyRecord ? "yes" : "no");
+    console.log("Website found:", website ? "yes" : "no");
 
-    if (!accessKeyRecord) {
-      console.log("No access key record found");
+    if (!website) {
+      console.log("Website not found");
       return cors(
         request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
 
@@ -124,9 +126,9 @@ export async function POST(request: NextRequest) {
     });
 
     // Update the website using the found website ID
-    const website = await prisma.website.update({
+    const updatedWebsite = await prisma.website.update({
       where: {
-        id: accessKeyRecord.websiteId,
+        id: websiteId,
       },
       data: {
         name: name,
@@ -155,10 +157,10 @@ export async function POST(request: NextRequest) {
     });
 
     console.log("Website updated successfully:", {
-      id: website.id,
-      name: website.name,
-      color: website.color,
-      popUpQuestions: website.popUpQuestions,
+      id: updatedWebsite.id,
+      name: updatedWebsite.name,
+      color: updatedWebsite.color,
+      popUpQuestions: updatedWebsite.popUpQuestions,
     });
 
     return cors(
@@ -166,19 +168,19 @@ export async function POST(request: NextRequest) {
       NextResponse.json({
         success: true,
         website: {
-          id: website.id,
-          name: website.name,
-          url: website.url,
-          customInstructions: website.customInstructions,
-          active: website.active,
-          plan: website.plan,
-          queryLimit: website.queryLimit,
-          monthlyQueries: website.monthlyQueries,
-          renewsOn: website.renewsOn,
-          lastSyncedAt: website.lastSyncedAt,
-          syncFrequency: website.syncFrequency,
-          popUpQuestions: website.popUpQuestions,
-          color: website.color,
+          id: updatedWebsite.id,
+          name: updatedWebsite.name,
+          url: updatedWebsite.url,
+          customInstructions: updatedWebsite.customInstructions,
+          active: updatedWebsite.active,
+          plan: updatedWebsite.plan,
+          queryLimit: updatedWebsite.queryLimit,
+          monthlyQueries: updatedWebsite.monthlyQueries,
+          renewsOn: updatedWebsite.renewsOn,
+          lastSyncedAt: updatedWebsite.lastSyncedAt,
+          syncFrequency: updatedWebsite.syncFrequency,
+          popUpQuestions: updatedWebsite.popUpQuestions,
+          color: updatedWebsite.color,
         },
       })
     );

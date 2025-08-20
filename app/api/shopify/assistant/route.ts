@@ -1,7 +1,9 @@
-import { NextResponse, NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { query } from "../../../../lib/db";
 import OpenAI from "openai";
 import { cors } from "../../../../lib/cors";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+
 export const dynamic = "force-dynamic";
 
 interface Website {
@@ -77,41 +79,46 @@ async function createVoiceAssistant(websiteName: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const isTokenValid = await verifyToken(authHeader);
+
+    if (!isTokenValid) {
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
-    if (!accessKey) {
+    // Get the website ID from the verified token
+    const websiteId = await getWebsiteIdFromToken(authHeader);
+
+    if (!websiteId) {
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
 
-    // Find the website associated with this access key
+    // Find the website using the website ID
     const websites = (await query(
       `SELECT w.id, w.name, w.url, w.aiAssistantId, w.aiVoiceAssistantId
        FROM Website w
-       JOIN AccessKey ak ON w.id = ak.websiteId
-       WHERE ak.\`key\` = ?
+       WHERE w.id = ?
        LIMIT 1`,
-      [accessKey]
+      [websiteId]
     )) as Website[];
 
     if (websites.length === 0) {
       return cors(
         request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
 

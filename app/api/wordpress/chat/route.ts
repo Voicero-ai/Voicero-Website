@@ -3,7 +3,8 @@ import { PrismaClient, AiThread, AiMessage } from "@prisma/client";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { Client } from "@opensearch-project/opensearch";
-import { cors } from "../../../../lib/cors";
+import { cors } from "@/lib/cors";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 import OpenAI from "openai";
 import {
   FINAL_MAIN_PROMPT,
@@ -1426,12 +1427,20 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  console.log("WordPress chat POST received at:", new Date().toISOString());
+  console.log("POST Request URL:", request.url);
+  console.log("POST Request method:", request.method);
+  console.log(
+    "POST Request headers:",
+    Object.fromEntries(request.headers.entries())
+  );
+
   let body: {
     message: string;
     websiteId?: string;
-    accessKey?: string;
     threadId?: string;
     type: "text" | "voice";
+    interactionType?: string;
     pastContext?: PreviousContext[];
     previousResponseId?: string;
     responseId?: string;
@@ -1457,8 +1466,20 @@ export async function POST(request: NextRequest) {
   };
 
   let website: WebsiteWithAutoSettings | null = null;
+  const t0 = Date.now();
+  const timeMarks: Record<string, number> = {};
 
   try {
+    // Clone the request before reading it so we can log the raw body
+    const clonedRequest = request.clone();
+    let rawBody = "";
+    try {
+      rawBody = await clonedRequest.text();
+      console.log("Raw request body:", rawBody);
+    } catch (e) {
+      console.error("Error reading raw body:", e);
+    }
+
     // Parse request body
     const parsedBody = await request.json();
     body = {
@@ -1469,7 +1490,6 @@ export async function POST(request: NextRequest) {
     const {
       message,
       websiteId,
-      accessKey,
       threadId,
       type,
       pastContext,
@@ -1477,7 +1497,12 @@ export async function POST(request: NextRequest) {
       responseId,
       currentPageUrl,
       pageData,
+      interactionType,
     } = body;
+
+    const currentResponseId = responseId || crypto.randomUUID();
+
+    console.log("Received interaction type:", interactionType);
 
     console.log("Past Context:", pastContext);
 
@@ -1491,81 +1516,76 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate we have either websiteId or accessKey
-    if (!websiteId && !accessKey) {
+    // Verify the Bearer token
+    const authHeader = request.headers.get("authorization");
+    const isTokenValid = await verifyToken(authHeader);
+
+    if (!isTokenValid) {
       return cors(
         request,
         NextResponse.json(
-          { error: "Either websiteId or accessKey must be provided" },
+          { error: "Unauthorized - Invalid token" },
+          { status: 401 }
+        )
+      );
+    }
+
+    // Get the website ID from the verified token
+    const websiteIdFromToken = await getWebsiteIdFromToken(authHeader);
+
+    if (!websiteIdFromToken) {
+      return cors(
+        request,
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
           { status: 400 }
         )
       );
     }
 
-    // Get website either by ID or access key with plan, query info, and auto-allow settings
-    if (websiteId) {
-      website = await prisma.website.findUnique({
-        where: { id: websiteId },
-        select: {
-          id: true,
-          url: true,
-          plan: true,
-          monthlyQueries: true,
-          customInstructions: true,
-          allowAutoClick: true,
-          allowAutoScroll: true,
-          allowAutoHighlight: true,
-          allowAutoRedirect: true,
-          allowAutoFillForm: true,
-          allowAutoGenerateImage: true,
-          allowAutoGetUserOrders: true,
-          allowAutoTrackOrder: true,
-          allowAutoUpdateUserInfo: true,
-          allowAutoLogin: true,
-          allowAutoLogout: true,
-          stripeSubscriptionId: true,
-          stripeSubscriptionItemId: true,
-        },
-      });
-    } else if (accessKey) {
-      website = await prisma.website.findFirst({
-        where: {
-          accessKeys: {
-            some: {
-              key: accessKey,
-            },
-          },
-        },
-        select: {
-          id: true,
-          url: true,
-          plan: true,
-          monthlyQueries: true,
-          customInstructions: true,
-          allowAutoClick: true,
-          allowAutoScroll: true,
-          allowAutoHighlight: true,
-          allowAutoRedirect: true,
-          allowAutoFillForm: true,
-          allowAutoGenerateImage: true,
-          allowAutoGetUserOrders: true,
-          allowAutoTrackOrder: true,
-          allowAutoUpdateUserInfo: true,
-          allowAutoLogin: true,
-          allowAutoLogout: true,
-          stripeSubscriptionId: true,
-          stripeSubscriptionItemId: true,
-        },
-      });
+    // Use the websiteId from token if none provided in body
+    const finalWebsiteId = websiteId || websiteIdFromToken;
+
+    // Verify the requested websiteId matches the one from the token if provided
+    if (websiteId && websiteId !== websiteIdFromToken) {
+      return cors(
+        request,
+        NextResponse.json(
+          { error: "Unauthorized to access this website" },
+          { status: 403 }
+        )
+      );
     }
+
+    // Get website by ID
+    website = await prisma.website.findUnique({
+      where: { id: finalWebsiteId },
+      select: {
+        id: true,
+        url: true,
+        plan: true,
+        monthlyQueries: true,
+        customInstructions: true,
+        allowAutoClick: true,
+        allowAutoScroll: true,
+        allowAutoHighlight: true,
+        allowAutoRedirect: true,
+        allowAutoFillForm: true,
+        allowAutoGenerateImage: true,
+        allowAutoGetUserOrders: true,
+        allowAutoTrackOrder: true,
+        allowAutoUpdateUserInfo: true,
+        allowAutoLogin: true,
+        allowAutoLogout: true,
+        stripeSubscriptionId: true,
+        stripeSubscriptionItemId: true,
+      },
+    });
 
     if (!website) {
       return cors(
         request,
-        NextResponse.json(
-          { error: "Website not found with provided ID or access key" },
-          { status: 404 }
-        )
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
 

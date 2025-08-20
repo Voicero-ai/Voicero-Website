@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from "../../../../lib/auth";
 import { cors } from "@/lib/cors";
 import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -41,19 +42,27 @@ export async function GET(request: NextRequest) {
       const websiteId = searchParams.get("websiteId");
 
       if (authHeader && authHeader.startsWith("Bearer ") && websiteId) {
-        const accessKey = authHeader.substring(7); // Remove "Bearer " prefix
+        // Verify the Bearer token
+        const isTokenValid = await verifyToken(authHeader);
+        
+        if (isTokenValid) {
+          // Get the website ID from the verified token
+          const websiteIdFromToken = await getWebsiteIdFromToken(authHeader);
+          
+          // Verify the requested websiteId matches the one from the token
+          if (websiteIdFromToken === websiteId) {
+            // Look up the website to get associated userId
+            const websites = (await query(
+              `SELECT w.userId 
+               FROM Website w
+               WHERE w.id = ?`,
+              [websiteId]
+            )) as Website[];
 
-        // Look up the website by accessKey and get associated userId
-        const websites = (await query(
-          `SELECT w.userId 
-           FROM Website w
-           JOIN AccessKey ak ON w.id = ak.websiteId
-           WHERE w.id = ? AND ak.\`key\` = ?`,
-          [websiteId, accessKey]
-        )) as Website[];
-
-        if (websites.length > 0) {
-          userId = websites[0].userId;
+            if (websites.length > 0) {
+              userId = websites[0].userId;
+            }
+          }
         }
       }
     }

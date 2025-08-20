@@ -47,21 +47,29 @@ export default function Contact() {
   };
 
   return (
-    <section className="flex-1 pt-24 pb-16 bg-black">
-      <div className="container mx-auto px-4">
+    <section className="relative flex-1 pt-28 pb-20 bg-gray-900 text-white overflow-hidden">
+      {/* Background Shapes */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute -top-40 -left-40 w-80 h-80 bg-gradient-to-r from-purple-500/20 to-violet-500/20 rounded-full blur-3xl animate-pulse" />
+        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-gradient-to-r from-blue-500/20 to-purple-500/20 rounded-full blur-3xl animate-pulse delay-1000" />
+        <div className="absolute top-1/2 left-1/2 w-64 h-64 bg-gradient-to-r from-violet-500/10 to-indigo-500/10 rounded-full blur-3xl animate-pulse delay-2000" />
+      </div>
+
+      <div className="relative z-10 max-w-6xl mx-auto px-4">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           className="max-w-4xl mx-auto"
         >
-          <h1 className="text-4xl md:text-5xl font-bold text-center mb-6 text-white">
+          <h1 className="text-4xl md:text-5xl font-bold text-center mb-6 bg-gradient-to-r from-white via-purple-200 to-violet-200 bg-clip-text text-transparent">
             Get in Touch
           </h1>
           <p className="text-lg text-gray-300 text-center mb-12">
-            Have questions or inquiries about our AI chatbot solution? We&apos;re here to help!
+            Have questions or inquiries about our AI chatbot solution?
+            We&apos;re here to help!
           </p>
 
-          <div className="grid md:grid-cols-2 gap-8 mb-12 max-w-2xl mx-auto">
+          <div className="grid md:grid-cols-2 gap-6 md:gap-8 mb-12 max-w-2xl mx-auto">
             {[
               { icon: FaEnvelope, title: "Email", info: "info@voicero.ai" },
               {
@@ -75,12 +83,10 @@ export default function Contact() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.1 }}
-                className="text-center p-6 rounded-xl bg-black border border-gray-800 shadow-sm"
+                className="text-center p-6 rounded-2xl backdrop-blur-xl bg-white/10 border border-purple-500/20"
               >
-                <item.icon className="w-6 h-6 text-brand-accent mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-white mb-2">
-                  {item.title}
-                </h3>
+                <item.icon className="w-6 h-6 text-purple-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium mb-2">{item.title}</h3>
                 <p className="text-gray-300">{item.info}</p>
               </motion.div>
             ))}
@@ -90,7 +96,7 @@ export default function Contact() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 }}
-            className="bg-black rounded-2xl shadow-xl border border-gray-800 p-8"
+            className="backdrop-blur-xl bg-white/10 rounded-3xl border border-purple-500/30 p-6 sm:p-8"
           >
             <form onSubmit={handleSubmit} className="space-y-6">
               <div className="grid md:grid-cols-2 gap-6">
@@ -108,7 +114,7 @@ export default function Contact() {
                         name: e.target.value,
                       }))
                     }
-                    className="w-full px-4 py-2 rounded-lg border border-gray-800 focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-900 text-white placeholder-gray-400"
+                    className="w-full px-4 py-2 rounded-lg border border-purple-500/20 focus:outline-none focus:ring-2 focus:ring-purple-500/30 bg-white/5 text-white placeholder-gray-400"
                   />
                 </div>
                 <div>
@@ -125,7 +131,7 @@ export default function Contact() {
                         email: e.target.value,
                       }))
                     }
-                    className="w-full px-4 py-2 rounded-lg border border-gray-800 focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-900 text-white placeholder-gray-400"
+                    className="w-full px-4 py-2 rounded-lg border border-purple-500/20 focus:outline-none focus:ring-2 focus:ring-purple-500/30 bg-white/5 text-white placeholder-gray-400"
                   />
                 </div>
               </div>
@@ -142,7 +148,7 @@ export default function Contact() {
                       company: e.target.value,
                     }))
                   }
-                  className="w-full px-4 py-2 rounded-lg border border-gray-800 focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-900 text-white placeholder-gray-400"
+                  className="w-full px-4 py-2 rounded-lg border border-purple-500/20 focus:outline-none focus:ring-2 focus:ring-purple-500/30 bg-white/5 text-white placeholder-gray-400"
                 />
               </div>
               <div>
@@ -159,7 +165,7 @@ export default function Contact() {
                       message: e.target.value,
                     }))
                   }
-                  className="w-full px-4 py-2 rounded-lg border border-gray-800 focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-900 text-white placeholder-gray-400"
+                  className="w-full px-4 py-2 rounded-lg border border-purple-500/20 focus:outline-none focus:ring-2 focus:ring-purple-500/30 bg-white/5 text-white placeholder-gray-400"
                 />
               </div>
               <motion.button
@@ -167,7 +173,7 @@ export default function Contact() {
                 whileTap={{ scale: 0.98 }}
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full btn-primary py-4 text-lg"
+                className="w-full btn-primary py-4 text-lg rounded-2xl bg-gradient-to-r from-purple-600 to-violet-600 hover:brightness-110"
               >
                 {isSubmitting ? "Sending..." : "Send Message"}
               </motion.button>

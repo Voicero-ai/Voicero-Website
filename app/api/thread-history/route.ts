@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cors } from "../../../lib/cors";
-import { query } from "../../../lib/db";
+import { cors } from "@/lib/cors";
+import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+
 export const dynamic = "force-dynamic";
 
 // Define types
@@ -31,26 +33,32 @@ export async function POST(request: NextRequest) {
   try {
     console.log("🚀 Thread history request received");
 
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      console.log("❌ Missing or invalid authorization header");
+    const isTokenValid = await verifyToken(authHeader);
+
+    if (!isTokenValid) {
+      console.log("❌ Invalid token");
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
-    if (!accessKey) {
-      console.log("❌ No access key provided");
+    // Get the website ID from the verified token
+    const websiteId = await getWebsiteIdFromToken(authHeader);
+
+    if (!websiteId) {
+      console.log("❌ Could not determine website ID from token");
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
 
@@ -63,18 +71,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Verify website access
+    // Verify website exists
     const websites = (await query(
-      `SELECT w.id FROM Website w
-       JOIN AccessKey ak ON w.id = ak.websiteId
-       WHERE ak.\`key\` = ?`,
-      [accessKey]
+      `SELECT w.id FROM Website w WHERE w.id = ?`,
+      [websiteId]
     )) as Website[];
 
     if (websites.length === 0) {
       return cors(
         request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
 

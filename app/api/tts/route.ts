@@ -1,9 +1,9 @@
 // FIXED SERVER-SIDE IMPLEMENTATION FOR ELEVENLABS TTS API
 
-import { NextResponse } from "next/server";
-import { cors } from "../../../lib/cors";
-import { NextRequest } from "next/server";
-import { query } from "../../../lib/db";
+import { NextRequest, NextResponse } from "next/server";
+import { cors } from "@/lib/cors";
+import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -29,40 +29,37 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Verify authorization
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
-    console.log("Auth header received:", authHeader); // Debug log
+    const isTokenValid = await verifyToken(authHeader);
 
-    if (!authHeader?.startsWith("Bearer ")) {
-      console.log("Invalid auth header format:", authHeader); // Debug log
+    if (!isTokenValid) {
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
-    console.log("Access key extracted:", accessKey?.substring(0, 10) + "..."); // Debug log
+    // Get the website ID from the verified token
+    const websiteId = await getWebsiteIdFromToken(authHeader);
 
-    if (!accessKey) {
-      console.log("No access key found in header"); // Debug log
+    if (!websiteId) {
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
 
-    // Find the website associated with this access key using direct SQL
+    // Find the website using the website ID
     const websites = (await query(
-      `SELECT w.id FROM Website w
-       JOIN AccessKey ak ON w.id = ak.websiteId
-       WHERE ak.\`key\` = ?
-       LIMIT 1`,
-      [accessKey]
+      `SELECT w.id FROM Website w WHERE w.id = ? LIMIT 1`,
+      [websiteId]
     )) as Website[];
 
     console.log("Website found:", websites.length > 0 ? "yes" : "no"); // Debug log
@@ -70,7 +67,7 @@ export async function POST(request: NextRequest) {
     if (websites.length === 0) {
       return cors(
         request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
 

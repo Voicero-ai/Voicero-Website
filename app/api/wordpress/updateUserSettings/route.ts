@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { query } from "../../../../lib/db";
-import { cors } from "../../../../lib/cors";
+import { cors } from "@/lib/cors";
+import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+
 export const dynamic = "force-dynamic";
 
 interface AccessKey {
@@ -24,26 +26,30 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
+    const isTokenValid = await verifyToken(authHeader);
 
-    if (!authHeader?.startsWith("Bearer ")) {
+    if (!isTokenValid) {
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
+    // Get the website ID from the verified token
+    const websiteIdFromToken = await getWebsiteIdFromToken(authHeader);
 
-    if (!accessKey) {
+    if (!websiteIdFromToken) {
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
 
@@ -76,23 +82,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // First find the website ID using the access key
-    const accessKeyRecords = (await query(
-      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
-      [accessKey]
-    )) as AccessKey[];
-
-    if (accessKeyRecords.length === 0) {
-      return cors(
-        request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
-      );
-    }
-
-    const accessKeyRecord = accessKeyRecords[0];
-
-    // Verify the website matches the one from the access key
-    if (accessKeyRecord.websiteId !== websiteId) {
+    // Verify the website matches the one from the token
+    if (websiteIdFromToken !== websiteId) {
       return cors(
         request,
         NextResponse.json(

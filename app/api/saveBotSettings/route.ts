@@ -1,6 +1,7 @@
-import { NextResponse, NextRequest } from "next/server";
-import { cors } from "../../../lib/cors";
-import { query } from "../../../lib/db";
+import { NextRequest, NextResponse } from "next/server";
+import { cors } from "@/lib/cors";
+import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -34,30 +35,32 @@ export async function POST(request: NextRequest) {
   try {
     console.log("Beginning saveBotSettings request processing");
 
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
-    console.log("Auth header:", authHeader ? "Present" : "Missing");
+    const isTokenValid = await verifyToken(authHeader);
 
-    if (!authHeader?.startsWith("Bearer ")) {
-      console.log("Auth header invalid - missing Bearer prefix");
+    if (!isTokenValid) {
+      console.log("Auth header invalid - invalid token");
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
-    console.log("Access key extracted:", accessKey ? "Present" : "Missing");
+    // Get the website ID from the verified token
+    const websiteIdFromToken = await getWebsiteIdFromToken(authHeader);
 
-    if (!accessKey) {
-      console.log("No access key provided");
+    if (!websiteIdFromToken) {
+      console.log("Could not determine website ID from token");
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
 
@@ -108,44 +111,52 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Verify website access
-    console.log(
-      "Verifying website access with ID:",
-      websiteId,
-      "and access key"
-    );
-
-    // Check if the access key is valid for this website
-    const accessKeyResult = await query(
-      `SELECT websiteId FROM AccessKey WHERE \`key\` = ? AND websiteId = ?`,
-      [accessKey, websiteId]
-    );
-
-    if (Array.isArray(accessKeyResult) && accessKeyResult.length === 0) {
-      console.log("Invalid access key or website ID");
+    // Verify the requested websiteId matches the one from the token
+    if (websiteId !== websiteIdFromToken) {
+      console.log("Unauthorized to access this website");
       return cors(
         request,
         NextResponse.json(
-          { error: "Invalid access key or website ID" },
-          { status: 401 }
+          { error: "Unauthorized to access this website" },
+          { status: 403 }
+        )
+      );
+    }
+
+    // Verify website exists
+    console.log(
+      "Verifying website exists with ID:",
+      websiteId
+    );
+
+    const websiteResult = await query(
+      `SELECT id FROM Website WHERE id = ?`,
+      [websiteId]
+    );
+
+    if (Array.isArray(websiteResult) && websiteResult.length === 0) {
+      console.log("Website not found");
+      return cors(
+        request,
+        NextResponse.json(
+          { error: "Website not found" },
+          { status: 404 }
         )
       );
     }
 
     // Get the website and its popup questions
-    const websiteResult = (await query(`SELECT * FROM Website WHERE id = ?`, [
+    const website = (await query(`SELECT * FROM Website WHERE id = ?`, [
       websiteId,
     ])) as Website[];
 
-    if (websiteResult.length === 0) {
+    if (website.length === 0) {
       console.log("Website not found");
       return cors(
         request,
         NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
-
-    const website = websiteResult[0];
 
     // Get existing popup questions
     const existingQuestions = (await query(

@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { cors } from "@/lib/cors";
 import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -80,43 +79,33 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
+    const isTokenValid = await verifyToken(authHeader);
 
-    if (!authHeader?.startsWith("Bearer ")) {
+    if (!isTokenValid) {
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
+    // Get the website ID from the verified token
+    const websiteId = await getWebsiteIdFromToken(authHeader);
 
-    if (!accessKey) {
+    if (!websiteId) {
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
 
-    // Find the website ID using the access key
-    const accessKeys = (await query(
-      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
-      [accessKey]
-    )) as AccessKey[];
-
-    if (accessKeys.length === 0) {
-      return cors(
-        request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
-      );
-    }
-
-    const websiteId = accessKeys[0].websiteId;
     const body = await request.json();
     console.log("Received body:", JSON.stringify(body, null, 2));
 

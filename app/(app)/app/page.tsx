@@ -87,7 +87,7 @@ export default function Dashboard() {
         if (!response.ok) throw new Error("Failed to fetch dashboard data");
         const dashboardData = await response.json();
         setData(dashboardData);
-        } catch (error) {
+      } catch (error) {
         console.error("Error fetching dashboard data:", error);
       } finally {
         setLoading(false);
@@ -160,7 +160,7 @@ export default function Dashboard() {
               Scrolls: {data.stats.aiScrolls}
             </p>
             <p className="text-sm text-brand-text-secondary">
-              Purchases: {data.stats.aiPurchases}
+              Add to Cart: {data.stats.aiPurchases}
             </p>
             <p className="text-sm text-brand-text-secondary">
               Clicks: {data.stats.aiClicks}
@@ -248,7 +248,7 @@ export default function Dashboard() {
               }`}
             >
               <div className="w-3 h-3 rounded-full bg-[#f59e0b]" />
-              Purchases
+              Add to Cart
             </button>
             <button
               onClick={() =>

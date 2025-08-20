@@ -18,6 +18,8 @@ interface Website {
   customInstructions: string | null;
   color: string | null;
   clickMessage: string | null;
+  showVoiceAI?: boolean;
+  showTextAI?: boolean;
 }
 
 export async function POST(request: NextRequest) {
@@ -40,6 +42,8 @@ export async function POST(request: NextRequest) {
       customInstructions,
       color,
       clickMessage,
+      showVoiceAI,
+      showTextAI,
     } = data || {};
 
     if (!websiteId) {
@@ -121,6 +125,14 @@ export async function POST(request: NextRequest) {
       fields.push("clickMessage = ?");
       values.push(clickMessage ?? null);
     }
+    if (showVoiceAI !== undefined) {
+      fields.push("showVoiceAI = ?");
+      values.push(showVoiceAI ? 1 : 0);
+    }
+    if (showTextAI !== undefined) {
+      fields.push("showTextAI = ?");
+      values.push(showTextAI ? 1 : 0);
+    }
 
     if (fields.length === 0) {
       return NextResponse.json({ success: true });
@@ -146,6 +158,8 @@ export async function POST(request: NextRequest) {
         iconVoice: updatedWebsite.iconVoice,
         iconMessage: updatedWebsite.iconMessage,
         clickMessage: updatedWebsite.clickMessage,
+        showVoiceAI: Boolean(updatedWebsite.showVoiceAI),
+        showTextAI: Boolean(updatedWebsite.showTextAI),
       },
     });
   } catch (error) {

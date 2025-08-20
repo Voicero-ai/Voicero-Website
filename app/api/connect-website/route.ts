@@ -1,8 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../lib/auth";
+import { cors } from "@/lib/cors";
 import { query } from "../../../lib/db";
 import crypto from "crypto";
+import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
 
@@ -73,9 +75,10 @@ export async function POST(request: Request) {
       } else {
         // Create a new access key
         const newKey = generateAccessKey();
+        const hashedKey = await hashAccessKey(newKey);
         const accessKeyResult = await query(
           "INSERT INTO AccessKey (`key`, websiteId) VALUES (?, ?)",
-          [newKey, website.id]
+          [hashedKey, website.id]
         );
 
         accessKey = {
@@ -105,9 +108,10 @@ export async function POST(request: Request) {
         } else {
           // Create a new access key
           const newKey = generateAccessKey();
+          const hashedKey = await hashAccessKey(newKey);
           const accessKeyResult = await query(
             "INSERT INTO AccessKey (`key`, websiteId) VALUES (?, ?)",
-            [newKey, website.id]
+            [hashedKey, website.id]
           );
 
           accessKey = {
@@ -130,9 +134,10 @@ export async function POST(request: Request) {
 
         // Create a new access key
         const newKey = generateAccessKey();
+        const hashedKey = await hashAccessKey(newKey);
         const accessKeyResult = await query(
           "INSERT INTO AccessKey (`key`, websiteId) VALUES (?, ?)",
-          [newKey, newWebsiteId]
+          [hashedKey, newWebsiteId]
         );
 
         website = {
@@ -168,8 +173,14 @@ export async function POST(request: Request) {
   }
 }
 
+// Generate a secure access key
 function generateAccessKey(): string {
   return crypto.randomBytes(32).toString("hex");
+}
+
+// Hash the access key before storage
+async function hashAccessKey(accessKey: string): Promise<string> {
+  return await bcrypt.hash(accessKey, 12);
 }
 
 function extractWebsiteName(url: string): string {

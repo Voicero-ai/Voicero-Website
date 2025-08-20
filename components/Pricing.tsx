@@ -44,17 +44,27 @@ export default function Pricing() {
     viewport: { once: true },
   };
   const base =
-    "h-full p-8 bg-gray-900 rounded-xl shadow-lg hover:shadow-xl transition-shadow duration-300 border";
+    "h-full p-8 backdrop-blur-xl bg-white/10 border border-purple-500/30 rounded-3xl shadow-xl hover:shadow-2xl transition-all duration-300";
 
   return (
-    <section id="pricing" className="py-20 bg-black">
-      <div className="container mx-auto px-4">
+    <section
+      id="pricing"
+      className="relative py-24 bg-gray-900 text-white overflow-hidden"
+    >
+      {/* Background Shapes */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute -top-40 -left-40 w-80 h-80 bg-gradient-to-r from-purple-500/20 to-violet-500/20 rounded-full blur-3xl animate-pulse" />
+        <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-gradient-to-r from-blue-500/20 to-purple-500/20 rounded-full blur-3xl animate-pulse delay-1000" />
+        <div className="absolute top-1/2 left-1/2 w-64 h-64 bg-gradient-to-r from-violet-500/10 to-indigo-500/10 rounded-full blur-3xl animate-pulse delay-2000" />
+      </div>
+
+      <div className="relative z-10 max-w-6xl mx-auto px-4">
         <motion.div
           {...fade}
           transition={{ duration: 0.6 }}
           className="text-center mb-16"
         >
-          <h2 className="text-4xl font-bold text-white mb-4">
+          <h2 className="text-4xl font-bold mb-4 bg-gradient-to-r from-white via-purple-200 to-violet-200 bg-clip-text text-transparent">
             Simple, Transparent Pricing
           </h2>
           <p className="text-xl text-gray-300 max-w-3xl mx-auto">
@@ -72,7 +82,7 @@ export default function Pricing() {
             >
               <div
                 className={`${base} ${
-                  p.usage ? "border-brand-accent" : "border-gray-700"
+                  p.usage ? "ring-1 ring-purple-400/30" : ""
                 }`}
               >
                 <div className="text-center mb-8">
@@ -90,7 +100,7 @@ export default function Pricing() {
                     href="https://calendly.com/voicero-info/voicero-ai-set-up?share_attribution=expiring_link"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block w-full py-3 px-6 rounded-lg transition-colors duration-200 bg-gray-800 hover:bg-gray-700 text-white"
+                    className="block w-full py-3 px-6 rounded-2xl transition-all duration-200 bg-gradient-to-r from-purple-600 to-violet-600 hover:brightness-110 text-white"
                   >
                     Get Started
                   </Link>
@@ -99,7 +109,7 @@ export default function Pricing() {
                 <div className="space-y-4">
                   {p.features.map((f, j) => (
                     <div key={j} className="flex items-center">
-                      <FaCheck className="text-brand-accent mr-3 flex-shrink-0" />
+                      <FaCheck className="text-purple-400 mr-3 flex-shrink-0" />
                       <span className="text-gray-300">{f}</span>
                     </div>
                   ))}

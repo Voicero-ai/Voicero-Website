@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cors } from "../../../../lib/cors";
-import { query } from "../../../../lib/db";
+import { cors } from "@/lib/cors";
+import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -28,34 +29,36 @@ export async function OPTIONS(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
+    const isTokenValid = await verifyToken(authHeader);
 
-    if (!authHeader?.startsWith("Bearer ")) {
+    if (!isTokenValid) {
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
+    // Get the website ID from the verified token
+    const websiteIdFromToken = await getWebsiteIdFromToken(authHeader);
 
-    if (!accessKey) {
+    if (!websiteIdFromToken) {
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
 
     // Get request body
     const body = await request.json();
     const { websiteId: providedWebsiteId, name, username, email } = body;
-
-    // websiteId is optional when using access key; we'll infer it below if not provided
 
     // Validate at least one update field is provided
     if (!name && !username && !email) {
@@ -71,51 +74,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // First find the website ID using the access key
-    const accessKeys = (await query(
-      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
-      [accessKey]
-    )) as AccessKey[];
-
-    if (accessKeys.length === 0) {
-      return cors(
-        request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
-      );
-    }
-
-    const accessKeyRecord = accessKeys[0];
-
-    // Determine target websiteId: prefer provided, fallback to access key's websiteId
-    let websiteId = providedWebsiteId || accessKeyRecord.websiteId;
+    // Determine target websiteId: prefer provided, fallback to token's websiteId
+    let websiteId = providedWebsiteId || websiteIdFromToken;
 
     // If providedWebsiteId was sent and doesn't match, ensure both websites belong to the same user
-    if (providedWebsiteId && accessKeyRecord.websiteId !== providedWebsiteId) {
-      const [accessKeyWebsiteResult, providedWebsiteResult] = await Promise.all(
+    if (providedWebsiteId && websiteIdFromToken !== providedWebsiteId) {
+      const [tokenWebsiteResult, providedWebsiteResult] = await Promise.all(
         [
           query("SELECT userId FROM Website WHERE id = ?", [
-            accessKeyRecord.websiteId,
+            websiteIdFromToken,
           ]),
           query("SELECT userId FROM Website WHERE id = ?", [providedWebsiteId]),
         ]
       );
 
-      const accessKeyWebsites = accessKeyWebsiteResult as Website[];
+      const tokenWebsites = tokenWebsiteResult as Website[];
       const providedWebsites = providedWebsiteResult as Website[];
 
       if (providedWebsites.length === 0) {
-        // If provided website is not found, fallback to the access key's websiteId
-        websiteId = accessKeyRecord.websiteId;
+        // If provided website is not found, fallback to the token's websiteId
+        websiteId = websiteIdFromToken;
       } else {
         // Only enforce same-owner when providedWebsite exists
-        if (accessKeyWebsites.length === 0) {
+        if (tokenWebsites.length === 0) {
           return cors(
             request,
-            NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+            NextResponse.json({ error: "Website not found" }, { status: 404 })
           );
         }
 
-        if (accessKeyWebsites[0].userId !== providedWebsites[0].userId) {
+        if (tokenWebsites[0].userId !== providedWebsites[0].userId) {
           return cors(
             request,
             NextResponse.json(

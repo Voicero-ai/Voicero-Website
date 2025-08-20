@@ -1,4 +1,4 @@
-import { NextResponse, NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import {
   PrismaClient,
   WordpressPage,
@@ -6,11 +6,12 @@ import {
   WordpressProduct,
 } from "@prisma/client";
 import OpenAI from "openai";
-import { cors } from "../../../../lib/cors";
+import { cors } from "@/lib/cors";
+import prisma from "@/lib/prisma";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -46,35 +47,37 @@ async function createVoiceAssistant(websiteName: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const isTokenValid = await verifyToken(authHeader);
+
+    if (!isTokenValid) {
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
-    if (!accessKey) {
+    // Get the website ID from the verified token
+    const websiteId = await getWebsiteIdFromToken(authHeader);
+
+    if (!websiteId) {
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
 
-    // Find the website associated with this access key
+    // Find the website using the website ID
     const website = await prisma.website.findFirst({
       where: {
-        accessKeys: {
-          some: {
-            key: accessKey,
-          },
-        },
+        id: websiteId,
       },
       include: {
         pages: true,
@@ -86,7 +89,7 @@ export async function POST(request: NextRequest) {
     if (!website) {
       return cors(
         request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
+        NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
 

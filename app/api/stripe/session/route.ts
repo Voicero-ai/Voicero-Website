@@ -1,8 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import { query } from "../../../../lib/db";
-import { stripe } from "../../../../lib/stripe";
 import { authOptions } from "../../../../lib/auth";
+import { stripe } from "../../../../lib/stripe";
+import { query } from "../../../../lib/db";
+import bcrypt from "bcryptjs";
+
 export const dynamic = "force-dynamic";
 // Handle POST request for creating a new checkout session
 export async function POST(request: Request) {
@@ -243,9 +245,13 @@ export async function GET(request: Request) {
       const createdWebsiteId = websiteIdRows[0]?.id;
 
       if (createdWebsiteId) {
+        // Hash the access key before storage
+        const hashedAccessKey = await hashAccessKey(websiteData.accessKey);
+
+        // Store the hashed access key
         await query(
-          `INSERT INTO AccessKey (id, \`key\`, websiteId, createdAt) VALUES (UUID(), ?, ?, NOW())`,
-          [websiteData.accessKey, createdWebsiteId]
+          `INSERT INTO AccessKey (id, name, key, websiteId) VALUES (UUID(), ?, ?, ?)`,
+          ["Default Access Key", hashedAccessKey, createdWebsiteId]
         );
       }
 
@@ -284,4 +290,9 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
+}
+
+// Hash the access key before storage
+async function hashAccessKey(accessKey: string): Promise<string> {
+  return await bcrypt.hash(accessKey, 12);
 }

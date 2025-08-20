@@ -3,12 +3,7 @@
 import React from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import {
-  FaTwitter,
-  FaLinkedin,
-  FaGithub,
-  FaEnvelope,
-} from "react-icons/fa";
+import { FaTwitter, FaLinkedin, FaGithub, FaEnvelope } from "react-icons/fa";
 import Logo from "./Logo";
 
 interface FooterLink {
@@ -19,19 +14,26 @@ interface FooterLink {
 
 const footerLinks = {
   product: [
-    { name: "Features", href: "/#features" },
+    { name: "Features", href: "/features" },
     { name: "Pricing", href: "/pricing" },
-    { name: "Contact", href: "/contact" },
+    { name: "Text AI", href: "/text-ai" },
+    { name: "Voice AI", href: "/voice-ai" },
   ] as FooterLink[],
   company: [
     { name: "Our Why", href: "/about" },
-    { name: "Book a Demo", href: "https://calendly.com/voicero-info/voicero-ai-set-up?share_attribution=expiring_link", external: true },
+    {
+      name: "Book a Demo",
+      href: "https://calendly.com/voicero-info/voicero-ai-set-up?share_attribution=expiring_link",
+      external: true,
+    },
+    { name: "Contact", href: "/contact" },
     { name: "FAQ", href: "/faq" },
   ] as FooterLink[],
   resources: [
     { name: "Documentation", href: "/docs" },
     { name: "Changelog", href: "/changelog" },
     { name: "Support", href: "/contact" },
+    { name: "Login", href: "/app" },
   ] as FooterLink[],
   legal: [
     { name: "Privacy Policy", href: "/privacy" },
@@ -65,30 +67,29 @@ const socialLinks = [
 
 export default function Footer() {
   return (
-    <footer className="bg-black border-t border-gray-800">
-      <div className="container mx-auto px-4 py-6">
+    <footer className="backdrop-blur-xl bg-black/60 border-t border-purple-500/20">
+      <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Logo and Description */}
-        <div className="flex flex-col items-center mb-6">
-          <div className="flex items-center gap-3 mb-2">
+        <div className="flex flex-col items-center mb-8">
+          <div className="flex items-center gap-3 mb-3">
             <Logo />
             <p className="text-sm text-gray-300 max-w-md">
-              Transforming digital experiences with AI-powered solutions
-              that drive engagement and boost productivity.
+              Transforming digital experiences with AI-powered solutions that
+              drive engagement and boost productivity.
             </p>
           </div>
         </div>
 
         {/* Main Footer Content */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6 text-sm">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8 text-sm">
           <div>
-            <h3 className="font-semibold text-white mb-2">Product</h3>
+            <h3 className="font-semibold text-white mb-3">Product</h3>
             <ul className="space-y-1">
               {footerLinks.product.map((link) => (
                 <li key={link.name}>
                   <Link
                     href={link.href}
-                    className="text-gray-300 hover:text-pink-500 transition-colors"
-                    style={{ "--hover-color": "#d53f8c" } as React.CSSProperties}
+                    className="text-gray-300 hover:text-white transition-colors px-2 py-1 rounded-md hover:bg-white/10"
                   >
                     {link.name}
                   </Link>
@@ -98,7 +99,7 @@ export default function Footer() {
           </div>
 
           <div>
-            <h3 className="font-semibold text-white mb-2">Company</h3>
+            <h3 className="font-semibold text-white mb-3">Company</h3>
             <ul className="space-y-1">
               {footerLinks.company.map((link) => (
                 <li key={link.name}>
@@ -107,16 +108,14 @@ export default function Footer() {
                       href={link.href}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-gray-300 hover:text-pink-500 transition-colors"
-                      style={{ "--hover-color": "#d53f8c" } as React.CSSProperties}
+                      className="text-gray-300 hover:text-white transition-colors px-2 py-1 rounded-md hover:bg-white/10"
                     >
                       {link.name}
                     </a>
                   ) : (
                     <Link
                       href={link.href}
-                      className="text-gray-300 hover:text-pink-500 transition-colors"
-                      style={{ "--hover-color": "#d53f8c" } as React.CSSProperties}
+                      className="text-gray-300 hover:text-white transition-colors px-2 py-1 rounded-md hover:bg-white/10"
                     >
                       {link.name}
                     </Link>
@@ -127,14 +126,13 @@ export default function Footer() {
           </div>
 
           <div>
-            <h3 className="font-semibold text-white mb-2">Resources</h3>
+            <h3 className="font-semibold text-white mb-3">Resources</h3>
             <ul className="space-y-1">
               {footerLinks.resources.map((link) => (
                 <li key={link.name}>
                   <Link
                     href={link.href}
-                    className="text-gray-300 hover:text-pink-500 transition-colors"
-                    style={{ "--hover-color": "#d53f8c" } as React.CSSProperties}
+                    className="text-gray-300 hover:text-white transition-colors px-2 py-1 rounded-md hover:bg-white/10"
                   >
                     {link.name}
                   </Link>
@@ -144,14 +142,13 @@ export default function Footer() {
           </div>
 
           <div>
-            <h3 className="font-semibold text-white mb-2">Legal</h3>
+            <h3 className="font-semibold text-white mb-3">Legal</h3>
             <ul className="space-y-1">
               {footerLinks.legal.map((link) => (
                 <li key={link.name}>
                   <Link
                     href={link.href}
-                    className="text-gray-300 hover:text-pink-500 transition-colors"
-                    style={{ "--hover-color": "#d53f8c" } as React.CSSProperties}
+                    className="text-gray-300 hover:text-white transition-colors px-2 py-1 rounded-md hover:bg-white/10"
                   >
                     {link.name}
                   </Link>
@@ -162,8 +159,8 @@ export default function Footer() {
         </div>
 
         {/* Bottom Bar */}
-        <div className="pt-4 border-t border-gray-800">
-          <div className="flex flex-col md:flex-row justify-between items-center gap-2">
+        <div className="pt-6 border-t border-purple-500/20">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-3">
             <div className="flex items-center gap-3">
               {socialLinks.map((social) => (
                 <a
@@ -171,8 +168,7 @@ export default function Footer() {
                   href={social.href}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-gray-300 hover:text-pink-500 transition-colors"
-                  style={{ "--hover-color": "#d53f8c" } as React.CSSProperties}
+                  className="text-gray-300 hover:text-white transition-colors p-2 rounded-lg hover:bg-white/10"
                 >
                   <social.icon className="w-5 h-5" />
                 </a>

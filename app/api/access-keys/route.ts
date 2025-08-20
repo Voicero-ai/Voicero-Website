@@ -1,7 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../lib/auth";
 import { query } from "../../../lib/db";
+import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
 
@@ -70,20 +72,19 @@ export async function POST(request: Request) {
       );
     }
 
-    // Generate a random key
-    const key = `vk_${Math.random()
-      .toString(36)
-      .substring(2, 15)}_${Math.random().toString(36).substring(2, 15)}`;
+    // Generate a new access key
+    const newAccessKey = generateAccessKey();
+    const hashedAccessKey = await hashAccessKey(newAccessKey);
 
-    // Insert the new access key
+    // Store the hashed access key
     await query(
-      "INSERT INTO AccessKey (id, name, `key`, websiteId, createdAt) VALUES (UUID(), ?, ?, ?, NOW())",
-      [name || "Default", key, websiteId]
+      "INSERT INTO AccessKey (id, name, key, websiteId) VALUES (UUID(), ?, ?, ?)",
+      [name || "Default", hashedAccessKey, websiteId]
     );
 
     // Retrieve the newly created key
     const newKeys = (await query("SELECT * FROM AccessKey WHERE `key` = ?", [
-      key,
+      hashedAccessKey,
     ])) as any[];
 
     return NextResponse.json(newKeys[0]);
@@ -131,4 +132,16 @@ export async function DELETE(request: Request) {
       { status: 500 }
     );
   }
+}
+
+// Generate a secure access key
+function generateAccessKey(): string {
+  return `vk_${crypto.randomBytes(16).toString("hex")}_${crypto
+    .randomBytes(16)
+    .toString("hex")}`;
+}
+
+// Hash the access key before storage
+async function hashAccessKey(accessKey: string): Promise<string> {
+  return await bcrypt.hash(accessKey, 12);
 }

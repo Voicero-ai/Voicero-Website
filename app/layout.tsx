@@ -107,6 +107,11 @@ export default async function RootLayout({
         <div className="min-h-screen flex flex-col">
           <main className="flex-grow flex flex-col">{children}</main>
         </div>
+        <Script
+          src="http://localhost:8090/widget.js"
+          strategy="afterInteractive"
+          data-token="33f83f3ff4ec25585718df2716c8a81956f8244a50dc92bb87b59cdbf9a80e04"
+        />
       </body>
     </html>
   );

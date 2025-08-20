@@ -1,4 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { cors } from "@/lib/cors";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 import { PrismaClient } from "@prisma/client";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";
@@ -1362,40 +1364,36 @@ async function addToVectorStore(websiteId: string): Promise<VectorizeStats> {
 
 export async function POST(request: Request) {
   try {
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const isTokenValid = await verifyToken(authHeader);
+
+    if (!isTokenValid) {
       return NextResponse.json(
-        { error: "Missing or invalid authorization header" },
+        { error: "Unauthorized - Invalid token" },
         { status: 401 }
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
-    if (!accessKey) {
+    // Get the website ID from the verified token
+    const websiteId = await getWebsiteIdFromToken(authHeader);
+
+    if (!websiteId) {
       return NextResponse.json(
-        { error: "No access key provided" },
-        { status: 401 }
+        { error: "Could not determine website ID from token" },
+        { status: 400 }
       );
     }
 
-    // Find the website associated with this access key
-    const website = await prisma.website.findFirst({
+    // Find the website using the website ID
+    const website = await prisma.website.findUnique({
       where: {
-        accessKeys: {
-          some: {
-            key: accessKey,
-          },
-        },
+        id: websiteId,
       },
     });
 
     if (!website) {
-      return NextResponse.json(
-        { error: "Invalid access key" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
 
     // Add content to vector store

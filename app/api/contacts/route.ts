@@ -3,6 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cors } from "@/lib/cors";
 import { query } from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -47,61 +48,25 @@ export async function OPTIONS(request: NextRequest) {
 async function handleContacts(
   request: NextRequest,
   websiteId: string,
-  accessToken: string
+  websiteIdFromToken: string
 ) {
-  /* ---------- verify token maps to website ---------- */
-  const accessKeys = (await query(
-    `SELECT ak.id, ak.\`key\`, ak.websiteId, w.id as website_id, w.userId 
-     FROM AccessKey ak
-     JOIN Website w ON ak.websiteId = w.id
-     WHERE ak.\`key\` = ?`,
-    [accessToken]
-  )) as any[];
+  // Use the websiteId from token if no specific websiteId is provided
+  const finalWebsiteId = websiteId || websiteIdFromToken;
 
-  if (!accessKeys.length) {
+  if (!finalWebsiteId) {
     return cors(
       request,
-      NextResponse.json({ error: "Invalid access token" }, { status: 401 })
+      NextResponse.json({ error: "Website ID is required" }, { status: 400 })
     );
   }
-
-  const accessKey = {
-    ...accessKeys[0],
-    website: {
-      id: accessKeys[0].website_id,
-      userId: accessKeys[0].userId,
-    },
-  };
-
-  // Use the provided websiteId or the one from the access key
-  const finalWebsiteId = websiteId || accessKey.website.id;
-
-  // Verify the website matches the one from the access key if websiteId was provided
-  if (websiteId && accessKey.website.id !== websiteId) {
-    return cors(
-      request,
-      NextResponse.json(
-        { error: "Unauthorized to access this website's contacts" },
-        { status: 403 }
-      )
-    );
-  }
-
-  /* ---------- fetch contacts ---------- */
-  // Get contacts filtered by websiteId if provided
-  const whereClause = finalWebsiteId
-    ? "WHERE c.websiteId = ?"
-    : "WHERE c.userId = ?";
-
-  const params = finalWebsiteId ? [finalWebsiteId] : [accessKey.website.userId];
 
   const contacts = (await query(
     `SELECT c.*, u.name as user_name, u.email as user_email
      FROM Contact c
      JOIN User u ON c.userId = u.id
-     ${whereClause}
+     WHERE c.websiteId = ?
      ORDER BY c.createdAt DESC`,
-    params
+    [finalWebsiteId]
   )) as any[];
 
   // Format contacts to match the expected structure
@@ -133,23 +98,37 @@ async function handleContacts(
 /* -------------------------------------------------- */
 export async function GET(request: NextRequest) {
   try {
-    /* --- auth header --- */
+    // Verify the Bearer token
     const authHeader = request.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const isTokenValid = await verifyToken(authHeader);
+
+    if (!isTokenValid) {
       return cors(
         request,
         NextResponse.json(
-          { error: "Invalid authorization token" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
-    const accessToken = authHeader.split(" ")[1];
+
+    // Get the website ID from the verified token
+    const websiteIdFromToken = await getWebsiteIdFromToken(authHeader);
+
+    if (!websiteIdFromToken) {
+      return cors(
+        request,
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
+      );
+    }
 
     /* --- websiteId via query param --- */
     const websiteId = request.nextUrl.searchParams.get("websiteId") ?? "";
 
-    return await handleContacts(request, websiteId, accessToken);
+    return await handleContacts(request, websiteId, websiteIdFromToken);
   } catch (err) {
     console.error("GET /api/contacts error:", err);
     return cors(
@@ -164,23 +143,37 @@ export async function GET(request: NextRequest) {
 /* -------------------------------------------------- */
 export async function POST(request: NextRequest) {
   try {
-    /* --- auth header --- */
+    // Verify the Bearer token
     const authHeader = request.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const isTokenValid = await verifyToken(authHeader);
+
+    if (!isTokenValid) {
       return cors(
         request,
         NextResponse.json(
-          { error: "Invalid authorization token" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
-    const accessToken = authHeader.split(" ")[1];
+
+    // Get the website ID from the verified token
+    const websiteIdFromToken = await getWebsiteIdFromToken(authHeader);
+
+    if (!websiteIdFromToken) {
+      return cors(
+        request,
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
+      );
+    }
 
     /* --- websiteId from JSON body --- */
     const { websiteId } = await request.json();
 
-    return await handleContacts(request, websiteId, accessToken);
+    return await handleContacts(request, websiteId, websiteIdFromToken);
   } catch (err) {
     console.error("POST /api/contacts error:", err);
     return cors(

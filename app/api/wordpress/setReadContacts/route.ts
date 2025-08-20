@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-import { cors } from "../../../../lib/cors";
-export const dynamic = "force-dynamic";
+import { cors } from "@/lib/cors";
+import prisma from "@/lib/prisma";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
-// Create a new PrismaClient instance or use the existing one
-const prisma = new PrismaClient();
+export const dynamic = "force-dynamic";
 
 export async function OPTIONS(request: NextRequest) {
   return cors(request, new NextResponse(null, { status: 204 }));
@@ -13,32 +12,36 @@ export async function OPTIONS(request: NextRequest) {
 export async function POST(request: NextRequest) {
   console.log("📝 setReadContacts API called");
   try {
-    // Get the authorization header
+    // Verify the Bearer token
     const authHeader = request.headers.get("authorization");
-    console.log("🔑 Auth header present:", !!authHeader);
+    const isTokenValid = await verifyToken(authHeader);
 
-    if (!authHeader?.startsWith("Bearer ")) {
-      console.log("❌ Invalid auth header format");
+    if (!isTokenValid) {
+      console.log("❌ Invalid token");
       return cors(
         request,
         NextResponse.json(
-          { error: "Missing or invalid authorization header" },
+          { error: "Unauthorized - Invalid token" },
           { status: 401 }
         )
       );
     }
 
-    // Extract the access key
-    const accessKey = authHeader.split(" ")[1];
-    console.log("🔑 Access key extracted:", accessKey ? "✅" : "❌");
+    // Get the website ID from the verified token
+    const websiteId = await getWebsiteIdFromToken(authHeader);
 
-    if (!accessKey) {
-      console.log("❌ No access key provided");
+    if (!websiteId) {
+      console.log("❌ Could not determine website ID from token");
       return cors(
         request,
-        NextResponse.json({ error: "No access key provided" }, { status: 401 })
+        NextResponse.json(
+          { error: "Could not determine website ID from token" },
+          { status: 400 }
+        )
       );
     }
+
+    console.log("🌐 Website ID from token:", websiteId);
 
     // Get request body
     const body = await request.json();
@@ -58,28 +61,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // First find the website ID using the access key
-    console.log("🔍 Looking up access key in database");
-    const accessKeyRecord = await prisma.accessKey.findUnique({
-      where: {
-        key: accessKey,
-      },
-      select: {
-        websiteId: true,
-      },
-    });
-    console.log("🔑 Access key record found:", !!accessKeyRecord);
-
-    if (!accessKeyRecord) {
-      console.log("❌ Invalid access key");
-      return cors(
-        request,
-        NextResponse.json({ error: "Invalid access key" }, { status: 401 })
-      );
-    }
-
-    console.log("🌐 Website ID:", accessKeyRecord.websiteId);
-
     // Find the contact to ensure it exists and belongs to the website owner
     console.log("🔍 Looking up contact");
     const contact = await prisma.contact.findFirst({
@@ -88,7 +69,7 @@ export async function POST(request: NextRequest) {
         user: {
           websites: {
             some: {
-              id: accessKeyRecord.websiteId,
+              id: websiteId,
             },
           },
         },

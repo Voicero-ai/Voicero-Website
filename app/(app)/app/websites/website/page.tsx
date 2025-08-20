@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   FaSync,
@@ -17,8 +17,12 @@ import {
   FaExclamationTriangle,
   FaTrash,
   FaPercent,
+  FaEllipsisV,
+  FaCog,
+  FaQuestionCircle,
+  FaChartLine,
 } from "react-icons/fa";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 
 // SVG Icons for different options
@@ -179,7 +183,93 @@ interface ContentItem {
   [key: string]: any;
 }
 
-// Data shape from the new API route
+// Add these interfaces at the top with your other interfaces
+interface SetupInstructions {
+  wordpress: {
+    steps: string[];
+    pluginUrl: string;
+    appUrl?: never;
+  };
+  shopify: {
+    steps: string[];
+    appUrl: string;
+    pluginUrl?: never;
+  };
+  custom?: {
+    steps: string[];
+    docsUrl: string;
+  };
+}
+
+// New interfaces for rich AI data
+interface ActionConversation {
+  thread: {
+    id: string;
+    messages: Array<{
+      id: string;
+      content: string;
+      createdAt: string;
+      role: string;
+      type: string;
+      pageUrl?: string;
+      scrollToText?: string;
+    }>;
+  };
+  actions: Array<{
+    messageId: string;
+    createdAt: string;
+    url?: string;
+    normalizedUrl?: string;
+    buttonText?: string;
+    css_selector?: string;
+    productId?: string;
+    productName?: string;
+    sectionId?: string;
+    scrollToText?: string;
+  }>;
+}
+
+interface ActionDetails {
+  click: ActionConversation[];
+  purchase: ActionConversation[];
+  redirect: ActionConversation[];
+  scroll: ActionConversation[];
+}
+
+interface AIOverview {
+  total_message_threads: number;
+  resolved_threads: number;
+  total_threads: number;
+  problem_resolution_rate: {
+    percent: number;
+  };
+  period_label: string;
+  avg_messages_per_thread: number;
+  most_common_questions: Array<{
+    category: string;
+    threads: number;
+    description: string;
+  }>;
+  recent_questions_by_topic: Array<{
+    topic: string;
+    items: Array<{
+      question: string;
+      status: string;
+      note: string;
+    }>;
+  }>;
+  total_revenue_increase: {
+    amount: number;
+    currency: string;
+    breakdown: {
+      threads: number;
+      percent_of_total_threads: number;
+      aov: number;
+    };
+  };
+}
+
+// Update WebsiteData interface to include new fields
 interface WebsiteData {
   id: string;
   domain: string;
@@ -256,30 +346,50 @@ interface WebsiteData {
   allowAutoGenerateImage?: boolean;
   allowMultiAIReview?: boolean;
   clickMessage?: string;
-}
-
-// Add these interfaces at the top with your other interfaces
-interface SetupInstructions {
-  wordpress: {
-    steps: string[];
-    pluginUrl: string;
-    appUrl?: never;
+  // New fields
+  actionConversations?: ActionDetails;
+  actionDetails?: ActionDetails;
+  aiOverview?: AIOverview;
+  aiOverviewRevenue?: {
+    amount: number;
+    currency: string;
+    breakdown: {
+      threads: number;
+      percent_of_total_threads: number;
+      aov: number;
+    };
   };
-  shopify: {
-    steps: string[];
-    appUrl: string;
-    pluginUrl?: never;
-  };
-  custom?: {
-    steps: string[];
-    docsUrl: string;
-  };
+  showVoiceAI?: boolean;
+  showTextAI?: boolean;
 }
 
 // Add this helper function at the top of the file
 function countWords(str: string): number {
   return str.trim().split(/\s+/).length;
 }
+
+// Parse assistant JSON content to extract a clean answer and action
+function parseAssistantMessage(raw: string): {
+  answer?: string;
+  action?: string;
+} {
+  try {
+    let content = raw?.trim?.() ?? "";
+    if (!content) return {};
+    if (content.includes("```json")) {
+      content = content.replace(/```json\s*|```/g, "");
+    }
+    const obj = JSON.parse(content);
+    const answer = typeof obj?.answer === "string" ? obj.answer : undefined;
+    const action = typeof obj?.action === "string" ? obj.action : undefined;
+    return { answer, action };
+  } catch {
+    return {};
+  }
+}
+
+// Simple client-side cache key prefix for website data
+const CACHE_KEY_PREFIX = "voicero.websiteData.cache:";
 
 export default function WebsiteSettings() {
   const searchParams = useSearchParams()!;
@@ -301,36 +411,193 @@ export default function WebsiteSettings() {
   const [isToggling, setIsToggling] = useState(false);
 
   // Add this state for syncing status
-  const [isSyncingInstructions, setIsSyncingInstructions] = useState(false);
-
-  const [isSavingColor, setIsSavingColor] = useState(false);
-  const [colorSaveError, setColorSaveError] = useState<string | null>(null);
-
   const [showPlanModal, setShowPlanModal] = useState(false);
   const [isPlanLoading, setIsPlanLoading] = useState(false);
   const [planError, setPlanError] = useState("");
-
-  // Add this state for UI settings
-  const [isSavingUiSettings, setIsSavingUiSettings] = useState(false);
-  const [uiSettingsError, setUiSettingsError] = useState<string | null>(null);
-
-  // Add this state after the existing state declarations
-  const [activeSettingsTab, setActiveSettingsTab] = useState<
-    "appearance" | "behavior" | "questions" | "features"
-  >("appearance");
-
-  // Add this state for saving auto features
-  const [isSavingAutoFeatures, setIsSavingAutoFeatures] = useState(false);
-  const [autoFeaturesError, setAutoFeaturesError] = useState<string | null>(
-    null
-  );
-  const [showFeatureWarning, setShowFeatureWarning] = useState(false);
-  const [pendingFeatureChanges, setPendingFeatureChanges] = useState<any>(null);
 
   const [isDeletingContent, setIsDeletingContent] = useState<
     Record<string, boolean>
   >({});
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // New state for caching and AI data
+  const [cachedData, setCachedData] = useState<WebsiteData | null>(null);
+  const [isRefreshingAI, setIsRefreshingAI] = useState(false);
+  const [isActionsOpen, setIsActionsOpen] = useState(false);
+  type ActionType = "redirect" | "scroll" | "click" | "purchase";
+  const [selectedAction, setSelectedAction] = useState<ActionType | null>(null);
+  const [expandedThreads, setExpandedThreads] = useState<
+    Record<string, boolean>
+  >({});
+  const toggleThreadExpanded = (threadId: string) =>
+    setExpandedThreads((prev) => ({ ...prev, [threadId]: !prev[threadId] }));
+
+  // AI Feature Toggle States
+  const [showVoiceAI, setShowVoiceAI] = useState<boolean>(false);
+  const [showTextAI, setShowTextAI] = useState<boolean>(false);
+  const [isTogglingAI, setIsTogglingAI] = useState(false);
+
+  // Debug state changes
+  useEffect(() => {
+    console.log("showVoiceAI state changed to:", showVoiceAI);
+  }, [showVoiceAI]);
+
+  useEffect(() => {
+    console.log("showTextAI state changed to:", showTextAI);
+  }, [showTextAI]);
+
+  // Track user edits to prevent them from being overwritten by background refreshes
+  const [userEditedVoiceAI, setUserEditedVoiceAI] = useState<boolean | null>(
+    null
+  );
+  const [userEditedTextAI, setUserEditedTextAI] = useState<boolean | null>(
+    null
+  );
+  // Refs to avoid stale closures in async fetch handlers
+  const userEditedVoiceAIRef = React.useRef<boolean | null>(null);
+  const userEditedTextAIRef = React.useRef<boolean | null>(null);
+  const [userEditedActive, setUserEditedActive] = useState<boolean | null>(
+    null
+  );
+  const userEditedActiveRef = React.useRef<boolean | null>(null);
+  useEffect(() => {
+    userEditedVoiceAIRef.current = userEditedVoiceAI;
+  }, [userEditedVoiceAI]);
+  useEffect(() => {
+    userEditedTextAIRef.current = userEditedTextAI;
+  }, [userEditedTextAI]);
+  useEffect(() => {
+    userEditedActiveRef.current = userEditedActive;
+  }, [userEditedActive]);
+
+  // AI Feature Toggle Functions
+  const handleToggleVoiceAI = async () => {
+    if (!websiteId || isTogglingAI) return;
+
+    setIsTogglingAI(true);
+    try {
+      const response = await fetch("/api/websites/update-ui-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          websiteId,
+          showVoiceAI: !showVoiceAI,
+        }),
+      });
+
+      if (response.ok) {
+        const newShowVoiceAI = !showVoiceAI;
+        setShowVoiceAI(newShowVoiceAI);
+
+        // Keep userEditedVoiceAI until GET confirms server state matches
+        setUserEditedVoiceAI(newShowVoiceAI);
+
+        // Update websiteData if it exists
+        if (websiteData) {
+          const updatedWebsiteData = {
+            ...websiteData,
+            showVoiceAI: newShowVoiceAI,
+          };
+          setWebsiteData(updatedWebsiteData);
+
+          // Update cache to keep it in sync
+          const cacheKey = `${CACHE_KEY_PREFIX}${websiteId}`;
+          try {
+            const existingCache = localStorage.getItem(cacheKey);
+            if (existingCache) {
+              const parsed = JSON.parse(existingCache);
+              console.log("Voice AI: Updating cache - before:", {
+                cachedShowVoiceAI: parsed.data?.showVoiceAI,
+                cachedShowTextAI: parsed.data?.showTextAI,
+              });
+
+              const updatedCache = {
+                ...parsed,
+                data: updatedWebsiteData,
+              };
+
+              console.log("Voice AI: Updating cache - after:", {
+                cachedShowVoiceAI: updatedCache.data?.showVoiceAI,
+                finalShowVoiceAI: updatedWebsiteData.showVoiceAI,
+              });
+
+              localStorage.setItem(cacheKey, JSON.stringify(updatedCache));
+            }
+          } catch {}
+        }
+      } else {
+        console.error("Failed to toggle Voice AI");
+      }
+    } catch (error) {
+      console.error("Error toggling Voice AI:", error);
+    } finally {
+      setIsTogglingAI(false);
+    }
+  };
+
+  const handleToggleTextAI = async () => {
+    if (!websiteId || isTogglingAI) return;
+
+    setIsTogglingAI(true);
+    try {
+      const response = await fetch("/api/websites/update-ui-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          websiteId,
+          showTextAI: !showTextAI,
+        }),
+      });
+
+      if (response.ok) {
+        const newShowTextAI = !showTextAI;
+        setShowTextAI(newShowTextAI);
+
+        // Keep userEditedTextAI until GET confirms server state matches
+        setUserEditedTextAI(newShowTextAI);
+
+        // Update websiteData if it exists
+        if (websiteData) {
+          const updatedWebsiteData = {
+            ...websiteData,
+            showTextAI: newShowTextAI,
+          };
+          setWebsiteData(updatedWebsiteData);
+
+          // Update cache to keep it in sync
+          const cacheKey = `${CACHE_KEY_PREFIX}${websiteId}`;
+          try {
+            const existingCache = localStorage.getItem(cacheKey);
+            if (existingCache) {
+              const parsed = JSON.parse(existingCache);
+              console.log("Text AI: Updating cache - before:", {
+                cachedShowVoiceAI: parsed.data?.showVoiceAI,
+                cachedShowTextAI: parsed.data?.showTextAI,
+              });
+
+              const updatedCache = {
+                ...parsed,
+                data: updatedWebsiteData,
+              };
+
+              console.log("Text AI: Updating cache - after:", {
+                cachedShowVoiceAI: updatedCache.data?.showVoiceAI,
+                finalShowTextAI: updatedWebsiteData.showTextAI,
+              });
+
+              localStorage.setItem(cacheKey, JSON.stringify(updatedCache));
+            }
+          } catch {}
+        }
+      } else {
+        console.error("Failed to toggle Text AI");
+      }
+    } catch (error) {
+      console.error("Error toggling Text AI:", error);
+    } finally {
+      setIsTogglingAI(false);
+    }
+  };
 
   const setupInstructions: SetupInstructions = {
     wordpress: {
@@ -353,36 +620,53 @@ export default function WebsiteSettings() {
     },
   };
 
-  const router = useRouter();
+  // Note: avoid client-side redirects on data errors; keep user on page
 
-  // 1) Fetch the data from our new route: /api/website/get?id=<websiteId>
+  // 1) Fetch data with stale-while-revalidate using localStorage cache
   useEffect(() => {
     if (!websiteId) return;
-    setIsLoading(true);
+
+    const cacheKey = `${CACHE_KEY_PREFIX}${websiteId}`;
+    let usedCache = false;
+
+    // Try to load from localStorage synchronously for instant render
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.data) {
+          console.log("Loading from cache:", {
+            cachedShowVoiceAI: parsed.data.showVoiceAI,
+            cachedShowTextAI: parsed.data.showTextAI,
+          });
+          setCachedData(parsed.data);
+          setWebsiteData(parsed.data);
+
+          // Initialize AI feature states from cache
+          setShowVoiceAI(parsed.data.showVoiceAI ?? false);
+          setShowTextAI(parsed.data.showTextAI ?? false);
+
+          setIsLoading(false);
+          usedCache = true;
+        }
+      }
+    } catch (_) {}
 
     const fetchData = async () => {
       try {
         const res = await fetch(`/api/websites/get?id=${websiteId}`, {
           method: "GET",
+          headers: { "Cache-Control": "no-cache" },
         });
-        if (!res.ok) {
-          console.error("Failed to fetch website data:", res.status);
 
-          // If unauthorized (403) or not found (404), redirect to websites list
-          if (res.status === 403 || res.status === 404) {
-            router.push("/app/websites");
-            return;
-          }
+        if (!res.ok) {
+          // Do not navigate away; show cached data if available
           return;
         }
+
         const data = await res.json();
+
         console.log("Website data loaded:", data);
-        console.log("Website data loaded:", {
-          iconBot: data.iconBot,
-          iconVoice: data.iconVoice,
-          iconMessage: data.iconMessage,
-          clickMessage: data.clickMessage,
-        });
 
         // Ensure default values for icon fields
         if (!data.iconBot || data.iconBot === "MessageIcon")
@@ -392,18 +676,200 @@ export default function WebsiteSettings() {
         if (!data.iconMessage || data.iconMessage === "MessageIcon")
           data.iconMessage = "message";
 
-        setWebsiteData(data);
+        // Merge new data with existing cached data to preserve any fields that might be missing
+        console.log("Merging data - cached AI states:", {
+          cachedShowVoiceAI: cachedData?.showVoiceAI,
+          cachedShowTextAI: cachedData?.showTextAI,
+        });
+        console.log("Merging data - new AI states:", {
+          newShowVoiceAI: data.showVoiceAI,
+          newShowTextAI: data.showTextAI,
+        });
+        console.log("Merging data - user edited states:", {
+          userEditedVoiceAI,
+          userEditedTextAI,
+          userEditedActive,
+        });
+
+        const mergedData = {
+          ...cachedData,
+          ...data,
+          // Ensure AI feature states are preserved - prioritize user edits, then new data, then cached data, then defaults
+          showVoiceAI:
+            userEditedVoiceAIRef.current !== null
+              ? userEditedVoiceAIRef.current
+              : data.showVoiceAI !== undefined
+              ? data.showVoiceAI
+              : cachedData?.showVoiceAI ?? false,
+          showTextAI:
+            userEditedTextAIRef.current !== null
+              ? userEditedTextAIRef.current
+              : data.showTextAI !== undefined
+              ? data.showTextAI
+              : cachedData?.showTextAI ?? false,
+          // Preserve website active status similarly to AI flags
+          active:
+            userEditedActiveRef.current !== null
+              ? userEditedActiveRef.current
+              : data.active !== undefined
+              ? data.active
+              : cachedData?.active ?? false,
+          status:
+            userEditedActiveRef.current !== null
+              ? userEditedActiveRef.current
+                ? "active"
+                : "inactive"
+              : data.status !== undefined
+              ? data.status
+              : cachedData?.status ??
+                ((cachedData?.active ? "active" : "inactive") as
+                  | "active"
+                  | "inactive"),
+        };
+
+        console.log("Merged data - final AI states:", {
+          finalShowVoiceAI: mergedData.showVoiceAI,
+          finalShowTextAI: mergedData.showTextAI,
+          userEditedVoiceAI,
+          userEditedTextAI,
+          preservingUserEdits:
+            userEditedVoiceAI !== null || userEditedTextAI !== null,
+        });
+
+        setCachedData(mergedData);
+        setWebsiteData(mergedData);
+
+        // If server confirms user's pending edits, clear the flags
+        if (
+          userEditedVoiceAIRef.current !== null &&
+          mergedData.showVoiceAI === userEditedVoiceAIRef.current
+        ) {
+          setUserEditedVoiceAI(null);
+        }
+        if (
+          userEditedTextAIRef.current !== null &&
+          mergedData.showTextAI === userEditedTextAIRef.current
+        ) {
+          setUserEditedTextAI(null);
+        }
+
+        if (
+          userEditedActiveRef.current !== null &&
+          mergedData.active === userEditedActiveRef.current
+        ) {
+          setUserEditedActive(null);
+        }
+
+        // Initialize AI feature states
+        console.log("Setting AI feature states:", {
+          showVoiceAI: mergedData.showVoiceAI,
+          showTextAI: mergedData.showTextAI,
+        });
+        setShowVoiceAI(mergedData.showVoiceAI ?? false);
+        setShowTextAI(mergedData.showTextAI ?? false);
+
+        try {
+          localStorage.setItem(
+            cacheKey,
+            JSON.stringify({ ts: Date.now(), data: mergedData })
+          );
+        } catch {}
       } catch (error) {
-        console.error("Error fetching website data:", error);
-        // On any error, also redirect to websites list
-        router.push("/app/websites");
+        // Do not navigate away on error; continue showing cache if present
       } finally {
-        setIsLoading(false);
+        if (!usedCache) setIsLoading(false);
       }
     };
 
+    if (!usedCache) setIsLoading(true);
     fetchData();
-  }, [websiteId, router]);
+  }, [websiteId]);
+
+  // Function to refresh AI data in background
+  const refreshAIData = async () => {
+    if (!websiteId || isRefreshingAI) return;
+
+    setIsRefreshingAI(true);
+    const cacheKey = `${CACHE_KEY_PREFIX}${websiteId}`;
+    try {
+      const res = await fetch(`/api/websites/get?id=${websiteId}`, {
+        method: "GET",
+        headers: { "Cache-Control": "no-cache" },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+
+        console.log("AI data refreshed:", data);
+        // Only update if we have new AI data or if cached data is missing AI fields
+        if (data.aiOverview || data.actionDetails || !cachedData?.aiOverview) {
+          // Merge new data with existing cached data to preserve any fields that might be missing
+          const mergedData = {
+            ...cachedData,
+            ...data,
+            // Ensure AI feature states are preserved - prioritize user edits, then new data, then cached data, then defaults
+            showVoiceAI:
+              userEditedVoiceAIRef.current !== null
+                ? userEditedVoiceAIRef.current
+                : data.showVoiceAI !== undefined
+                ? data.showVoiceAI
+                : cachedData?.showVoiceAI ?? false,
+            showTextAI:
+              userEditedTextAIRef.current !== null
+                ? userEditedTextAIRef.current
+                : data.showTextAI !== undefined
+                ? data.showTextAI
+                : cachedData?.showTextAI ?? false,
+          };
+
+          setCachedData(mergedData);
+          setWebsiteData(mergedData);
+
+          // If server confirms user's pending edits, clear the flags
+          if (
+            userEditedVoiceAIRef.current !== null &&
+            mergedData.showVoiceAI === userEditedVoiceAIRef.current
+          ) {
+            setUserEditedVoiceAI(null);
+          }
+          if (
+            userEditedTextAIRef.current !== null &&
+            mergedData.showTextAI === userEditedTextAIRef.current
+          ) {
+            setUserEditedTextAI(null);
+          }
+
+          // If server confirms user's pending edits, clear the flags
+          if (
+            userEditedVoiceAI !== null &&
+            mergedData.showVoiceAI === userEditedVoiceAI
+          ) {
+            setUserEditedVoiceAI(null);
+          }
+          if (
+            userEditedTextAI !== null &&
+            mergedData.showTextAI === userEditedTextAI
+          ) {
+            setUserEditedTextAI(null);
+          }
+
+          // Initialize AI feature states
+          setShowVoiceAI(mergedData.showVoiceAI ?? false);
+          setShowTextAI(mergedData.showTextAI ?? false);
+
+          try {
+            localStorage.setItem(
+              cacheKey,
+              JSON.stringify({ ts: Date.now(), data: mergedData })
+            );
+          } catch {}
+        }
+      }
+    } catch (_) {
+    } finally {
+      setIsRefreshingAI(false);
+    }
+  };
 
   // Check if setup is needed when data loads
   useEffect(() => {
@@ -418,6 +884,20 @@ export default function WebsiteSettings() {
       setActiveTab("pages");
     }
   }, [websiteData]);
+
+  // Auto-refresh AI data only when needed
+  useEffect(() => {
+    if (cachedData && !isRefreshingAI) {
+      // Only refresh if we don't have AI data yet
+      if (!cachedData.aiOverview && !cachedData.actionDetails) {
+        const timer = setTimeout(() => {
+          refreshAIData();
+        }, 3000); // Increased delay to avoid unnecessary refreshes
+
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [cachedData]);
 
   // Add a useEffect to refresh data when returning from Stripe with upgraded=true parameter
   useEffect(() => {
@@ -437,9 +917,64 @@ export default function WebsiteSettings() {
           });
           if (res.ok) {
             const data = await res.json();
-            setWebsiteData(data);
+            console.log("Website data refreshed:", data);
+
+            // Merge new data with existing cached data to preserve any fields that might be missing
+            const mergedData = {
+              ...cachedData,
+              ...data,
+              // Ensure AI feature states are preserved - prioritize user edits, then new data, then cached data, then defaults
+              showVoiceAI:
+                userEditedVoiceAIRef.current !== null
+                  ? userEditedVoiceAIRef.current
+                  : data.showVoiceAI !== undefined
+                  ? data.showVoiceAI
+                  : cachedData?.showVoiceAI ?? false,
+              showTextAI:
+                userEditedTextAIRef.current !== null
+                  ? userEditedTextAIRef.current
+                  : data.showTextAI !== undefined
+                  ? data.showTextAI
+                  : cachedData?.showTextAI ?? false,
+            };
+
+            setWebsiteData(mergedData);
+
+            // If server confirms user's pending edits, clear the flags
+            if (
+              userEditedVoiceAIRef.current !== null &&
+              mergedData.showVoiceAI === userEditedVoiceAIRef.current
+            ) {
+              setUserEditedVoiceAI(null);
+            }
+            if (
+              userEditedTextAIRef.current !== null &&
+              mergedData.showTextAI === userEditedTextAIRef.current
+            ) {
+              setUserEditedTextAI(null);
+            }
+
+            // If server confirms user's pending edits, clear the flags
+            if (
+              userEditedVoiceAI !== null &&
+              mergedData.showVoiceAI === userEditedVoiceAI
+            ) {
+              setUserEditedVoiceAI(null);
+            }
+            if (
+              userEditedTextAI !== null &&
+              mergedData.showTextAI === userEditedTextAI
+            ) {
+              setUserEditedTextAI(null);
+            }
+
+            // Initialize AI feature states
+            setShowVoiceAI(mergedData.showVoiceAI ?? false);
+            setShowTextAI(mergedData.showTextAI ?? false);
+
             // Close the plan modal if it was open
             setShowPlanModal(false);
+
             // Show success message
             alert("Plan upgraded successfully!");
           }
@@ -483,8 +1018,8 @@ export default function WebsiteSettings() {
         const shopifyAdminUrl = `https://admin.shopify.com/store/${storeName}/apps/voicero-app-shop/app`;
         window.open(shopifyAdminUrl, "_blank");
       } else if (isCustom) {
-        // For custom websites, redirect to the syncContent page
-        router.push(`/app/websites/syncContent?id=${websiteData.id}`);
+        // Open sync in a new tab to avoid navigating away
+        window.open(`/app/websites/syncContent?id=${websiteData.id}`, "_blank");
       }
     } catch (error) {
       console.error("Error during sync:", error);
@@ -546,6 +1081,26 @@ export default function WebsiteSettings() {
         status: newStatus ? "active" : "inactive",
       } as WebsiteData);
 
+      // Mark user edit and update cache immediately
+      setUserEditedActive(newStatus);
+      try {
+        const cacheKey = `${CACHE_KEY_PREFIX}${websiteId}`;
+        const existingCache = localStorage.getItem(cacheKey);
+        if (existingCache) {
+          const parsed = JSON.parse(existingCache);
+          const updatedCache = {
+            ...parsed,
+            data: {
+              ...(parsed?.data || {}),
+              ...websiteData,
+              active: newStatus,
+              status: newStatus ? "active" : "inactive",
+            },
+          };
+          localStorage.setItem(cacheKey, JSON.stringify(updatedCache));
+        }
+      } catch {}
+
       const response = await fetch("/api/websites/toggle-status", {
         method: "POST",
         headers: {
@@ -573,86 +1128,29 @@ export default function WebsiteSettings() {
         active: data.status === "active",
         status: data.status,
       } as WebsiteData);
+
+      // Sync cache with server-confirmed state
+      try {
+        const cacheKey = `${CACHE_KEY_PREFIX}${websiteId}`;
+        const existingCache = localStorage.getItem(cacheKey);
+        if (existingCache) {
+          const parsed = JSON.parse(existingCache);
+          const updatedCache = {
+            ...parsed,
+            data: {
+              ...(parsed?.data || {}),
+              ...websiteData,
+              active: data.status === "active",
+              status: data.status,
+            },
+          };
+          localStorage.setItem(cacheKey, JSON.stringify(updatedCache));
+        }
+      } catch {}
     } catch (error) {
       console.error("Error toggling status:", error);
     } finally {
       setIsToggling(false);
-    }
-  };
-
-  // Add this function to handle syncing instructions with OpenAI assistants
-  const handleSyncInstructions = async () => {
-    if (!websiteData) return;
-
-    setIsSyncingInstructions(true);
-    try {
-      const response = await fetch("/api/websites/sync-instructions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          websiteId: websiteData.id,
-          instructions: websiteData.customInstructions,
-        }),
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || "Failed to sync instructions");
-      }
-
-      // Show success toast or message
-    } catch (error) {
-      console.error("Error syncing instructions:", error);
-      // Show error toast or message
-    } finally {
-      setIsSyncingInstructions(false);
-    }
-  };
-
-  // Update the handleColorChange function
-  const handleColorChange = async (newColor: string) => {
-    if (!websiteData) return;
-
-    setIsSavingColor(true);
-    setColorSaveError(null);
-
-    try {
-      // Optimistically update the UI
-      setWebsiteData({
-        ...websiteData,
-        color: newColor,
-      } as WebsiteData);
-
-      const response = await fetch("/api/websites/update-color", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          websiteId: websiteData.id,
-          color: newColor,
-        }),
-      });
-
-      if (!response.ok) {
-        // Revert on error
-        setWebsiteData({
-          ...websiteData,
-          color: websiteData.color,
-        } as WebsiteData);
-        throw new Error("Failed to update color");
-      }
-    } catch (error) {
-      console.error("Error updating color:", error);
-      setColorSaveError("Failed to save color");
-    } finally {
-      setIsSavingColor(false);
-      // Clear error after 3 seconds if there was one
-      if (colorSaveError) {
-        setTimeout(() => setColorSaveError(null), 3000);
-      }
     }
   };
 
@@ -1660,89 +2158,6 @@ export default function WebsiteSettings() {
     );
   };
 
-  // Add this function to handle updating the clickMessage field
-  const handleSaveUiSettings = async () => {
-    if (!websiteData) return;
-
-    setIsSavingUiSettings(true);
-    setUiSettingsError(null);
-
-    // Define valid icon values
-    const validBotIcons = ["bot", "voice", "message"];
-    const validVoiceIcons = ["microphone", "waveform", "speaker"];
-    const validMessageIcons = ["message", "document", "cursor"];
-
-    // Ensure we have valid icons
-    const iconBot = validBotIcons.includes(websiteData.iconBot)
-      ? websiteData.iconBot
-      : "bot";
-    const iconVoice = validVoiceIcons.includes(websiteData.iconVoice)
-      ? websiteData.iconVoice
-      : "microphone";
-    const iconMessage = validMessageIcons.includes(websiteData.iconMessage)
-      ? websiteData.iconMessage
-      : "message";
-
-    console.log("Current clickMessage value:", websiteData.clickMessage);
-
-    try {
-      console.log("Sending data:", {
-        websiteId: websiteData.id,
-        botName: websiteData.botName,
-        customWelcomeMessage: websiteData.customWelcomeMessage,
-        iconBot,
-        iconVoice,
-        iconMessage,
-        clickMessage: websiteData.clickMessage,
-      });
-
-      const response = await fetch("/api/websites/update-ui-settings", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          websiteId: websiteData.id,
-          botName: websiteData.botName,
-          customWelcomeMessage: websiteData.customWelcomeMessage,
-          iconBot,
-          iconVoice,
-          iconMessage,
-          clickMessage: websiteData.clickMessage,
-        }),
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        console.error("API error response:", data);
-        throw new Error(data.error || "Failed to update UI settings");
-      }
-
-      const responseData = await response.json();
-      console.log("API success response:", responseData);
-
-      // Update the local state with the response data
-      setWebsiteData({
-        ...websiteData,
-        botName: responseData.website.botName,
-        customWelcomeMessage: responseData.website.customWelcomeMessage,
-        iconBot: responseData.website.iconBot,
-        iconVoice: responseData.website.iconVoice,
-        iconMessage: responseData.website.iconMessage,
-        clickMessage: responseData.website.clickMessage,
-      } as WebsiteData);
-    } catch (error) {
-      console.error("Error updating UI settings:", error);
-      setUiSettingsError("Failed to save UI settings");
-    } finally {
-      setIsSavingUiSettings(false);
-      // Clear error after 3 seconds if there was one
-      if (uiSettingsError) {
-        setTimeout(() => setUiSettingsError(null), 3000);
-      }
-    }
-  };
-
   return (
     <div className="max-w-4xl mx-auto space-y-8">
       <SetupModal />
@@ -1781,7 +2196,7 @@ export default function WebsiteSettings() {
             • {plan ? `${plan} Plan` : "No Active Plan"}
           </p>
         </div>
-        <div className="flex gap-4">
+        <div className="flex gap-4 relative">
           <motion.button
             whileHover={{ scale: !websiteData.lastSync ? 1 : 1.02 }}
             whileTap={{ scale: !websiteData.lastSync ? 1 : 0.98 }}
@@ -1813,54 +2228,150 @@ export default function WebsiteSettings() {
               ? "Deactivate"
               : "Activate"}
           </motion.button>
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={handleSync}
-            disabled={isSyncing || plan === ""}
-            className="px-4 py-2 text-brand-accent border border-brand-accent/20 rounded-xl hover:bg-brand-accent/5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <FaSync
-              className={`inline-block mr-2 ${isSyncing ? "animate-spin" : ""}`}
-            />
-            {isSyncing ? "Syncing..." : "Sync Content"}
-          </motion.button>
-
-          {/* Show "Manage Plan" for all active plans */}
-          {(plan === "Starter" || plan === "Enterprise") && (
+          {/* Actions dropdown */}
+          <div className="relative">
             <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
-              onClick={handleManageSubscription}
-              className="px-4 py-2 bg-brand-accent text-white rounded-xl shadow hover:bg-brand-accent/90 transition-shadow"
+              onClick={() => setIsActionsOpen((v) => !v)}
+              className="px-3 py-2 border border-brand-accent/20 rounded-xl hover:bg-brand-accent/5 transition-colors text-brand-text-primary flex items-center gap-2"
+              title="Actions"
             >
-              Manage Plan
+              <FaEllipsisV className="w-4 h-4" />
+              Actions
             </motion.button>
-          )}
-
-          {/* For Shopify sites, add a separate button to access Shopify admin */}
-          {(plan === "Starter" || plan === "Enterprise") &&
-            websiteData.type?.toLowerCase() === "shopify" && (
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={handleShopifyPricingRedirect}
-                className="px-4 py-2 border border-brand-accent text-brand-accent rounded-xl hover:bg-brand-accent/5 transition-colors"
-              >
-                Shopify Admin
-              </motion.button>
+            {isActionsOpen && (
+              <div className="absolute right-0 mt-2 w-64 bg-white border border-brand-lavender-light/30 rounded-lg shadow-xl z-50 py-2 text-brand-text-primary">
+                <button
+                  onClick={() => {
+                    console.log("doing ai-overview", {
+                      websiteId: websiteData.id,
+                    });
+                    setIsActionsOpen(false);
+                    const url = `/app/websites/website/ai-overview?id=${websiteData.id}`;
+                    window.open(url, "_blank");
+                    console.log("done ai-overview", {
+                      websiteId: websiteData.id,
+                    });
+                  }}
+                  className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 text-brand-text-primary"
+                >
+                  <FaChartLine className="w-4 h-4" /> AI Overview
+                </button>
+                <button
+                  onClick={() => {
+                    console.log("doing sync", { websiteId: websiteData.id });
+                    setIsActionsOpen(false);
+                    handleSync();
+                    console.log("done sync", { websiteId: websiteData.id });
+                  }}
+                  disabled={isSyncing || plan === ""}
+                  className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 disabled:opacity-50 text-brand-text-primary"
+                >
+                  <FaSync className="w-4 h-4" /> Sync Content
+                </button>
+                {(plan === "Starter" || plan === "Enterprise") && (
+                  <button
+                    onClick={() => {
+                      console.log("doing manage-plan", {
+                        websiteId: websiteData.id,
+                      });
+                      setIsActionsOpen(false);
+                      handleManageSubscription();
+                      console.log("done manage-plan", {
+                        websiteId: websiteData.id,
+                      });
+                    }}
+                    className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 text-brand-text-primary"
+                  >
+                    <FaCreditCard className="w-4 h-4" /> Manage Plan
+                  </button>
+                )}
+                {(plan === "Starter" || plan === "Enterprise") &&
+                  websiteData.type?.toLowerCase() === "shopify" && (
+                    <button
+                      onClick={() => {
+                        console.log("doing shopify-admin", {
+                          websiteId: websiteData.id,
+                        });
+                        setIsActionsOpen(false);
+                        handleShopifyPricingRedirect();
+                        console.log("done shopify-admin", {
+                          websiteId: websiteData.id,
+                        });
+                      }}
+                      className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 text-brand-text-primary"
+                    >
+                      <FaExternalLinkAlt className="w-4 h-4" /> Shopify Admin
+                    </button>
+                  )}
+                <button
+                  onClick={() => {
+                    console.log("doing interface", {
+                      websiteId: websiteData.id,
+                    });
+                    setIsActionsOpen(false);
+                    const url = `/app/websites/website/interface?id=${websiteData.id}`;
+                    window.open(url, "_blank");
+                    console.log("done interface", {
+                      websiteId: websiteData.id,
+                    });
+                  }}
+                  className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 text-brand-text-primary"
+                >
+                  <FaRobot className="w-4 h-4" /> Edit Interface
+                </button>
+                <button
+                  onClick={() => {
+                    console.log("doing settings", {
+                      websiteId: websiteData.id,
+                    });
+                    setIsActionsOpen(false);
+                    const url = `/app/websites/website/settings?id=${websiteData.id}`;
+                    window.open(url, "_blank");
+                    console.log("done settings", {
+                      websiteId: websiteData.id,
+                    });
+                  }}
+                  className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 text-brand-text-primary"
+                >
+                  <FaCog className="w-4 h-4" /> Settings
+                </button>
+                <button
+                  onClick={() => {
+                    console.log("doing news", {
+                      websiteId: websiteData.id,
+                    });
+                    setIsActionsOpen(false);
+                    const url = `/app/websites/website/news?id=${websiteData.id}`;
+                    window.open(url, "_blank");
+                    console.log("done news", {
+                      websiteId: websiteData.id,
+                    });
+                  }}
+                  className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 text-brand-text-primary"
+                >
+                  <FaNewspaper className="w-4 h-4" /> Edit News Section
+                </button>
+                <button
+                  onClick={() => {
+                    console.log("doing help", {
+                      websiteId: websiteData.id,
+                    });
+                    setIsActionsOpen(false);
+                    const url = `/app/websites/website/help?id=${websiteData.id}`;
+                    window.open(url, "_blank");
+                    console.log("done help", {
+                      websiteId: websiteData.id,
+                    });
+                  }}
+                  className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 text-brand-text-primary"
+                >
+                  <FaQuestionCircle className="w-4 h-4" /> Edit Help Section
+                </button>
+              </div>
             )}
-
-          {!plan && (
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => setShowPlanModal(true)}
-              className="px-4 py-2 bg-brand-accent text-white rounded-xl shadow hover:bg-brand-accent/90 transition-shadow"
-            >
-              Upgrade Plan
-            </motion.button>
-          )}
+          </div>
           {planError && <div className="text-red-500 text-sm">{planError}</div>}
         </div>
       </div>
@@ -1919,1093 +2430,475 @@ export default function WebsiteSettings() {
         </div>
       )}
 
-      {/* Chat UI Settings */}
+      {/* AI Features Section */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold text-brand-text-primary">
-            Chat Interface Settings
-          </h2>
-        </div>
+        <h2 className="text-xl font-semibold text-brand-text-primary mb-4">
+          AI Features
+        </h2>
+        {/* Debug info */}
 
-        {/* Tabs for different settings */}
-        <div className="mb-6 border-b border-brand-lavender-light/20">
-          <div className="flex flex-wrap">
+        <div className="space-y-4">
+          {/* Voice AI Feature */}
+          <div className="flex items-center justify-between p-4 bg-brand-lavender-light/5 rounded-lg">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-brand-accent rounded-lg flex items-center justify-center">
+                {SVG_ICONS.microphone}
+              </div>
+              <div>
+                <h3 className="font-medium text-brand-text-primary">
+                  Voice AI
+                </h3>
+                <p className="text-sm text-brand-text-secondary">
+                  Enable voice-based AI interactions on your website
+                </p>
+              </div>
+            </div>
             <button
-              onClick={() => setActiveSettingsTab("appearance")}
-              className={`px-4 py-2 text-sm font-medium transition-colors relative
-                ${
-                  activeSettingsTab === "appearance"
-                    ? "text-brand-accent"
-                    : "text-brand-text-secondary"
-                }`}
+              onClick={handleToggleVoiceAI}
+              disabled={isTogglingAI}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                showVoiceAI
+                  ? "bg-brand-accent text-white hover:bg-brand-accent/90"
+                  : "bg-brand-lavender-light/20 text-brand-text-primary hover:bg-brand-lavender-light/30"
+              } disabled:opacity-50`}
             >
-              Appearance
-              {activeSettingsTab === "appearance" && (
-                <motion.div
-                  layoutId="activeSettingsTab"
-                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent"
-                />
+              {isTogglingAI ? (
+                <FaSync className="inline-block mr-2 animate-spin" />
+              ) : (
+                <FaPowerOff className="inline-block mr-2" />
               )}
+              {showVoiceAI ? "Live" : "Off"}
             </button>
+          </div>
+
+          {/* Text AI Feature */}
+          <div className="flex items-center justify-between p-4 bg-brand-lavender-light/5 rounded-lg">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-brand-accent rounded-lg flex items-center justify-center  ">
+                {SVG_ICONS.message}
+              </div>
+              <div>
+                <h3 className="font-medium text-brand-text-primary">Text AI</h3>
+                <p className="text-sm text-brand-text-secondary">
+                  Enable text-based AI chat on your website
+                </p>
+              </div>
+            </div>
             <button
-              onClick={() => setActiveSettingsTab("behavior")}
-              className={`px-4 py-2 text-sm font-medium transition-colors relative
-                ${
-                  activeSettingsTab === "behavior"
-                    ? "text-brand-accent"
-                    : "text-brand-text-secondary"
-                }`}
+              onClick={handleToggleTextAI}
+              disabled={isTogglingAI}
+              className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                showTextAI
+                  ? "bg-brand-accent text-white hover:bg-brand-accent/90"
+                  : "bg-brand-lavender-light/20 text-brand-text-primary hover:bg-brand-lavender-light/30"
+              } disabled:opacity-50`}
             >
-              Behavior
-              {activeSettingsTab === "behavior" && (
-                <motion.div
-                  layoutId="activeSettingsTab"
-                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent"
-                />
+              {isTogglingAI ? (
+                <FaSync className="inline-block mr-2 animate-spin" />
+              ) : (
+                <FaPowerOff className="inline-block mr-2" />
               )}
-            </button>
-            <button
-              onClick={() => setActiveSettingsTab("questions")}
-              className={`px-4 py-2 text-sm font-medium transition-colors relative
-                ${
-                  activeSettingsTab === "questions"
-                    ? "text-brand-accent"
-                    : "text-brand-text-secondary"
-                }`}
-            >
-              Pop-up Questions
-              {activeSettingsTab === "questions" && (
-                <motion.div
-                  layoutId="activeSettingsTab"
-                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent"
-                />
-              )}
-            </button>
-            <button
-              onClick={() => setActiveSettingsTab("features")}
-              className={`px-4 py-2 text-sm font-medium transition-colors relative
-                ${
-                  activeSettingsTab === "features"
-                    ? "text-brand-accent"
-                    : "text-brand-text-secondary"
-                }`}
-            >
-              AI Features
-              {activeSettingsTab === "features" && (
-                <motion.div
-                  layoutId="activeSettingsTab"
-                  className="absolute bottom-0 left-0 right-0 h-0.5 bg-brand-accent"
-                />
-              )}
+              {showTextAI ? "Live" : "Off"}
             </button>
           </div>
         </div>
+      </div>
 
-        {/* Appearance Tab */}
-        {activeSettingsTab === "appearance" && (
-          <>
-            {/* Brand Color */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-medium text-brand-text-primary">
-                  Brand Color
-                </h3>
-                <button
-                  onClick={async () => {
-                    if (!websiteData) return;
-
-                    setIsSavingColor(true);
-                    setColorSaveError(null);
-
-                    try {
-                      const response = await fetch(
-                        "/api/websites/update-color",
-                        {
-                          method: "POST",
-                          headers: {
-                            "Content-Type": "application/json",
-                          },
-                          body: JSON.stringify({
-                            websiteId: websiteData.id,
-                            color: websiteData.color,
-                          }),
-                        }
-                      );
-
-                      if (!response.ok) {
-                        throw new Error("Failed to update color");
-                      }
-                    } catch (error) {
-                      console.error("Error updating color:", error);
-                      setColorSaveError("Failed to save color");
-                      // Revert on error
-                      setWebsiteData({
-                        ...websiteData,
-                        color: websiteData.color,
-                      } as WebsiteData);
-                    } finally {
-                      setIsSavingColor(false);
-                      // Clear error after 3 seconds if there was one
-                      if (colorSaveError) {
-                        setTimeout(() => setColorSaveError(null), 3000);
-                      }
-                    }
-                  }}
-                  disabled={isSavingColor}
-                  className="px-3 py-1 text-sm bg-brand-accent text-white rounded-lg 
-                            hover:bg-brand-accent/90 transition-colors disabled:opacity-50"
-                >
-                  {isSavingColor ? (
-                    <>
-                      <FaSync className="inline-block mr-2 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    "Save Color"
-                  )}
-                </button>
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="relative">
-                  <input
-                    type="color"
-                    value={websiteData?.color || "#6366F1"}
-                    onChange={(e) => {
-                      // Optimistically update
-                      setWebsiteData({
-                        ...websiteData!,
-                        color: e.target.value,
-                      } as WebsiteData);
-                    }}
-                    className="w-12 h-12 rounded-lg cursor-pointer"
-                    disabled={isSavingColor}
-                  />
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm text-brand-text-secondary">
-                    Choose a color to represent your website. This color will be
-                    used throughout the chat interface.
-                  </p>
-                </div>
-              </div>
-              {colorSaveError && (
-                <p className="text-sm text-red-500 mt-1">{colorSaveError}</p>
+      {/* AI Insights Section */}
+      {websiteData?.aiOverview && (
+        <div
+          id="ai-overview"
+          className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 p-6"
+        >
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-semibold text-brand-text-primary">
+              AI Insights & Performance {websiteData.aiOverview.period_label}
+            </h2>
+            <button
+              onClick={refreshAIData}
+              disabled={isRefreshingAI}
+              className="px-3 py-1 text-sm bg-brand-accent text-white rounded-lg 
+                        hover:bg-brand-accent/90 transition-colors disabled:opacity-50"
+            >
+              {isRefreshingAI ? (
+                <>
+                  <FaSync className="inline-block mr-2 animate-spin" />
+                  Refreshing...
+                </>
+              ) : (
+                <>
+                  <FaSync className="inline-block mr-2" />
+                  Refresh AI Data
+                </>
               )}
-            </div>
+            </button>
+          </div>
 
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-brand-text-primary">
-                Chat UI Elements
+          {/* AI Overview Stats */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <div className="text-center">
+              <div className="text-3xl font-bold text-brand-accent">
+                {websiteData.aiOverview.total_message_threads}
+              </div>
+              <div className="text-sm text-brand-text-secondary">
+                Total Threads
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-3xl font-bold text-green-600">
+                {Number(
+                  websiteData.aiOverview.problem_resolution_rate.percent || 0
+                ).toFixed(2)}
+                %
+              </div>
+              <div className="text-sm text-brand-text-secondary">
+                Resolution Rate
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-3xl font-bold text-brand-text-primary">
+                {Number(
+                  websiteData.aiOverview.avg_messages_per_thread || 0
+                ).toFixed(2)}
+              </div>
+              <div className="text-sm text-brand-text-secondary">
+                Avg Messages/Thread
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-3xl font-bold text-purple-600">
+                ${websiteData.aiOverviewRevenue?.amount || 0}
+              </div>
+              <div className="text-sm text-brand-text-secondary">
+                Revenue Added to Cart
+              </div>
+            </div>
+          </div>
+
+          {/* Most Common Questions */}
+          {websiteData.aiOverview.most_common_questions && (
+            <div className="mb-8">
+              <h3 className="text-lg font-medium text-brand-text-primary mb-4">
+                Most Common Questions
               </h3>
-              <button
-                onClick={handleSaveUiSettings}
-                disabled={isSavingUiSettings}
-                className="px-3 py-1 text-sm bg-brand-accent text-white rounded-lg 
-                          hover:bg-brand-accent/90 transition-colors disabled:opacity-50"
-              >
-                {isSavingUiSettings ? (
-                  <>
-                    <FaSync className="inline-block mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  "Save UI Settings"
-                )}
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-              {/* Chatbot Name */}
-              <div>
-                <label
-                  htmlFor="botName"
-                  className="block text-sm font-medium text-brand-text-secondary mb-2"
-                >
-                  Chatbot Name
-                </label>
-                <input
-                  id="botName"
-                  type="text"
-                  value={websiteData?.botName || "Bot"}
-                  onChange={(e) => {
-                    // Optimistically update
-                    setWebsiteData({
-                      ...websiteData!,
-                      botName: e.target.value,
-                    } as WebsiteData);
-                  }}
-                  className="w-full p-2 rounded-lg border border-brand-lavender-light/20 
-                           focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-100 text-black"
-                  placeholder="e.g., Assistant, Helper, Guide"
-                />
-                <p className="text-xs text-brand-text-secondary mt-1">
-                  This name will be displayed to users in the chat interface.
-                </p>
-              </div>
-
-              {/* Welcome Message */}
-              <div>
-                <label
-                  htmlFor="welcomeMessage"
-                  className="block text-sm font-medium text-brand-text-secondary mb-2"
-                >
-                  Welcome Message
-                </label>
-                <textarea
-                  id="welcomeMessage"
-                  value={websiteData?.customWelcomeMessage || ""}
-                  onChange={(e) => {
-                    // Optimistically update
-                    setWebsiteData({
-                      ...websiteData!,
-                      customWelcomeMessage: e.target.value,
-                    } as WebsiteData);
-                  }}
-                  className="w-full h-24 p-2 rounded-lg border border-brand-lavender-light/20 
-                           focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-100 text-black"
-                  placeholder="e.g., Hello! How can I help you today?"
-                />
-                <p className="text-xs text-brand-text-secondary mt-1">
-                  This is the first message users will see when they open the
-                  chat.
-                </p>
-              </div>
-            </div>
-
-            {/* Add the Click Message field here */}
-            <div className="mb-6">
-              <label
-                htmlFor="clickMessage"
-                className="block text-sm font-medium text-brand-text-secondary mb-2"
-              >
-                Click Message
-              </label>
-              <input
-                id="clickMessage"
-                type="text"
-                value={websiteData?.clickMessage || ""}
-                onChange={(e) => {
-                  // Optimistically update
-                  setWebsiteData({
-                    ...websiteData!,
-                    clickMessage: e.target.value,
-                  } as WebsiteData);
-                }}
-                className="w-full p-2 rounded-lg border border-brand-lavender-light/20 
-                         focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-100 text-black"
-                placeholder="e.g., Need help shopping?"
-              />
-              <p className="text-xs text-brand-text-secondary mt-1">
-                This message will be displayed when the AI suggests clicking on
-                elements.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* Bot Icon */}
-              <div>
-                <label className="block text-sm font-medium text-brand-text-secondary mb-2">
-                  Bot Icon
-                </label>
-                <div className="flex flex-wrap gap-3">
-                  {["bot", "voice", "message"].map((icon) => (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {websiteData.aiOverview.most_common_questions.map(
+                  (category, index) => (
                     <div
-                      key={`bot-${icon}`}
-                      onClick={() => {
-                        setWebsiteData({
-                          ...websiteData!,
-                          iconBot: icon,
-                        } as WebsiteData);
-                      }}
-                      className={`p-3 border ${
-                        websiteData?.iconBot === icon
-                          ? "border-brand-accent bg-brand-accent/10"
-                          : "border-gray-200 hover:border-brand-accent/50"
-                      } rounded-lg cursor-pointer transition-colors flex items-center justify-center`}
+                      key={index}
+                      className="p-4 bg-brand-lavender-light/5 rounded-lg"
                     >
-                      <div
-                        className={`text-${
-                          websiteData?.iconBot === icon
-                            ? "brand-accent"
-                            : "gray-600"
-                        }`}
-                      >
-                        {SVG_ICONS[icon as keyof typeof SVG_ICONS] ||
-                          SVG_ICONS.bot}
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-medium text-brand-text-primary">
+                          {category.category}
+                        </h4>
+                        <span className="text-sm text-brand-accent font-medium">
+                          {category.threads} threads
+                        </span>
+                      </div>
+                      <p className="text-sm text-brand-text-secondary">
+                        {category.description}
+                      </p>
+                    </div>
+                  )
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Recent Questions by Topic */}
+          {websiteData.aiOverview.recent_questions_by_topic && (
+            <div className="mb-8">
+              <h3 className="text-lg font-medium text-brand-text-primary mb-4">
+                Recent Questions by Topic
+              </h3>
+              <div className="space-y-4">
+                {websiteData.aiOverview.recent_questions_by_topic.map(
+                  (topic, index) => (
+                    <div
+                      key={index}
+                      className="border border-brand-lavender-light/20 rounded-lg p-4"
+                    >
+                      <h4 className="font-medium text-brand-text-primary mb-3">
+                        {topic.topic}
+                      </h4>
+                      <div className="space-y-3">
+                        {topic.items.map((item, itemIndex) => (
+                          <div
+                            key={itemIndex}
+                            className="flex items-start justify-between p-3 bg-brand-lavender-light/5 rounded-lg"
+                          >
+                            <div className="flex-1">
+                              <p className="text-sm text-brand-text-primary mb-1">
+                                {item.question}
+                              </p>
+                              <p className="text-xs text-brand-text-secondary">
+                                {item.note}
+                              </p>
+                            </div>
+                            <span
+                              className={`px-2 py-1 text-xs rounded-full ${
+                                item.status === "Resolved"
+                                  ? "bg-green-100 text-green-800"
+                                  : "bg-amber-100 text-amber-800"
+                              }`}
+                            >
+                              {item.status}
+                            </span>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                  ))}
-                </div>
-                <p className="text-xs text-brand-text-secondary mt-1">
-                  This icon represents your chatbot in the UI.
-                </p>
-              </div>
-            </div>
-
-            {uiSettingsError && (
-              <div className="mt-3 text-red-500 text-sm">{uiSettingsError}</div>
-            )}
-          </>
-        )}
-
-        {/* Behavior Tab - AI Instructions */}
-        {activeSettingsTab === "behavior" && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-medium text-brand-text-primary">
-                AI Assistant Instructions
-              </h3>
-              <div className="flex items-center gap-3">
-                <span
-                  className={`text-sm ${
-                    countWords(websiteData?.customInstructions || "") > 300
-                      ? "text-red-500"
-                      : "text-brand-text-secondary"
-                  }`}
-                >
-                  {countWords(websiteData?.customInstructions || "")} / 300
-                  words
-                </span>
-                <button
-                  onClick={async () => {
-                    if (!websiteData) return;
-
-                    // Update in database
-                    try {
-                      const response = await fetch(
-                        "/api/websites/update-instructions",
-                        {
-                          method: "POST",
-                          headers: {
-                            "Content-Type": "application/json",
-                          },
-                          body: JSON.stringify({
-                            websiteId: websiteData?.id,
-                            instructions: websiteData?.customInstructions,
-                          }),
-                        }
-                      );
-
-                      if (!response.ok) {
-                        const data = await response.json();
-                        throw new Error(
-                          data.error || "Failed to update instructions"
-                        );
-                      }
-                    } catch (error) {
-                      console.error("Error updating instructions:", error);
-                      // Revert on error
-                      setWebsiteData({
-                        ...websiteData!,
-                        customInstructions: websiteData?.customInstructions,
-                      } as WebsiteData);
-                    }
-                  }}
-                  className="px-3 py-1 text-sm bg-brand-accent text-white rounded-lg 
-                          hover:bg-brand-accent/90 transition-colors"
-                >
-                  Save Instructions
-                </button>
-                <button
-                  onClick={handleSyncInstructions}
-                  disabled={isSyncingInstructions}
-                  className="px-3 py-1 text-sm bg-brand-accent/20 text-brand-accent rounded-lg 
-                          hover:bg-brand-accent/30 transition-colors disabled:opacity-50"
-                >
-                  {isSyncingInstructions ? (
-                    <>
-                      <FaSync className="inline-block mr-2 animate-spin" />
-                      Syncing with AI...
-                    </>
-                  ) : (
-                    <>
-                      <FaSync className="inline-block mr-2" />
-                      Sync with AI
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-            <textarea
-              value={websiteData?.customInstructions || ""}
-              onChange={async (e) => {
-                // Check word count
-                if (countWords(e.target.value) > 300) {
-                  return; // Don't update if exceeding limit
-                }
-
-                // Optimistically update
-                setWebsiteData({
-                  ...websiteData!,
-                  customInstructions: e.target.value,
-                } as WebsiteData);
-              }}
-              placeholder="Add custom instructions for how the AI assistant should behave when chatting with your customers..."
-              className={`w-full h-32 p-3 rounded-lg border 
-                       ${
-                         countWords(websiteData?.customInstructions || "") > 300
-                           ? "border-red-500"
-                           : "border-brand-lavender-light/20"
-                       }
-                       focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-100 text-black`}
-            />
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-brand-text-secondary">
-                These instructions will guide how the AI assistant interacts
-                with your customers.
-              </p>
-              {countWords(websiteData?.customInstructions || "") > 300 && (
-                <p className="text-sm text-red-500">
-                  Instructions cannot exceed 300 words
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Questions Tab */}
-        {activeSettingsTab === "questions" && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-lg font-medium text-brand-text-primary">
-                Pop-up Questions
-              </h3>
-              <span className="text-sm text-brand-text-secondary">
-                {websiteData?.popUpQuestions?.length || 0} / 3 questions
-              </span>
-            </div>
-            <p className="text-sm text-brand-text-secondary mb-4">
-              These questions will be shown to users in a pop-up when they first
-              visit your website.
-            </p>
-
-            <div className="space-y-3">
-              {websiteData?.popUpQuestions?.map((question, index) => (
-                <div key={question.id} className="flex items-center gap-3">
-                  <input
-                    type="text"
-                    value={question.question}
-                    disabled={true}
-                    className="flex-1 p-2 rounded-lg border border-brand-lavender-light/20 
-                             focus:outline-none focus:ring-2 focus:ring-brand-accent/20 bg-gray-100 text-black"
-                  />
-                  <button
-                    disabled={true}
-                    className="p-2 text-red-500 opacity-50 cursor-not-allowed"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-5 w-5"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-
-              {(websiteData?.popUpQuestions?.length || 0) < 3 && (
-                <button
-                  disabled={true}
-                  className="w-full p-2 border-2 border-dashed border-brand-lavender-light/20 
-                             rounded-lg text-brand-text-secondary opacity-50 cursor-not-allowed"
-                >
-                  + Add Question
-                </button>
-              )}
-            </div>
-            <p className="text-xs text-brand-text-secondary">
-              You can add up to 3 pop-up questions.
-            </p>
-          </div>
-        )}
-
-        {/* Add the new AI Features Tab */}
-        {activeSettingsTab === "features" && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-brand-text-primary">
-                AI Auto Features
-              </h3>
-              <button
-                onClick={async () => {
-                  if (!websiteData) return;
-
-                  setIsSavingAutoFeatures(true);
-                  setAutoFeaturesError(null);
-
-                  try {
-                    const response = await fetch(
-                      "/api/websites/update-auto-features",
-                      {
-                        method: "POST",
-                        headers: {
-                          "Content-Type": "application/json",
-                        },
-                        body: JSON.stringify({
-                          websiteId: websiteData.id,
-                          allowAutoCancel: websiteData.allowAutoCancel,
-                          allowAutoReturn: websiteData.allowAutoReturn,
-                          allowAutoExchange: websiteData.allowAutoExchange,
-                          allowAutoClick: websiteData.allowAutoClick,
-                          allowAutoScroll: websiteData.allowAutoScroll,
-                          allowAutoHighlight: websiteData.allowAutoHighlight,
-                          allowAutoRedirect: websiteData.allowAutoRedirect,
-                          allowAutoGetUserOrders:
-                            websiteData.allowAutoGetUserOrders,
-                          allowAutoUpdateUserInfo:
-                            websiteData.allowAutoUpdateUserInfo,
-                          allowAutoFillForm: websiteData.allowAutoFillForm,
-                          allowAutoTrackOrder: websiteData.allowAutoTrackOrder,
-                          allowAutoLogout: websiteData.allowAutoLogout,
-                          allowAutoLogin: websiteData.allowAutoLogin,
-                          allowAutoGenerateImage:
-                            websiteData.allowAutoGenerateImage,
-                          allowMultiAIReview: websiteData.allowMultiAIReview,
-                        }),
-                      }
-                    );
-
-                    if (!response.ok) {
-                      const data = await response.json();
-                      throw new Error(
-                        data.error || "Failed to update AI features"
-                      );
-                    }
-                  } catch (error) {
-                    console.error("Error updating AI features:", error);
-                    setAutoFeaturesError("Failed to save AI features");
-                  } finally {
-                    setIsSavingAutoFeatures(false);
-                  }
-                }}
-                disabled={isSavingAutoFeatures}
-                className="px-3 py-1 text-sm bg-brand-accent text-white rounded-lg 
-                          hover:bg-brand-accent/90 transition-colors disabled:opacity-50"
-              >
-                {isSavingAutoFeatures ? (
-                  <>
-                    <FaSync className="inline-block mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  "Save Features"
+                  )
                 )}
-              </button>
+              </div>
             </div>
+          )}
 
-            <p className="text-sm text-brand-text-secondary mb-4">
-              Control which automated actions your AI assistant can perform.
-              Disabling certain features may limit functionality.
-            </p>
-
-            <div className="grid grid-cols-1 gap-4">
-              {/* Critical Features with warnings */}
-              <div className="border-b border-brand-lavender-light/20 pb-4 mb-4">
-                <h4 className="font-medium text-brand-text-primary mb-3">
-                  Critical Features
-                </h4>
-                <p className="text-sm text-amber-600 mb-4">
-                  <FaExclamationTriangle className="inline-block mr-1" />
-                  Disabling these features will significantly reduce the
-                  effectiveness of your AI assistant.
-                </p>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">
-                        Multiple AI Reviews
-                      </h5>
-
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow users to see multiple AI summaries per day instead
-                        of just one
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowMultiAIReview ?? false}
-                        onChange={() => {
-                          setWebsiteData({
-                            ...websiteData!,
-                            allowMultiAIReview: !(
-                              websiteData?.allowMultiAIReview ?? false
-                            ),
-                          } as WebsiteData);
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
+          {/* Action Details */}
+          {websiteData.actionDetails && (
+            <div>
+              <h3 className="text-lg font-medium text-brand-text-primary mb-4">
+                AI Action Breakdown
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <button
+                  onClick={() => setSelectedAction("redirect")}
+                  className="text-center p-4 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+                >
+                  <div className="text-2xl font-bold text-blue-600">
+                    {websiteData.actionDetails.redirect.length}
                   </div>
+                  <div className="text-sm text-brand-text-secondary">
+                    Redirects
+                  </div>
+                </button>
+                <button
+                  onClick={() => setSelectedAction("scroll")}
+                  className="text-center p-4 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
+                >
+                  <div className="text-2xl font-bold text-green-600">
+                    {websiteData.actionDetails.scroll.length}
+                  </div>
+                  <div className="text-sm text-brand-text-secondary">
+                    Scrolls
+                  </div>
+                </button>
+                <button
+                  onClick={() => setSelectedAction("click")}
+                  className="text-center p-4 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors"
+                >
+                  <div className="text-2xl font-bold text-purple-600">
+                    {websiteData.actionDetails.click.length}
+                  </div>
+                  <div className="text-sm text-brand-text-secondary">
+                    Clicks
+                  </div>
+                </button>
+                <button
+                  onClick={() => setSelectedAction("purchase")}
+                  className="text-center p-4 bg-orange-50 rounded-lg hover:bg-orange-100 transition-colors"
+                >
+                  <div className="text-2xl font-bold text-orange-600">
+                    {websiteData.actionDetails.purchase.length}
+                  </div>
+                  <div className="text-sm text-brand-text-secondary">
+                    Add to Cart
+                  </div>
+                </button>
+              </div>
 
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">Auto Redirect</h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to automatically redirect users to relevant
-                        pages
-                      </p>
+              {selectedAction &&
+                websiteData.actionConversations?.[selectedAction] && (
+                  <div className="mt-6 border border-brand-lavender-light/20 rounded-lg">
+                    <div className="flex items-center justify-between p-4 border-b border-brand-lavender-light/20">
+                      <h4 className="font-medium text-brand-text-primary capitalize">
+                        {selectedAction} conversations
+                      </h4>
+                      <button
+                        onClick={() => setSelectedAction(null)}
+                        className="text-sm text-brand-text-secondary hover:text-brand-accent"
+                      >
+                        Close
+                      </button>
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoRedirect ?? true}
-                        onChange={() => {
-                          const newValue = !(
-                            websiteData?.allowAutoRedirect ?? true
+                    <div className="divide-y divide-brand-lavender-light/20">
+                      {websiteData.actionConversations[selectedAction]
+                        .length === 0 && (
+                        <div className="p-4 text-sm text-brand-text-secondary">
+                          No conversations
+                        </div>
+                      )}
+                      {websiteData.actionConversations[selectedAction].map(
+                        (conv, idx) => {
+                          const threadId = conv.thread?.id || `thread-${idx}`;
+                          const actionCount = conv.actions?.length || 0;
+                          const lastActionAt =
+                            conv.actions?.[conv.actions.length - 1]?.createdAt;
+                          return (
+                            <div key={threadId} className="p-4">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <div className="text-sm text-brand-text-secondary">
+                                    Thread
+                                  </div>
+                                  <div className="font-mono text-xs text-black break-all">
+                                    {threadId}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="text-xs px-2 py-1 rounded-full bg-brand-lavender-light/10 text-brand-text-secondary">
+                                    {actionCount} action
+                                    {actionCount === 1 ? "" : "s"}
+                                  </span>
+                                  {lastActionAt && (
+                                    <span className="text-xs text-brand-text-secondary">
+                                      Last:{" "}
+                                      {new Date(lastActionAt).toLocaleString()}
+                                    </span>
+                                  )}
+                                  <button
+                                    onClick={() =>
+                                      toggleThreadExpanded(threadId)
+                                    }
+                                    className="text-sm text-brand-accent hover:text-brand-accent/80"
+                                  >
+                                    {expandedThreads[threadId]
+                                      ? "Hide"
+                                      : "View"}
+                                  </button>
+                                </div>
+                              </div>
+
+                              {expandedThreads[threadId] && (
+                                <div className="mt-4 space-y-3">
+                                  {/* Actions summary */}
+                                  {conv.actions && conv.actions.length > 0 && (
+                                    <div className="text-xs text-brand-text-secondary">
+                                      {conv.actions.map((a, i) => (
+                                        <div
+                                          key={`${a.messageId}-${i}`}
+                                          className="mb-1"
+                                        >
+                                          <span className="font-medium capitalize mr-1">
+                                            {selectedAction}:
+                                          </span>
+                                          {selectedAction === "redirect" && (
+                                            <span className="text-black">
+                                              {a.normalizedUrl ||
+                                                a.url ||
+                                                "(no url)"}
+                                            </span>
+                                          )}
+                                          {selectedAction === "scroll" && (
+                                            <span className="text-black">
+                                              {a.scrollToText ||
+                                                a.sectionId ||
+                                                "(section)"}
+                                            </span>
+                                          )}
+                                          {selectedAction === "click" && (
+                                            <span className="text-black">
+                                              {a.buttonText ||
+                                                a.css_selector ||
+                                                a.url ||
+                                                "(click)"}
+                                            </span>
+                                          )}
+                                          {selectedAction === "purchase" && (
+                                            <span className="text-black">
+                                              {a.productName ||
+                                                a.productId ||
+                                                a.url ||
+                                                "(item)"}
+                                            </span>
+                                          )}
+                                          {a.createdAt && (
+                                            <span className="ml-2">
+                                              @{" "}
+                                              {new Date(
+                                                a.createdAt
+                                              ).toLocaleString()}
+                                            </span>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  {/* Conversation */}
+                                  <div className="space-y-2">
+                                    {conv.thread?.messages?.map((m) => {
+                                      const isActionMessage =
+                                        conv.actions?.some(
+                                          (a) => a.messageId === m.id
+                                        );
+                                      return (
+                                        <div
+                                          key={m.id}
+                                          className={`p-3 rounded-lg border ${
+                                            m.role === "user"
+                                              ? "bg-brand-lavender-light/5 border-brand-lavender-light/30"
+                                              : "bg-white border-brand-lavender-light/30"
+                                          }`}
+                                        >
+                                          <div className="flex items-center justify-between mb-1">
+                                            <span className="text-xs uppercase tracking-wide text-brand-text-secondary">
+                                              {m.role}
+                                            </span>
+                                            <span className="text-[11px] text-brand-text-secondary">
+                                              {new Date(
+                                                m.createdAt
+                                              ).toLocaleString()}
+                                            </span>
+                                          </div>
+                                          <div className="text-sm text-black whitespace-pre-wrap break-words">
+                                            {m.role === "assistant"
+                                              ? (() => {
+                                                  const { answer, action } =
+                                                    parseAssistantMessage(
+                                                      (m as any).content
+                                                    );
+                                                  if (answer || action) {
+                                                    return (
+                                                      <>
+                                                        {answer && (
+                                                          <div>{answer}</div>
+                                                        )}
+                                                        {action && (
+                                                          <div className="mt-1 text-[11px] uppercase tracking-wide text-brand-text-secondary">
+                                                            action: {action}
+                                                          </div>
+                                                        )}
+                                                      </>
+                                                    );
+                                                  }
+                                                  return (m as any).content;
+                                                })()
+                                              : (m as any).content}
+                                          </div>
+                                          {isActionMessage && (
+                                            <div className="mt-2 text-[11px] px-2 py-1 inline-block rounded-full bg-brand-accent/10 text-brand-accent">
+                                              Triggers {selectedAction}
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           );
-                          if (!newValue) {
-                            setShowFeatureWarning(true);
-                            setPendingFeatureChanges({
-                              feature: "allowAutoRedirect",
-                              value: false,
-                            });
-                          } else {
-                            setWebsiteData({
-                              ...websiteData!,
-                              allowAutoRedirect: true,
-                            } as WebsiteData);
-                          }
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">Auto Scroll</h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to scroll to relevant sections on the page
-                      </p>
+                        }
+                      )}
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoScroll ?? true}
-                        onChange={() => {
-                          const newValue = !(
-                            websiteData?.allowAutoScroll ?? true
-                          );
-                          if (!newValue) {
-                            setShowFeatureWarning(true);
-                            setPendingFeatureChanges({
-                              feature: "allowAutoScroll",
-                              value: false,
-                            });
-                          } else {
-                            setWebsiteData({
-                              ...websiteData!,
-                              allowAutoScroll: true,
-                            } as WebsiteData);
-                          }
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
                   </div>
-
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">Auto Highlight</h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to highlight important elements on the page
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoHighlight ?? true}
-                        onChange={() => {
-                          const newValue = !(
-                            websiteData?.allowAutoHighlight ?? true
-                          );
-                          if (!newValue) {
-                            setShowFeatureWarning(true);
-                            setPendingFeatureChanges({
-                              feature: "allowAutoHighlight",
-                              value: false,
-                            });
-                          } else {
-                            setWebsiteData({
-                              ...websiteData!,
-                              allowAutoHighlight: true,
-                            } as WebsiteData);
-                          }
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">Auto Click</h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to click buttons and links on behalf of users
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoClick ?? true}
-                        onChange={() => {
-                          setWebsiteData({
-                            ...websiteData!,
-                            allowAutoClick: !(
-                              websiteData?.allowAutoClick ?? true
-                            ),
-                          } as WebsiteData);
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">
-                        Auto Fill Forms
-                      </h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to fill out forms on behalf of users
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoFillForm ?? true}
-                        onChange={() => {
-                          setWebsiteData({
-                            ...websiteData!,
-                            allowAutoFillForm: !(
-                              websiteData?.allowAutoFillForm ?? true
-                            ),
-                          } as WebsiteData);
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              {/* Standard Features */}
-              <div>
-                <h4 className="font-medium text-brand-text-primary mb-3">
-                  Order Features
-                </h4>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">Auto Cancel</h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to help users cancel orders
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoCancel ?? true}
-                        onChange={() => {
-                          setWebsiteData({
-                            ...websiteData!,
-                            allowAutoCancel: !(
-                              websiteData?.allowAutoCancel ?? true
-                            ),
-                          } as WebsiteData);
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">Auto Return</h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to help users return products
-                      </p>
-                      <span className="inline-block mt-1 px-2 py-1 bg-amber-100 text-amber-800 text-xs font-medium rounded">
-                        Coming Soon
-                      </span>
-                    </div>
-
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={false}
-                        disabled={true}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">Auto Exchange</h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to help users exchange products
-                      </p>
-                      <span className="inline-block mt-1 px-2 py-1 bg-amber-100 text-amber-800 text-xs font-medium rounded">
-                        Coming Soon
-                      </span>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={false}
-                        disabled={true}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">
-                        Auto Get User Orders
-                      </h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to fetch and display user order history
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoGetUserOrders ?? true}
-                        onChange={() => {
-                          setWebsiteData({
-                            ...websiteData!,
-                            allowAutoGetUserOrders: !(
-                              websiteData?.allowAutoGetUserOrders ?? true
-                            ),
-                          } as WebsiteData);
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">
-                        Auto Track Orders
-                      </h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to help users track their order status
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoTrackOrder ?? true}
-                        onChange={() => {
-                          setWebsiteData({
-                            ...websiteData!,
-                            allowAutoTrackOrder: !(
-                              websiteData?.allowAutoTrackOrder ?? true
-                            ),
-                          } as WebsiteData);
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              {/* Account Features */}
-              <div className="border-t border-brand-lavender-light/20 pt-4">
-                <h4 className="font-medium text-brand-text-primary mb-3">
-                  Account Features
-                </h4>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">
-                        Auto Update User Info
-                      </h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to help users update their account information
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoUpdateUserInfo ?? true}
-                        onChange={() => {
-                          setWebsiteData({
-                            ...websiteData!,
-                            allowAutoUpdateUserInfo: !(
-                              websiteData?.allowAutoUpdateUserInfo ?? true
-                            ),
-                          } as WebsiteData);
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">Auto Login</h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to help users log into their accounts
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoLogin ?? true}
-                        onChange={() => {
-                          setWebsiteData({
-                            ...websiteData!,
-                            allowAutoLogin: !(
-                              websiteData?.allowAutoLogin ?? true
-                            ),
-                          } as WebsiteData);
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">Auto Logout</h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to help users log out of their accounts
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={websiteData?.allowAutoLogout ?? true}
-                        onChange={() => {
-                          setWebsiteData({
-                            ...websiteData!,
-                            allowAutoLogout: !(
-                              websiteData?.allowAutoLogout ?? true
-                            ),
-                          } as WebsiteData);
-                        }}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              {/* Content Generation Features */}
-              <div className="border-t border-brand-lavender-light/20 pt-4">
-                <h4 className="font-medium text-brand-text-primary mb-3">
-                  Content Generation
-                </h4>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 bg-brand-lavender-light/5 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-black">
-                        Auto Generate Images
-                      </h5>
-                      <p className="text-sm text-brand-text-secondary">
-                        Allow AI to generate custom images based on user
-                        requests
-                      </p>
-                      <span className="inline-block mt-1 px-2 py-1 bg-amber-100 text-amber-800 text-xs font-medium rounded">
-                        Coming Soon
-                      </span>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-not-allowed opacity-50">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={false}
-                        disabled={true}
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    </label>
-                  </div>
-                </div>
-              </div>
+                )}
             </div>
-
-            {autoFeaturesError && (
-              <div className="mt-3 text-red-500 text-sm">
-                {autoFeaturesError}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Global Statistics */}
-      <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 p-6">
-        <h2 className="text-xl font-semibold text-brand-text-primary mb-6">
-          Global Statistics
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-          <div>
-            <h3 className="text-sm text-brand-text-secondary mb-2">
-              AI Redirects
-            </h3>
-            <div className="flex items-end gap-2">
-              <span className="text-3xl font-bold text-brand-accent">
-                {globalStats.totalAiRedirects.toLocaleString()}
-              </span>
-            </div>
-          </div>
-          <div>
-            <h3 className="text-sm text-brand-text-secondary mb-2">
-              AI Clicks
-            </h3>
-            <div className="flex items-end gap-2">
-              <span className="text-3xl font-bold text-brand-text-primary">
-                {websiteData.stats.aiClicks?.toLocaleString() || "0"}
-              </span>
-            </div>
-          </div>
-          <div>
-            <h3 className="text-sm text-brand-text-secondary mb-2">
-              AI Scrolls
-            </h3>
-            <div className="flex items-end gap-2">
-              <span className="text-3xl font-bold text-brand-text-primary">
-                {websiteData.stats.aiScrolls?.toLocaleString() || "0"}
-              </span>
-            </div>
-          </div>
-          <div>
-            <h3 className="text-sm text-brand-text-secondary mb-2">
-              AI Purchases
-            </h3>
-            <div className="flex items-end gap-2">
-              <span className="text-3xl font-bold text-brand-text-primary">
-                {websiteData.stats.aiPurchases?.toLocaleString() || "0"}
-              </span>
-            </div>
-          </div>
+          )}
         </div>
-      </div>
+      )}
 
       {/* Content Tabs */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 overflow-hidden">
@@ -3274,71 +3167,6 @@ export default function WebsiteSettings() {
                   </ul>
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Feature Warning Modal */}
-      {showFeatureWarning && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl p-8 max-w-md w-full shadow-xl relative">
-            <button
-              onClick={() => {
-                setShowFeatureWarning(false);
-                setPendingFeatureChanges(null);
-              }}
-              className="absolute top-4 right-4 text-brand-text-secondary hover:text-brand-accent"
-              aria-label="Close"
-            >
-              ×
-            </button>
-            <h2 className="text-xl font-bold mb-4 text-brand-text-primary">
-              Warning: Reduced Functionality
-            </h2>
-            <div className="text-amber-600 mb-6">
-              <FaExclamationTriangle className="text-4xl mx-auto mb-4" />
-              <p className="text-center">
-                Disabling this feature will significantly reduce the
-                effectiveness of your AI assistant.
-              </p>
-            </div>
-            <p className="mb-6 text-brand-text-secondary">
-              {pendingFeatureChanges?.feature === "allowAutoRedirect" &&
-                "Without auto-redirect, your AI cannot automatically take users to product pages, blog posts, or other relevant content when requested."}
-              {pendingFeatureChanges?.feature === "allowAutoScroll" &&
-                "Without auto-scroll, your AI cannot guide users to the specific sections of your page when answering questions."}
-              {pendingFeatureChanges?.feature === "allowAutoHighlight" &&
-                "Without auto-highlight, your AI cannot visually indicate important information on your pages."}
-            </p>
-            <div className="flex gap-4">
-              <button
-                onClick={() => {
-                  setShowFeatureWarning(false);
-                  setPendingFeatureChanges(null);
-                }}
-                className="flex-1 px-4 py-2 border border-brand-accent/20 text-brand-accent 
-                        rounded-lg text-center hover:bg-brand-accent/5 transition-colors"
-              >
-                Keep Enabled
-              </button>
-              <button
-                onClick={() => {
-                  if (pendingFeatureChanges) {
-                    setWebsiteData({
-                      ...websiteData!,
-                      [pendingFeatureChanges.feature]:
-                        pendingFeatureChanges.value,
-                    } as WebsiteData);
-                  }
-                  setShowFeatureWarning(false);
-                  setPendingFeatureChanges(null);
-                }}
-                className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 
-                        rounded-lg text-center hover:bg-gray-200 transition-colors"
-              >
-                Disable Anyway
-              </button>
             </div>
           </div>
         </div>

@@ -3,6 +3,8 @@ import { query } from "@/lib/db";
 import { getWebsiteAIOverview, RevenueSummary } from "@/lib/websiteAIGet";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../../lib/auth";
+import { cors } from "@/lib/cors";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +67,8 @@ interface Website {
   allowAutoLogin: boolean | null;
   allowAutoGenerateImage: boolean | null;
   allowMultiAIReview: boolean | null;
+  showVoiceAI?: boolean;
+  showTextAI?: boolean;
 }
 
 export async function GET(request: NextRequest) {
@@ -325,22 +329,29 @@ async function authenticateRequest(
   if (!userId) {
     const authHeader = request.headers.get("Authorization");
     if (authHeader?.startsWith("Bearer ")) {
-      const accessKey = authHeader.substring(7);
-      const websiteByKeyRows = (await query(
-        `SELECT w.id, w.userId
-         FROM Website w
-         JOIN AccessKey ak ON ak.websiteId = w.id
-         WHERE ak.\`key\` = ?
-         LIMIT 1`,
-        [accessKey]
-      )) as { id: string; userId: string }[];
-      const websiteByKey =
-        websiteByKeyRows.length > 0 ? websiteByKeyRows[0] : null;
+      const isTokenValid = await verifyToken(authHeader);
 
-      if (websiteByKey) {
-        userId = websiteByKey.userId;
-        if (!websiteId) {
-          websiteId = websiteByKey.id;
+      if (isTokenValid) {
+        const websiteIdFromToken = await getWebsiteIdFromToken(authHeader);
+
+        if (websiteIdFromToken) {
+          // Get the website data to find the userId
+          const websiteByKeyRows = (await query(
+            `SELECT w.id, w.userId
+             FROM Website w
+             WHERE w.id = ?
+             LIMIT 1`,
+            [websiteIdFromToken]
+          )) as { id: string; userId: string }[];
+          const websiteByKey =
+            websiteByKeyRows.length > 0 ? websiteByKeyRows[0] : null;
+
+          if (websiteByKey) {
+            userId = websiteByKey.userId;
+            if (!websiteId) {
+              websiteId = websiteByKey.id;
+            }
+          }
         }
       }
     }
@@ -407,7 +418,7 @@ async function fetchWebsiteData(websiteId: string) {
             allowAutoExchange, allowAutoClick, allowAutoScroll, allowAutoHighlight,
             allowAutoRedirect, allowAutoGetUserOrders, allowAutoUpdateUserInfo,
             allowAutoFillForm, allowAutoTrackOrder, allowAutoLogout, allowAutoLogin,
-            allowAutoGenerateImage, allowMultiAIReview
+            allowAutoGenerateImage, allowMultiAIReview, showVoiceAI, showTextAI
      FROM Website WHERE id = ? LIMIT 1`,
     [websiteId]
   )) as any[];
@@ -454,6 +465,8 @@ async function fetchWebsiteData(websiteId: string) {
     allowAutoLogin: !!baseWebsite.allowAutoLogin,
     allowAutoGenerateImage: !!baseWebsite.allowAutoGenerateImage,
     allowMultiAIReview: !!baseWebsite.allowMultiAIReview,
+    showVoiceAI: !!baseWebsite.showVoiceAI,
+    showTextAI: !!baseWebsite.showTextAI,
     lastSyncedAt: baseWebsite.lastSyncedAt
       ? new Date(baseWebsite.lastSyncedAt)
       : null,
@@ -1500,6 +1513,8 @@ function buildResponseData(
     allowAutoLogin: website.allowAutoLogin,
     allowAutoGenerateImage: website.allowAutoGenerateImage,
     allowMultiAIReview: website.allowMultiAIReview,
+    showVoiceAI: website.showVoiceAI,
+    showTextAI: website.showTextAI,
     popUpQuestions: website.popUpQuestions.map((q: any) => ({
       id: q.id,
       question: q.question,

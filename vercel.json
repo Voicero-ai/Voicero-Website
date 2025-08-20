@@ -89,6 +89,10 @@
     {
       "path": "/api/cron/reminder-unread-contacts",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/close-inactive-conversations",
+      "schedule": "0 * * * *"
     }
   ]
 }
