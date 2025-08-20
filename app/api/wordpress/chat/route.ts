@@ -3,8 +3,8 @@ import { PrismaClient, AiThread, AiMessage } from "@prisma/client";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { Client } from "@opensearch-project/opensearch";
-import { cors } from "@/lib/cors";
-import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+import { cors } from '../../../../lib/cors';
+import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
 import OpenAI from "openai";
 import {
   FINAL_MAIN_PROMPT,
@@ -15,18 +15,18 @@ import {
   GENERATE_IMAGE_PROMPT,
   PURCHASE_PROMPT,
   ORDER_MANAGEMENT_PROMPT,
-} from "@/lib/systemPrompts";
+} from '../../../../lib/systemPrompts';
 import {
   WORDPRESS_PAGE_PROMPT,
   WORDPRESS_BLOG_PROMPT,
   WORDPRESS_PRODUCT_PROMPT,
   WORDPRESS_MANAGE_USER_PROMPT,
-} from "@/lib/systemPromptsWordPress";
+} from '../../../../lib/systemPromptsWordPress';
 import {
   normalizeReturnReason,
   coerceReturnReasonNote,
   ALLOWED_RETURN_REASONS,
-} from "@/lib/returns";
+} from '../../../../lib/returns';
 import Stripe from "stripe";
 export const dynamic = "force-dynamic";
 

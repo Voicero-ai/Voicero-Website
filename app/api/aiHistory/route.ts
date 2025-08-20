@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cors } from "../../../lib/cors";
 import { query } from "../../../lib/db";
-import { verifyToken, getWebsiteIdFromToken } from "../../../lib/token-verifier";
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../lib/token-verifier";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../lib/auth";
 import OpenAI from "openai";

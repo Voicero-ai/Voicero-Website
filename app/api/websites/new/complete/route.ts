@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "../../../../../lib/stripe";
-import { query } from "@/lib/db";
+import { query } from '../../../../../lib/db';
 import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";

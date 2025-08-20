@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cors } from "@/lib/cors";
-import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+import { cors } from '../../../../lib/cors';
+import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
 import { PrismaClient } from "@prisma/client";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";

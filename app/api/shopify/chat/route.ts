@@ -4,9 +4,9 @@ import { Pinecone } from "@pinecone-database/pinecone";
 import {
   buildHybridQueryVectors,
   shouldFallbackToCollections,
-} from "@/lib/sparse/hybrid_query_tuning";
+} from '../../../../lib/sparse/hybrid_query_tuning';
 // Removed OpenSearch; using deterministic sparse generator for documents only
-import { generateSparseVectorsStable } from "@/lib/sparse/stable";
+import { generateSparseVectorsStable } from '../../../../lib/sparse/stable';
 import { cors } from "../../../../lib/cors";
 import OpenAI from "openai";
 import {
@@ -27,14 +27,14 @@ import {
   GENERATE_IMAGE_PROMPT,
   PURCHASE_PROMPT,
   RETURN_ORDERS_PROMPT,
-} from "@/lib/systemPrompts";
+} from '../../../../lib/systemPrompts';
 import {
   normalizeReturnReason,
   coerceReturnReasonNote,
   ALLOWED_RETURN_REASONS,
-} from "@/lib/returns";
+} from '../../../../lib/returns';
 import Stripe from "stripe";
-import { query } from "@/lib/db";
+import { query } from '../../../../lib/db';
 export const dynamic = "force-dynamic";
 
 // Use the imported prisma client instead of creating a new one

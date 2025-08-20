@@ -6,9 +6,9 @@ import {
   WordpressProduct,
 } from "@prisma/client";
 import OpenAI from "openai";
-import { cors } from "@/lib/cors";
-import prisma from "@/lib/prisma";
-import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+import { cors } from '../../../../lib/cors';
+import prisma from '../../../../lib/prisma';
+import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
 
 export const dynamic = "force-dynamic";
 

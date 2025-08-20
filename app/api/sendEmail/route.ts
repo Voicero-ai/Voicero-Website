@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
-import { query } from "@/lib/db";
+import { query } from '../../../lib/db';
 export const dynamic = "force-dynamic";
 
 interface Waitlist {

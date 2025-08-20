@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { query } from "@/lib/db";
+import { query } from '../../../../lib/db';
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 export const dynamic = "force-dynamic";
 

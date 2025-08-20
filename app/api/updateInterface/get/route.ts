@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
-import { cors } from "@/lib/cors";
-import { query } from "@/lib/db";
-import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+import { authOptions } from '../../../../lib/auth';
+import { cors } from '../../../../lib/cors';
+import { query } from '../../../../lib/db';
+import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
 
 export const dynamic = "force-dynamic";
 

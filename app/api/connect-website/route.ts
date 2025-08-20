@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../lib/auth";
-import { cors } from "@/lib/cors";
+import { cors } from '../../../lib/cors';
 import { query } from "../../../lib/db";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";

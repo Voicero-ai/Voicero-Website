@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { query } from "@/lib/db";
-import { getWebsiteAIOverview, RevenueSummary } from "@/lib/websiteAIGet";
+import { query } from '../../../../lib/db';
+import { getWebsiteAIOverview, RevenueSummary } from '../../../../lib/websiteAIGet';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../../lib/auth";
-import { cors } from "@/lib/cors";
-import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+import { cors } from '../../../../lib/cors';
+import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
 
 export const dynamic = "force-dynamic";
 

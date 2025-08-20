@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "../../../../lib/db";
 import OpenAI from "openai";
 import { cors } from "../../../../lib/cors";
-import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
 
 export const dynamic = "force-dynamic";
 

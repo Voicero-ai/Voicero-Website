@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { cors } from "../../../../lib/cors";
-import { query } from "@/lib/db";
+import { query } from '../../../../lib/db';
 
 export const dynamic = "force-dynamic";
 

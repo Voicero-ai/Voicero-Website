@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
-import { cors } from "@/lib/cors";
+import prisma from '../../../../../lib/prisma';
+import { cors } from '../../../../../lib/cors';
 export const dynamic = "force-dynamic";
 
 interface Item {

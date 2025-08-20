@@ -1,6 +1,6 @@
 import { NextResponse, NextRequest } from "next/server";
-import { query } from "@/lib/db";
-import { cors } from "@/lib/cors";
+import { query } from '../../../../lib/db';
+import { cors } from '../../../../lib/cors';
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 export const dynamic = "force-dynamic";
 

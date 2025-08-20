@@ -1,9 +1,9 @@
 // app/api/contacts/route.ts  (Next.js 13+/App Router)
 // or pages/api/contacts.ts   (Pages Router) — imports & handlers are identical
 import { NextRequest, NextResponse } from "next/server";
-import { cors } from "@/lib/cors";
-import { query } from "@/lib/db";
-import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+import { cors } from '../../../lib/cors';
+import { query } from '../../../lib/db';
+import { verifyToken, getWebsiteIdFromToken } from '../../../lib/token-verifier';
 
 export const dynamic = "force-dynamic";
 

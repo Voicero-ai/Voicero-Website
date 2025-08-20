@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";
-import { query } from "@/lib/db";
-import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+import { query } from '../../../../lib/db';
+import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
 
 export const dynamic = "force-dynamic";
 

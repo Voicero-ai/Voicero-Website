@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as mysql from "mysql2/promise";
-import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
+import { verifyToken, getWebsiteIdFromToken } from '../../../../../lib/token-verifier';
 
 export const dynamic = "force-dynamic";
 

@@ -4,7 +4,7 @@ import { Pinecone } from "@pinecone-database/pinecone";
 import {
   buildHybridQueryVectors,
   shouldFallbackToCollections,
-} from "@/lib/sparse/hybrid_query_tuning";
+} from '../../../../lib/sparse/hybrid_query_tuning';
 import { cors } from "../../../../lib/cors";
 import OpenAI from "openai";
 export const dynamic = "force-dynamic";
