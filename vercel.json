@@ -1,98 +1,10 @@
 {
+  "buildCommand": "npm run build",
+  "installCommand": "npm install --legacy-peer-deps",
+  "framework": "nextjs",
   "functions": {
-    "app/api/shopify/vectorize/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/wordpress/vectorize/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/shopify/sync/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/wordpress/sync/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/shopify/train/product/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/shopify/train/post/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/shopify/train/page/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/shopify/train/discount/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/shopify/train/collection/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/shopify/train/general/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/wordpress/train/general/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/wordpress/train/page/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/wordpress/train/post/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/wordpress/train/product/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/websites/delete-website/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/websites/delete-vectors/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/wordpress/chat/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/shopify/chat/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/aiHistory/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/cron/cleanup-empty-threads/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/cron/send-follow-up/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/cron/reset-queries/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/cron/reminder-unread-contacts/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/websites/get/route.ts": {
-      "maxDuration": 300
+    "app/api/**/*.ts": {
+      "maxDuration": 30
     }
-  },
-  "crons": [
-    {
-      "path": "/api/cron/send-follow-up",
-      "schedule": "*/30 * * * *"
-    },
-    {
-      "path": "/api/cron/reset-queries",
-      "schedule": "0 0 * * *"
-    },
-    {
-      "path": "/api/cron/cleanup-empty-threads",
-      "schedule": "0 * * * *"
-    },
-    {
-      "path": "/api/cron/reminder-unread-contacts",
-      "schedule": "0 * * * *"
-    },
-    {
-      "path": "/api/cron/close-inactive-conversations",
-      "schedule": "0 * * * *"
-    }
-  ]
+  }
 }
