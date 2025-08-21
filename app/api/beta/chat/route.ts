@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import * as mysql from "mysql2/promise";
-import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../../lib/token-verifier";
+import Stripe from "stripe";
 
 export const dynamic = "force-dynamic";
 
@@ -160,6 +164,279 @@ export async function POST(request: NextRequest) {
       "INSERT INTO VoiceChats (id, voiceConversationId, messageType, content, createdAt) VALUES (UUID(), ?, 'user', ?, NOW(3))",
       [conversationIdToUse, userText]
     );
+
+    // ------- Stripe usage metering (parallel, same as other route) -------
+    // Determine if this is the first user message in this conversation
+    let shouldBillForStripe = false;
+    try {
+      const [cntRows] = await connection.execute(
+        "SELECT COUNT(*) as cnt FROM VoiceChats WHERE voiceConversationId = ? AND messageType = 'user'",
+        [conversationIdToUse]
+      );
+      const userMsgCount = (cntRows as any[])[0]?.cnt ?? 0;
+      shouldBillForStripe = userMsgCount === 1;
+    } catch (e) {
+      console.error("Billing Debug: failed to count user messages (voice)", e);
+    }
+
+    // Resolve websiteId for billing
+    let websiteIdForBilling: string | null = null;
+    try {
+      const websiteIdFromToken = await getWebsiteIdFromToken(
+        request.headers.get("authorization")
+      );
+      websiteIdForBilling = websiteIdFromToken || null;
+      if (!websiteIdForBilling) {
+        const [sessRows] = await connection.execute(
+          "SELECT websiteId FROM Session WHERE id = ? LIMIT 1",
+          [sessionIdToUse]
+        );
+        websiteIdForBilling = (sessRows as any[])[0]?.websiteId || null;
+      }
+    } catch (e) {
+      console.error("Billing Debug: failed to resolve websiteId (voice)", e);
+    }
+
+    // Fetch website and user info required for billing
+    let websiteForBilling: {
+      id: string;
+      plan: string;
+      monthlyQueries: number;
+      stripeSubscriptionId: string | null;
+      stripeSubscriptionItemId: string | null;
+      userId: string | null;
+    } | null = null;
+    let userForBilling: {
+      id: string;
+      stripeCustomerId: string | null;
+      email: string | null;
+    } | null = null;
+
+    if (websiteIdForBilling) {
+      try {
+        const [wRows] = await connection.execute(
+          "SELECT id, plan, monthlyQueries, stripeSubscriptionId, stripeSubscriptionItemId, userId FROM Website WHERE id = ? LIMIT 1",
+          [websiteIdForBilling]
+        );
+        const w = (wRows as any[])[0];
+        if (w) {
+          websiteForBilling = {
+            id: w.id,
+            plan: w.plan,
+            monthlyQueries: w.monthlyQueries ?? 0,
+            stripeSubscriptionId: w.stripeSubscriptionId || null,
+            stripeSubscriptionItemId: w.stripeSubscriptionItemId || null,
+            userId: w.userId || null,
+          };
+
+          if (websiteForBilling.userId) {
+            const [uRows] = await connection.execute(
+              "SELECT id, stripeCustomerId, email FROM User WHERE id = ? LIMIT 1",
+              [websiteForBilling.userId]
+            );
+            const u = (uRows as any[])[0];
+            if (u) {
+              userForBilling = {
+                id: u.id,
+                stripeCustomerId: u.stripeCustomerId || null,
+                email: u.email || null,
+              };
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Billing Debug: failed to load website/user (voice)", e);
+      }
+    }
+
+    // ----- Pre-check and auto-upgrade behavior (mirror Shopify route) -----
+    if (websiteForBilling) {
+      if (websiteForBilling.plan === "Beta") {
+        // Beta plan billing handled elsewhere; skip limit check here
+      } else {
+        const queryLimit = 100; // Starter plan limit
+        if (
+          websiteForBilling.monthlyQueries >= queryLimit &&
+          websiteForBilling.plan !== "Enterprise"
+        ) {
+          if (websiteForBilling.stripeSubscriptionId) {
+            try {
+              const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+              const enterprisePriceId = process.env.STRIPE_ENTERPRISE_PRICE_ID;
+
+              if (enterprisePriceId) {
+                const subscription = await stripe.subscriptions.retrieve(
+                  websiteForBilling.stripeSubscriptionId
+                );
+                const updated = await stripe.subscriptions.update(
+                  websiteForBilling.stripeSubscriptionId,
+                  {
+                    items: [
+                      {
+                        id: subscription.items.data[0].id,
+                        price: enterprisePriceId,
+                      },
+                    ],
+                    proration_behavior: "none",
+                  }
+                );
+
+                await connection.execute(
+                  "UPDATE Website SET plan = 'Enterprise', stripeSubscriptionItemId = ? WHERE id = ?",
+                  [updated.items.data[0].id, websiteForBilling.id]
+                );
+
+                // Update in-memory object
+                websiteForBilling.plan = "Enterprise";
+                websiteForBilling.stripeSubscriptionItemId =
+                  updated.items.data[0].id;
+              }
+            } catch (error) {
+              console.error(
+                "Failed to auto-upgrade to Enterprise plan (beta chat):",
+                error
+              );
+              return NextResponse.json(
+                {
+                  error:
+                    "You have reached your monthly query limit of 1000. Auto-upgrade to Enterprise plan failed.",
+                },
+                {
+                  status: 429,
+                  headers: {
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods":
+                      "GET, POST, PUT, DELETE, OPTIONS",
+                    "Access-Control-Allow-Headers":
+                      "Content-Type, Authorization",
+                  },
+                }
+              );
+            }
+          } else {
+            return NextResponse.json(
+              {
+                error:
+                  "You have reached your monthly query limit of 1000. Please upgrade to Enterprise plan for unlimited queries.",
+              },
+              {
+                status: 429,
+                headers: {
+                  "Access-Control-Allow-Origin": "*",
+                  "Access-Control-Allow-Methods":
+                    "GET, POST, PUT, DELETE, OPTIONS",
+                  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                },
+              }
+            );
+          }
+        }
+      }
+    }
+
+    // Increment monthly queries for first user message (per-thread style)
+    if (shouldBillForStripe && websiteForBilling?.id) {
+      try {
+        await connection.execute(
+          "UPDATE Website SET monthlyQueries = monthlyQueries + 1 WHERE id = ?",
+          [websiteForBilling.id]
+        );
+      } catch (e) {
+        console.error(
+          "Billing Debug: failed to increment monthlyQueries (voice)",
+          e
+        );
+      }
+    }
+
+    // Fire-and-forget Stripe metering so it runs alongside the OpenAI call
+    void (async () => {
+      try {
+        if (
+          shouldBillForStripe &&
+          websiteForBilling?.stripeSubscriptionId &&
+          websiteForBilling?.stripeSubscriptionItemId
+        ) {
+          const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+          // Resolve stripeCustomerId: prefer user record, else fetch from subscription
+          let stripeCustomerId = userForBilling?.stripeCustomerId || null;
+          if (!stripeCustomerId && websiteForBilling.stripeSubscriptionId) {
+            try {
+              const subscription = await stripe.subscriptions.retrieve(
+                websiteForBilling.stripeSubscriptionId
+              );
+              if (subscription?.customer) {
+                stripeCustomerId =
+                  typeof subscription.customer === "string"
+                    ? subscription.customer
+                    : subscription.customer.id;
+              }
+            } catch (e) {
+              console.error(
+                "Billing Debug: failed to retrieve subscription for customer id (voice)",
+                e
+              );
+            }
+          }
+
+          if (stripeCustomerId) {
+            try {
+              const meterEvent = await stripe.billing.meterEvents.create({
+                event_name: "api_requests",
+                payload: {
+                  stripe_customer_id: stripeCustomerId,
+                  value: "1",
+                },
+                timestamp: Math.floor(Date.now() / 1000),
+              });
+              console.log(
+                "Stripe: Successfully recorded meter event (beta chat)",
+                meterEvent
+              );
+            } catch (e) {
+              console.error(
+                "Stripe: failed to record meter event (beta chat)",
+                e
+              );
+            }
+
+            // Persist found customer id if user didn't have it
+            if (
+              stripeCustomerId &&
+              userForBilling?.id &&
+              !userForBilling?.stripeCustomerId
+            ) {
+              try {
+                await connection!.execute(
+                  "UPDATE User SET stripeCustomerId = ? WHERE id = ?",
+                  [stripeCustomerId, userForBilling.id]
+                );
+              } catch (e) {
+                console.error(
+                  "Billing Debug: failed to persist stripeCustomerId on user (voice)",
+                  e
+                );
+              }
+            }
+          } else {
+            console.log(
+              "Stripe: No stripeCustomerId available for metering (beta chat)"
+            );
+          }
+        } else if (!shouldBillForStripe) {
+          console.log(
+            "Stripe: Not billing for follow-up message in this conversation (beta chat)"
+          );
+        } else {
+          console.log(
+            "Stripe: Not billing - missing subscription IDs or website context (beta chat)"
+          );
+        }
+      } catch (e) {
+        console.error("Stripe metering unexpected error (beta chat)", e);
+      }
+    })();
 
     const idIn =
       typeof incomingResponseId === "string" ? incomingResponseId : undefined;

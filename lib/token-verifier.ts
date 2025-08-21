@@ -1,15 +1,5 @@
 import bcrypt from "bcryptjs";
-import * as mysql from "mysql2/promise";
-
-// Database connection
-const dbConfig = {
-  host: process.env.DATABASE_HOST!,
-  user: process.env.DATABASE_USER!,
-  password: process.env.DATABASE_PASSWORD!,
-  database: process.env.DATABASE_NAME!,
-  port: parseInt(process.env.DATABASE_PORT!) || 3306,
-  charset: "utf8mb4",
-};
+import { query } from "./db";
 
 export async function verifyToken(authHeader: string | null): Promise<boolean> {
   try {
@@ -21,24 +11,18 @@ export async function verifyToken(authHeader: string | null): Promise<boolean> {
 
     console.log("token", token);
 
-    // Connect to database and check against all hashed keys
-    const connection = await mysql.createConnection(dbConfig);
+    // Use the improved database connection with retry logic
+    const rows = await query("SELECT hashedKey FROM hashKeys");
 
-    try {
-      const [rows] = await connection.execute("SELECT hashedKey FROM hashKeys");
-
-      // Check the token against all stored hashed keys
-      for (const row of rows as any[]) {
-        const isValid = await bcrypt.compare(token, row.hashedKey);
-        if (isValid) {
-          return true;
-        }
+    // Check the token against all stored hashed keys
+    for (const row of rows as any[]) {
+      const isValid = await bcrypt.compare(token, row.hashedKey);
+      if (isValid) {
+        return true;
       }
-
-      return false;
-    } finally {
-      await connection.end();
     }
+
+    return false;
   } catch (error) {
     console.error("Token verification error:", error);
     return false;
@@ -55,25 +39,17 @@ export async function getWebsiteIdFromToken(
 
     const token = authHeader.substring(7);
 
-    const connection = await mysql.createConnection(dbConfig);
+    const rows = await query("SELECT websiteId, hashedKey FROM hashKeys");
 
-    try {
-      const [rows] = await connection.execute(
-        "SELECT websiteId, hashedKey FROM hashKeys"
-      );
-
-      // Find the matching token and return its websiteId
-      for (const row of rows as any[]) {
-        const isValid = await bcrypt.compare(token, row.hashedKey);
-        if (isValid) {
-          return row.websiteId;
-        }
+    // Find the matching token and return its websiteId
+    for (const row of rows as any[]) {
+      const isValid = await bcrypt.compare(token, row.hashedKey);
+      if (isValid) {
+        return row.websiteId;
       }
-
-      return null;
-    } finally {
-      await connection.end();
     }
+
+    return null;
   } catch (error) {
     console.error("Error getting website ID from token:", error);
     return null;

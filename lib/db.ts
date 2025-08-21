@@ -12,11 +12,16 @@ const pool = mysql.createPool({
   connectTimeout: 15_000, // ms
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
+  // Add more robust connection handling
+  multipleStatements: false,
+  dateStrings: true,
 });
 
-// Helper function to execute queries
+// Helper function to execute queries with improved retry logic
 export async function query(sql: string, params: any[] = []) {
-  const maxAttempts = 3;
+  const maxAttempts = 5; // Increased from 3 to 5
+  const baseDelay = 500; // Base delay in ms
+
   const isRetriable = (err: any) => {
     const code = err?.code || err?.errno || "";
     return (
@@ -25,7 +30,10 @@ export async function query(sql: string, params: any[] = []) {
       code === "ECONNRESET" ||
       code === "EPIPE" ||
       code === "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR" ||
-      code === "PROTOCOL_SEQUENCE_TIMEOUT"
+      code === "PROTOCOL_SEQUENCE_TIMEOUT" ||
+      code === "ECONNREFUSED" || // Added this
+      code === "ENOTFOUND" || // Added DNS resolution errors
+      code === "EHOSTUNREACH" // Added host unreachable
     );
   };
 
@@ -35,9 +43,10 @@ export async function query(sql: string, params: any[] = []) {
       const sanitizedParams = Array.isArray(params)
         ? params.map((p) => (p === undefined ? null : p))
         : params;
+
       // Pass per-query timeout to abort long-running reads
       const [rows] = await (pool.execute as any)(
-        { sql, timeout: 20_000 },
+        { sql, timeout: 30_000 }, // Increased timeout
         sanitizedParams
       );
       return rows;
@@ -47,14 +56,38 @@ export async function query(sql: string, params: any[] = []) {
         `Database query error (attempt ${attempt}/${maxAttempts}):`,
         error
       );
+
       if (!retriable || attempt === maxAttempts) {
         throw error;
       }
-      // Backoff before retrying
-      await new Promise((r) => setTimeout(r, attempt * 300));
+
+      // Exponential backoff with jitter for retries
+      const delay = baseDelay * Math.pow(2, attempt - 1) + Math.random() * 1000;
+      console.log(`Retrying in ${Math.round(delay)}ms...`);
+      await new Promise((r) => setTimeout(r, delay));
     }
   }
 }
 
-const db = { query };
+// Add a function to test database connectivity
+export async function testConnection() {
+  try {
+    await query("SELECT 1 as test");
+    return true;
+  } catch (error) {
+    console.error("Database connection test failed:", error);
+    return false;
+  }
+}
+
+// Add a function to get connection pool status
+export function getPoolStatus() {
+  return {
+    threadId: pool.threadId,
+    connectionLimit: pool.config.connectionLimit,
+    // Note: mysql2 doesn't expose current connection count directly
+  };
+}
+
+const db = { query, testConnection, getPoolStatus };
 export default db;
