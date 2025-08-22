@@ -295,8 +295,7 @@ export default function Chats() {
         <div className="relative">
           <button
             onClick={() => setShowWebsiteFilter(!showWebsiteFilter)}
-            className="px-4 py-2 bg-white rounded-xl border border-brand-lavender-light/20 
-                     flex items-center gap-2 hover:border-brand-lavender-light/40 transition-colors"
+            className="px-4 py-2 bg-white rounded-xl border border-brand-lavender-light/20 flex items-center gap-2 hover:border-brand-lavender-light/40 transition-colors"
           >
             <FaFilter className="w-4 h-4 text-brand-text-secondary" />
             <span className="text-sm text-brand-text-primary">
@@ -348,8 +347,7 @@ export default function Chats() {
         <div className="relative">
           <button
             onClick={() => setShowActionFilter(!showActionFilter)}
-            className="px-4 py-2 bg-white rounded-xl border border-brand-lavender-light/20 
-                     flex items-center gap-2 hover:border-brand-lavender-light/40 transition-colors"
+            className="px-4 py-2 bg-white rounded-xl border border-brand-lavender-light/20 flex items-center gap-2 hover:border-brand-lavender-light/40 transition-colors"
           >
             {selectedAction === "click" ? (
               <FaMousePointer className="w-4 h-4 text-brand-text-secondary" />
