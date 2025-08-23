@@ -625,7 +625,6 @@ export async function POST(request: NextRequest) {
     let outputText: string;
     let openaiResponseId = (classifierCompletion as any)?.id || null;
     let fullCompletion: any = null;
-    let aiStartTime = 0; // For tracking AI completion time
 
     // Convert classifier result to QuestionClassification type for Pinecone search
     const pineconeClassification: QuestionClassification = {
@@ -645,12 +644,9 @@ export async function POST(request: NextRequest) {
 
     // Prepare for Pinecone search if research is needed
     let searchResults = [];
-    let searchStartTime = 0; // For timing the entire search process
     if (classifierResult.needsResearch) {
       try {
         console.log("[PINECONE] Research needed, performing search");
-        searchStartTime = Date.now();
-
         // Get website ID for Pinecone namespace
         const websiteId = await getWebsiteIdFromToken(authHeader);
         if (!websiteId) {
@@ -669,21 +665,13 @@ export async function POST(request: NextRequest) {
         }
 
         // Generate query vectors
-        console.log("[TIMING] Starting vector generation");
-        const vectorStartTime = Date.now();
         const { denseScaled: queryDense, sparseScaled: querySparse } =
           await buildHybridQueryVectors(question, {
             alpha: 0.6,
             featureSpace: 2_000_003,
           });
-        const vectorEndTime = Date.now();
-        console.log(
-          `[TIMING] Vector generation took ${vectorEndTime - vectorStartTime}ms`
-        );
 
         // Perform search
-        console.log("[TIMING] Starting Pinecone search query");
-        const searchQueryStartTime = Date.now();
         const timeMarks: Record<string, number> = {};
         searchResults = await performMainSearch(
           pinecone,
@@ -694,13 +682,6 @@ export async function POST(request: NextRequest) {
           pineconeClassification,
           false, // useAllNamespaces
           timeMarks
-        );
-
-        const searchQueryEndTime = Date.now();
-        console.log(
-          `[TIMING] Pinecone search query took ${
-            searchQueryEndTime - searchQueryStartTime
-          }ms`
         );
 
         console.log(
@@ -757,13 +738,6 @@ export async function POST(request: NextRequest) {
       } catch (error) {
         console.error("[PINECONE] Search error:", error);
         // Continue execution even if search fails
-      } finally {
-        const searchEndTime = Date.now();
-        console.log(
-          `[TIMING] Total Pinecone search process took ${
-            searchEndTime - searchStartTime
-          }ms`
-        );
       }
     }
 
@@ -817,12 +791,9 @@ export async function POST(request: NextRequest) {
       console.log("[ACTION] Generated response:", outputText);
     } else {
       // For non-action responses or research needed, call the full completion API
-      let aiStartTime = Date.now();
-      console.log("[TIMING] Starting AI completion");
 
       // Add search results context to the content parts if available
       if (searchResults && searchResults.length > 0) {
-        const processingStartTime = Date.now();
         // Extract relevant information from top search results (max 3)
         const topResults = searchResults.slice(0, 3);
         const searchContext = topResults
@@ -848,13 +819,6 @@ export async function POST(request: NextRequest) {
           // Log the search context being added to the prompt
           console.log("[PINECONE] Adding search context to prompt:");
           console.log(searchContext);
-
-          const processingEndTime = Date.now();
-          console.log(
-            `[TIMING] Results processing and formatting took ${
-              processingEndTime - processingStartTime
-            }ms`
-          );
 
           contentParts.unshift({
             type: "input_text",
@@ -909,10 +873,7 @@ export async function POST(request: NextRequest) {
     // Update response ID from the full completion
     openaiResponseId = (fullCompletion as any)?.id || openaiResponseId;
 
-    if (fullCompletion && aiStartTime > 0) {
-      const aiEndTime = Date.now();
-      console.log(`[TIMING] AI completion took ${aiEndTime - aiStartTime}ms`);
-
+    if (fullCompletion) {
       console.log(
         "[MAIN] Full completion generated. Response ID:",
         openaiResponseId
