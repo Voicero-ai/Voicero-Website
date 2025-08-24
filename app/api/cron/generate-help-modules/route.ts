@@ -95,28 +95,26 @@ export async function GET(request: Request) {
   try {
     console.log("Starting help module generation...");
 
-    // Get only the Is117a njasd website
-    console.log("Searching for Is117a website...");
+    // Get all websites
+    console.log("Fetching all websites...");
     const websites = await query(
       `SELECT w.id, w.name, w.url, u.email as userEmail 
        FROM Website w 
-       JOIN User u ON w.userId = u.id 
-       WHERE w.name LIKE '%Is117a%' OR w.url LIKE '%is117a%' 
-       LIMIT 1`,
+       JOIN User u ON w.userId = u.id`,
       []
     );
 
     console.log(`Query result:`, websites);
 
     if (websites.length === 0) {
-      console.log("No Is117a website found in database");
+      console.log("No websites found in database");
       return NextResponse.json({
-        message: "No Is117a website found",
+        message: "No websites found",
         totalGenerated: 0,
       });
     }
 
-    console.log(`Found website: ${websites[0].name} (${websites[0].id})`);
+    console.log(`Found ${websites.length} websites to process`);
 
     let totalGenerated = 0;
 
