@@ -30,29 +30,29 @@ interface DashboardData {
   stats: {
     totalChats: number;
     voiceChats: number;
-    aiRedirects: number;
-    aiScrolls: number;
-    aiPurchases: number;
-    aiClicks: number;
+    textChats: number;
+    cartActions: number;
+    movementActions: number;
+    orderActions: number;
     activeSites: number;
   };
   chartData: {
     date: string;
-    redirects: number;
-    scrolls: number;
-    purchases: number;
-    clicks: number;
-    chats: number;
+    cartActions: number;
+    movementActions: number;
+    orderActions: number;
+    textConversations: number;
+    voiceConversations: number;
+    chats: number; // legacy
   }[];
   websites: {
     id: string;
     domain: string;
     platform: string;
     monthlyChats: number;
-    aiRedirects: number;
-    aiScrolls: number;
-    aiPurchases: number;
-    aiClicks: number;
+    cartActions: number;
+    movementActions: number;
+    orderActions: number;
     status: string;
   }[];
 }
@@ -145,12 +145,15 @@ export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState("7");
-  const [activeLines, setActiveLines] = useState({
-    redirects: true,
-    scrolls: true,
-    purchases: true,
-    clicks: true,
-    chats: true,
+  const [activeChart, setActiveChart] = useState<'actions' | 'conversations'>('actions');
+  const [activeActionLines, setActiveActionLines] = useState({
+    cartActions: true,
+    movementActions: true,
+    orderActions: true,
+  });
+  const [activeConversationLines, setActiveConversationLines] = useState({
+    textConversations: true,
+    voiceConversations: true,
   });
   const router = useRouter();
   const { status } = useSession({
@@ -231,6 +234,9 @@ export default function Dashboard() {
           <p className="text-3xl font-bold text-brand-text-primary">
             {data.stats.voiceChats}
           </p>
+          <p className="text-sm text-brand-text-secondary mt-1">
+            Text: {data.stats.textChats}
+          </p>
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 p-6">
@@ -244,16 +250,13 @@ export default function Dashboard() {
           </div>
           <div className="space-y-1">
             <p className="text-sm text-brand-text-secondary">
-              Redirects: {data.stats.aiRedirects}
+              Cart: {data.stats.cartActions}
             </p>
             <p className="text-sm text-brand-text-secondary">
-              Scrolls: {data.stats.aiScrolls}
+              Movement: {data.stats.movementActions}
             </p>
             <p className="text-sm text-brand-text-secondary">
-              Add to Cart: {data.stats.aiPurchases}
-            </p>
-            <p className="text-sm text-brand-text-secondary">
-              Clicks: {data.stats.aiClicks}
+              Orders: {data.stats.orderActions}
             </p>
           </div>
         </div>
@@ -281,9 +284,33 @@ export default function Dashboard() {
         {/* Activity Chart */}
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 p-6">
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-semibold text-brand-text-primary">
-              Activity Overview
-            </h2>
+            <div className="flex items-center gap-4">
+              <h2 className="text-xl font-semibold text-brand-text-primary">
+                Activity Overview
+              </h2>
+              <div className="flex bg-gray-100 rounded-lg p-1">
+                <button
+                  onClick={() => setActiveChart('actions')}
+                  className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                    activeChart === 'actions'
+                      ? 'bg-white text-brand-text-primary shadow-sm'
+                      : 'text-brand-text-secondary hover:text-brand-text-primary'
+                  }`}
+                >
+                  Actions
+                </button>
+                <button
+                  onClick={() => setActiveChart('conversations')}
+                  className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                    activeChart === 'conversations'
+                      ? 'bg-white text-brand-text-primary shadow-sm'
+                      : 'text-brand-text-secondary hover:text-brand-text-primary'
+                  }`}
+                >
+                  Conversations
+                </button>
+              </div>
+            </div>
             <select
               className="px-3 py-1 border border-brand-lavender-light/20 rounded-lg text-sm text-brand-text-secondary"
               value={timeRange}
@@ -294,79 +321,95 @@ export default function Dashboard() {
               <option value="90">Last 90 days</option>
             </select>
           </div>
-          <div className="flex flex-wrap gap-4 mb-4">
-            <button
-              onClick={() =>
-                setActiveLines((prev) => ({
-                  ...prev,
-                  redirects: !prev.redirects,
-                }))
-              }
-              className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
-                activeLines.redirects
-                  ? "bg-brand-lavender-light/10 text-brand-text-primary"
-                  : "bg-gray-100 text-gray-400"
-              }`}
-            >
-              <div className="w-3 h-3 rounded-full bg-[#6366f1]" />
-              Redirects
-            </button>
-            <button
-              onClick={() =>
-                setActiveLines((prev) => ({ ...prev, scrolls: !prev.scrolls }))
-              }
-              className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
-                activeLines.scrolls
-                  ? "bg-brand-lavender-light/10 text-brand-text-primary"
-                  : "bg-gray-100 text-gray-400"
-              }`}
-            >
-              <div className="w-3 h-3 rounded-full bg-[#22c55e]" />
-              Scrolls
-            </button>
-            <button
-              onClick={() =>
-                setActiveLines((prev) => ({
-                  ...prev,
-                  purchases: !prev.purchases,
-                }))
-              }
-              className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
-                activeLines.purchases
-                  ? "bg-brand-lavender-light/10 text-brand-text-primary"
-                  : "bg-gray-100 text-gray-400"
-              }`}
-            >
-              <div className="w-3 h-3 rounded-full bg-[#f59e0b]" />
-              Add to Cart
-            </button>
-            <button
-              onClick={() =>
-                setActiveLines((prev) => ({ ...prev, clicks: !prev.clicks }))
-              }
-              className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
-                activeLines.clicks
-                  ? "bg-brand-lavender-light/10 text-brand-text-primary"
-                  : "bg-gray-100 text-gray-400"
-              }`}
-            >
-              <div className="w-3 h-3 rounded-full bg-[#ef4444]" />
-              Clicks
-            </button>
-            <button
-              onClick={() =>
-                setActiveLines((prev) => ({ ...prev, chats: !prev.chats }))
-              }
-              className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
-                activeLines.chats
-                  ? "bg-brand-lavender-light/10 text-brand-text-primary"
-                  : "bg-gray-100 text-gray-400"
-              }`}
-            >
-              <div className="w-3 h-3 rounded-full bg-[#a855f7]" />
-              Chats
-            </button>
-          </div>
+          {activeChart === 'actions' && (
+            <div className="flex flex-wrap gap-4 mb-4">
+              <button
+                onClick={() =>
+                  setActiveActionLines((prev) => ({
+                    ...prev,
+                    cartActions: !prev.cartActions,
+                  }))
+                }
+                className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
+                  activeActionLines.cartActions
+                    ? "bg-brand-lavender-light/10 text-brand-text-primary"
+                    : "bg-gray-100 text-gray-400"
+                }`}
+              >
+                <div className="w-3 h-3 rounded-full bg-[#f59e0b]" />
+                Cart Actions
+              </button>
+              <button
+                onClick={() =>
+                  setActiveActionLines((prev) => ({
+                    ...prev,
+                    movementActions: !prev.movementActions,
+                  }))
+                }
+                className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
+                  activeActionLines.movementActions
+                    ? "bg-brand-lavender-light/10 text-brand-text-primary"
+                    : "bg-gray-100 text-gray-400"
+                }`}
+              >
+                <div className="w-3 h-3 rounded-full bg-[#6366f1]" />
+                Movement Actions
+              </button>
+              <button
+                onClick={() =>
+                  setActiveActionLines((prev) => ({
+                    ...prev,
+                    orderActions: !prev.orderActions,
+                  }))
+                }
+                className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
+                  activeActionLines.orderActions
+                    ? "bg-brand-lavender-light/10 text-brand-text-primary"
+                    : "bg-gray-100 text-gray-400"
+                }`}
+              >
+                <div className="w-3 h-3 rounded-full bg-[#22c55e]" />
+                Order Actions
+              </button>
+            </div>
+          )}
+          
+          {activeChart === 'conversations' && (
+            <div className="flex flex-wrap gap-4 mb-4">
+              <button
+                onClick={() =>
+                  setActiveConversationLines((prev) => ({
+                    ...prev,
+                    textConversations: !prev.textConversations,
+                  }))
+                }
+                className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
+                  activeConversationLines.textConversations
+                    ? "bg-brand-lavender-light/10 text-brand-text-primary"
+                    : "bg-gray-100 text-gray-400"
+                }`}
+              >
+                <div className="w-3 h-3 rounded-full bg-[#3b82f6]" />
+                Text Conversations
+              </button>
+              <button
+                onClick={() =>
+                  setActiveConversationLines((prev) => ({
+                    ...prev,
+                    voiceConversations: !prev.voiceConversations,
+                  }))
+                }
+                className={`flex items-center gap-2 px-3 py-1 rounded-lg text-sm transition-colors ${
+                  activeConversationLines.voiceConversations
+                    ? "bg-brand-lavender-light/10 text-brand-text-primary"
+                    : "bg-gray-100 text-gray-400"
+                }`}
+              >
+                <div className="w-3 h-3 rounded-full bg-[#ef4444]" />
+                Voice Conversations
+              </button>
+            </div>
+          )}
           <div className="h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
@@ -392,51 +435,55 @@ export default function Dashboard() {
                     padding: "8px",
                   }}
                 />
-                {activeLines.redirects && (
+                
+                {/* Actions Graph */}
+                {activeChart === 'actions' && activeActionLines.cartActions && (
                   <Line
                     type="monotone"
-                    dataKey="redirects"
-                    stroke="#6366f1"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                    connectNulls
-                  />
-                )}
-                {activeLines.scrolls && (
-                  <Line
-                    type="monotone"
-                    dataKey="scrolls"
-                    stroke="#22c55e"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                    connectNulls
-                  />
-                )}
-                {activeLines.purchases && (
-                  <Line
-                    type="monotone"
-                    dataKey="purchases"
+                    dataKey="cartActions"
                     stroke="#f59e0b"
                     strokeWidth={2}
                     dot={{ r: 4 }}
                     connectNulls
                   />
                 )}
-                {activeLines.clicks && (
+                {activeChart === 'actions' && activeActionLines.movementActions && (
                   <Line
                     type="monotone"
-                    dataKey="clicks"
-                    stroke="#ef4444"
+                    dataKey="movementActions"
+                    stroke="#6366f1"
                     strokeWidth={2}
                     dot={{ r: 4 }}
                     connectNulls
                   />
                 )}
-                {activeLines.chats && (
+                {activeChart === 'actions' && activeActionLines.orderActions && (
                   <Line
                     type="monotone"
-                    dataKey="chats"
-                    stroke="#a855f7"
+                    dataKey="orderActions"
+                    stroke="#22c55e"
+                    strokeWidth={2}
+                    dot={{ r: 4 }}
+                    connectNulls
+                  />
+                )}
+                
+                {/* Conversations Graph */}
+                {activeChart === 'conversations' && activeConversationLines.textConversations && (
+                  <Line
+                    type="monotone"
+                    dataKey="textConversations"
+                    stroke="#3b82f6"
+                    strokeWidth={2}
+                    dot={{ r: 4 }}
+                    connectNulls
+                  />
+                )}
+                {activeChart === 'conversations' && activeConversationLines.voiceConversations && (
+                  <Line
+                    type="monotone"
+                    dataKey="voiceConversations"
+                    stroke="#ef4444"
                     strokeWidth={2}
                     dot={{ r: 4 }}
                     connectNulls
@@ -532,7 +579,7 @@ export default function Dashboard() {
                         {site.domain}
                       </h3>
                       <p className="text-sm text-brand-text-secondary">
-                        {site.monthlyChats} chats • {site.aiRedirects} redirects
+                        {site.monthlyChats} chats • {site.cartActions + site.movementActions + site.orderActions} actions
                       </p>
                     </div>
                   </div>

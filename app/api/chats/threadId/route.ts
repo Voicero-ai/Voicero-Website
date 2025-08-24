@@ -21,6 +21,7 @@ interface AiMessage {
   role: string;
   content: string;
   createdAt: Date;
+  type?: string | null;
 }
 
 export async function GET(request: NextRequest) {
@@ -37,14 +38,41 @@ export async function GET(request: NextRequest) {
       return new NextResponse("Thread ID is required", { status: 400 });
     }
 
-    // Get the thread and check if it belongs to the user
-    const threadResults = (await query(
-      `SELECT t.id, t.threadId, t.createdAt, w.id as website_id, w.url as website_url 
+    // Check if the thread is an AiThread
+    const aiThreadResults = (await query(
+      `SELECT t.id, t.threadId, t.createdAt, w.id as website_id, w.url as website_url, 'aithread' as source_type
        FROM AiThread t
        JOIN Website w ON t.websiteId = w.id
        WHERE t.id = ? AND w.userId = ?`,
       [threadId, session.user.id]
     )) as any[];
+
+    // Check if the thread is a TextConversation
+    const textThreadResults = (await query(
+      `SELECT tc.id, tc.sessionId as thread_id, tc.createdAt, w.id as website_id, w.url as website_url, 'textconversation' as source_type
+       FROM TextConversations tc
+       JOIN Session s ON tc.sessionId COLLATE utf8mb4_unicode_ci = s.id COLLATE utf8mb4_unicode_ci
+       JOIN Website w ON s.websiteId = w.id
+       WHERE tc.id = ? AND w.userId = ?`,
+      [threadId, session.user.id]
+    )) as any[];
+
+    // Check if the thread is a VoiceConversation
+    const voiceThreadResults = (await query(
+      `SELECT vc.id, vc.sessionId as thread_id, vc.createdAt, w.id as website_id, w.url as website_url, 'voiceconversation' as source_type
+       FROM VoiceConversations vc
+       JOIN Session s ON vc.sessionId = s.id
+       JOIN Website w ON s.websiteId = w.id
+       WHERE vc.id = ? AND w.userId = ?`,
+      [threadId, session.user.id]
+    )) as any[];
+
+    // Combine results
+    const threadResults = [
+      ...aiThreadResults,
+      ...textThreadResults,
+      ...voiceThreadResults,
+    ];
 
     if (threadResults.length === 0) {
       return new NextResponse("Thread not found", { status: 404 });
@@ -52,19 +80,55 @@ export async function GET(request: NextRequest) {
 
     const threadData = threadResults[0];
 
-    // Get messages for this thread
-    const messages = (await query(
-      `SELECT id, threadId, role, content, createdAt 
-       FROM AiMessage 
-       WHERE threadId = ? 
-       ORDER BY createdAt ASC`,
-      [threadId]
-    )) as AiMessage[];
+    // Get messages for this thread based on its source type
+    let messages: AiMessage[] = [];
+
+    if (threadData.source_type === "aithread") {
+      messages = (await query(
+        `SELECT id, threadId, role, content, createdAt 
+         FROM AiMessage 
+         WHERE threadId = ? 
+         ORDER BY createdAt ASC`,
+        [threadId]
+      )) as AiMessage[];
+    } else if (threadData.source_type === "textconversation") {
+      const textMessages = (await query(
+        `SELECT id, textConversationId as threadId, 
+         CASE WHEN messageType = 'user' THEN 'user' ELSE 'assistant' END as role,
+         content, createdAt 
+         FROM TextChats 
+         WHERE textConversationId = ? 
+         ORDER BY createdAt ASC`,
+        [threadId]
+      )) as any[];
+
+      // Convert to AiMessage format
+      messages = textMessages.map((msg) => ({
+        ...msg,
+        type: msg.role === "user" ? "text" : null,
+      }));
+    } else if (threadData.source_type === "voiceconversation") {
+      const voiceMessages = (await query(
+        `SELECT id, voiceConversationId as threadId, 
+         CASE WHEN messageType = 'user' THEN 'user' ELSE 'assistant' END as role,
+         content, createdAt 
+         FROM VoiceChats 
+         WHERE voiceConversationId = ? 
+         ORDER BY createdAt ASC`,
+        [threadId]
+      )) as any[];
+
+      // Convert to AiMessage format
+      messages = voiceMessages.map((msg) => ({
+        ...msg,
+        type: msg.role === "user" ? "voice" : null,
+      }));
+    }
 
     // Construct the thread object
     const thread: AiThread = {
       id: threadData.id,
-      threadId: threadData.threadId,
+      threadId: threadData.threadId || threadData.thread_id,
       createdAt: threadData.createdAt,
       website: {
         id: threadData.website_id,
@@ -73,9 +137,20 @@ export async function GET(request: NextRequest) {
       messages: messages,
     };
 
+    // Determine the type based on source_type or by looking at the first message
+    let sessionType = "text";
+    if (threadData.source_type === "voiceconversation") {
+      sessionType = "voice";
+    } else if (
+      messages.length > 0 &&
+      messages.some((m) => m.type === "voice")
+    ) {
+      sessionType = "voice";
+    }
+
     const formattedSession = {
       id: thread.id,
-      type: "text",
+      type: sessionType,
       website: {
         id: thread.website.id,
         domain: thread.website.url,

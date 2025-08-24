@@ -96,7 +96,7 @@ export async function getWebsiteAIOverview(
   const now = new Date();
   const fourWeeksAgo = new Date(now.getTime() - 28 * 24 * 60 * 60 * 1000);
 
-  // Fetch threads within the last 4 weeks (28 days)
+  // Fetch AiThreads within the last 4 weeks (28 days)
   const aiThreads = (await query(
     `SELECT at.*, COUNT(am.id) as messageCount
      FROM AiThread at
@@ -107,7 +107,7 @@ export async function getWebsiteAIOverview(
     [fourWeeksAgo, websiteId, fourWeeksAgo]
   )) as AiThreadRow[];
 
-  // Attach messages and sessions for each thread
+  // Attach messages and sessions for each AiThread
   for (const thread of aiThreads) {
     const messages = (await query(
       `SELECT * FROM AiMessage WHERE threadId = ? AND createdAt >= ? ORDER BY createdAt ASC`,
@@ -120,6 +120,112 @@ export async function getWebsiteAIOverview(
       [thread.id]
     )) as SessionRow[];
     (thread as any).sessions = sessions;
+  }
+
+  // Fetch TextConversations within the last 4 weeks
+  const textConversationRows = (await query(
+    `SELECT tc.id, tc.sessionId, tc.createdAt, 
+            COALESCE(tc.mostRecentConversationAt, tc.createdAt) as lastMessageAt,
+            tc.totalMessages as messageCount
+     FROM TextConversations tc
+     JOIN Session s ON tc.sessionId COLLATE utf8mb4_unicode_ci = s.id COLLATE utf8mb4_unicode_ci
+     WHERE s.websiteId = ? AND (tc.mostRecentConversationAt >= ? OR tc.createdAt >= ?)
+     ORDER BY COALESCE(tc.mostRecentConversationAt, tc.createdAt) DESC`,
+    [websiteId, fourWeeksAgo, fourWeeksAgo]
+  )) as any[];
+
+  // Convert TextConversations to thread format
+  for (const conv of textConversationRows) {
+    const chatRows = (await query(
+      `SELECT id, messageType, content, createdAt, textConversationId as threadId, action, actionType
+       FROM TextChats WHERE textConversationId = ? AND createdAt >= ? 
+       ORDER BY createdAt ASC`,
+      [conv.id, fourWeeksAgo]
+    )) as any[];
+
+    const messages: AiMessageRow[] = chatRows.map((m) => ({
+      id: m.id,
+      threadId: m.threadId,
+      role: m.messageType === "user" ? "user" : "assistant",
+      content: m.content,
+      type: m.messageType === "user" ? "text" : null,
+      createdAt: new Date(m.createdAt),
+      pageUrl: null,
+      scrollToText: null,
+      action: m.action,
+      actionType: m.actionType,
+    } as any));
+
+    if (messages.length > 0) {
+      const lastMessageAt = conv.lastMessageAt instanceof Date 
+        ? conv.lastMessageAt 
+        : new Date(conv.lastMessageAt);
+
+      aiThreads.push({
+        id: conv.id,
+        threadId: conv.id,
+        title: "Text Conversation",
+        createdAt: conv.createdAt instanceof Date ? conv.createdAt : new Date(conv.createdAt),
+        lastMessageAt: lastMessageAt,
+        messageCount: messages.length,
+        messages: messages,
+        sessions: [],
+        source_type: "textconversation",
+      } as any);
+    }
+  }
+
+  // Fetch VoiceConversations within the last 4 weeks
+  const voiceConversationRows = (await query(
+    `SELECT vc.id, vc.sessionId, vc.createdAt,
+            COALESCE(vc.mostRecentConversationAt, vc.createdAt) as lastMessageAt,
+            vc.totalMessages as messageCount
+     FROM VoiceConversations vc
+     JOIN Session s ON vc.sessionId = s.id
+     WHERE s.websiteId = ? AND (vc.mostRecentConversationAt >= ? OR vc.createdAt >= ?)
+     ORDER BY COALESCE(vc.mostRecentConversationAt, vc.createdAt) DESC`,
+    [websiteId, fourWeeksAgo, fourWeeksAgo]
+  )) as any[];
+
+  // Convert VoiceConversations to thread format
+  for (const conv of voiceConversationRows) {
+    const chatRows = (await query(
+      `SELECT id, messageType, content, createdAt, voiceConversationId as threadId, action, actionType
+       FROM VoiceChats WHERE voiceConversationId = ? AND createdAt >= ? 
+       ORDER BY createdAt ASC`,
+      [conv.id, fourWeeksAgo]
+    )) as any[];
+
+    const messages: AiMessageRow[] = chatRows.map((m) => ({
+      id: m.id,
+      threadId: m.threadId,
+      role: m.messageType === "user" ? "user" : "assistant",
+      content: m.content,
+      type: m.messageType === "user" ? "voice" : null,
+      createdAt: new Date(m.createdAt),
+      pageUrl: null,
+      scrollToText: null,
+      action: m.action,
+      actionType: m.actionType,
+    } as any));
+
+    if (messages.length > 0) {
+      const lastMessageAt = conv.lastMessageAt instanceof Date 
+        ? conv.lastMessageAt 
+        : new Date(conv.lastMessageAt);
+
+      aiThreads.push({
+        id: conv.id,
+        threadId: conv.id,
+        title: "Voice Conversation",
+        createdAt: conv.createdAt instanceof Date ? conv.createdAt : new Date(conv.createdAt),
+        lastMessageAt: lastMessageAt,
+        messageCount: messages.length,
+        messages: messages,
+        sessions: [],
+        source_type: "voiceconversation",
+      } as any);
+    }
   }
 
   // Deterministic revenue detection for last 4 weeks
@@ -189,59 +295,106 @@ export async function getWebsiteAIOverview(
       const msgs = (t.messages as AiMessageRow[]) || [];
       for (const m of msgs) {
         if (m.role !== "assistant") continue;
-        const obj = tryParseContentJson(m.content);
+        
         let detected = false;
-        if (obj && obj.action === "purchase") {
-          const ctx = obj.action_context || {};
-          const url = ctx.url || ctx.product_url || undefined;
-          const handle = url
-            ? extractHandleFromUrl(url) || undefined
-            : undefined;
-          const productId = ctx.product_id || ctx.id || undefined;
-          const productName = ctx.product_name || ctx.title || undefined;
-          const key = handle || productId || productName || url || "unknown";
-          if (!purchasesByThread.has(t.id))
-            purchasesByThread.set(t.id, new Set());
-          purchasesByThread.get(t.id)!.add(String(key));
-          rawPurchases.push({
-            threadId: t.id,
-            url,
-            handle,
-            productId,
-            productName,
-          });
-          detected = true;
-        }
-        if (!detected && m.content.includes('"action":"purchase"')) {
-          // fallback: extract URL and attempt parse for ids/names
-          const urls = m.content.match(
-            /https?:\/\/[^\s)]+|(?:\/(?:pages|products|blogs|collections)\/[^\s)]+)/g
-          );
-          const url = urls && urls.length > 0 ? urls[0] : undefined;
-          const handle = url
-            ? extractHandleFromUrl(url) || undefined
-            : undefined;
-          let productId: string | undefined;
-          let productName: string | undefined;
-          const maybe = tryParseContentJson(m.content);
-          if (maybe) {
-            productId =
-              maybe?.action_context?.product_id || maybe?.action_context?.id;
-            productName =
-              maybe?.action_context?.product_name ||
-              maybe?.action_context?.title;
+        
+        // First check if this is a TextChat/VoiceChat with action field
+        if ((m as any).action) {
+          const action = (m as any).action;
+          if (action === "add_to_cart" || action === "purchase") {
+            // Extract product info from actionType or content
+            let productId: string | undefined;
+            let productName: string | undefined;
+            let url: string | undefined;
+            let handle: string | undefined;
+
+            const actionType = (m as any).actionType;
+            if (actionType) {
+              if (typeof actionType === "object") {
+                productId = actionType.product_id || actionType.variant_id;
+                productName = actionType.product_name || actionType.item_name;
+                url = actionType.url;
+              } else if (typeof actionType === "string") {
+                // Try to extract from string
+                productName = actionType;
+              }
+            }
+
+            // Try to extract handle from URL if available
+            if (url) {
+              handle = extractHandleFromUrl(url) || undefined;
+            }
+
+            const key = handle || productId || productName || url || "unknown";
+            if (!purchasesByThread.has(t.id))
+              purchasesByThread.set(t.id, new Set());
+            purchasesByThread.get(t.id)!.add(String(key));
+            rawPurchases.push({
+              threadId: t.id,
+              url,
+              handle,
+              productId,
+              productName,
+            });
+            detected = true;
           }
-          const key = handle || productId || productName || url || "unknown";
-          if (!purchasesByThread.has(t.id))
-            purchasesByThread.set(t.id, new Set());
-          purchasesByThread.get(t.id)!.add(String(key));
-          rawPurchases.push({
-            threadId: t.id,
-            url,
-            handle,
-            productId,
-            productName,
-          });
+        }
+
+        // Fallback to JSON parsing from content (for AiThread messages)
+        if (!detected) {
+          const obj = tryParseContentJson(m.content);
+          if (obj && obj.action === "purchase") {
+            const ctx = obj.action_context || {};
+            const url = ctx.url || ctx.product_url || undefined;
+            const handle = url
+              ? extractHandleFromUrl(url) || undefined
+              : undefined;
+            const productId = ctx.product_id || ctx.id || undefined;
+            const productName = ctx.product_name || ctx.title || undefined;
+            const key = handle || productId || productName || url || "unknown";
+            if (!purchasesByThread.has(t.id))
+              purchasesByThread.set(t.id, new Set());
+            purchasesByThread.get(t.id)!.add(String(key));
+            rawPurchases.push({
+              threadId: t.id,
+              url,
+              handle,
+              productId,
+              productName,
+            });
+            detected = true;
+          }
+          if (!detected && m.content.includes('"action":"purchase"')) {
+            // fallback: extract URL and attempt parse for ids/names
+            const urls = m.content.match(
+              /https?:\/\/[^\s)]+|(?:\/(?:pages|products|blogs|collections)\/[^\s)]+)/g
+            );
+            const url = urls && urls.length > 0 ? urls[0] : undefined;
+            const handle = url
+              ? extractHandleFromUrl(url) || undefined
+              : undefined;
+            let productId: string | undefined;
+            let productName: string | undefined;
+            const maybe = tryParseContentJson(m.content);
+            if (maybe) {
+              productId =
+                maybe?.action_context?.product_id || maybe?.action_context?.id;
+              productName =
+                maybe?.action_context?.product_name ||
+                maybe?.action_context?.title;
+            }
+            const key = handle || productId || productName || url || "unknown";
+            if (!purchasesByThread.has(t.id))
+              purchasesByThread.set(t.id, new Set());
+            purchasesByThread.get(t.id)!.add(String(key));
+            rawPurchases.push({
+              threadId: t.id,
+              url,
+              handle,
+              productId,
+              productName,
+            });
+          }
         }
       }
     }

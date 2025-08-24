@@ -63,6 +63,7 @@ interface AiThread {
   messageCount: number;
   messages: AiMessage[];
   sessions: Session[];
+  source_type?: string; // Can be 'aithread', 'textconversation', or 'voiceconversation'
 }
 
 // Structured report we now expect from the AI
@@ -225,7 +226,7 @@ export async function POST(request: NextRequest) {
 
     // If we already have an analysis and it's not time for a new one, return it
     if (!needsNewAnalysis && website.analysis) {
-      // Fetch threads in the last 30 days for display
+      // Fetch AiThreads in the last 30 days for display
       const aiThreads = (await query(
         `SELECT at.*, COUNT(am.id) as messageCount
          FROM AiThread at
@@ -235,6 +236,28 @@ export async function POST(request: NextRequest) {
          ORDER BY at.lastMessageAt DESC`,
         [thirtyDaysAgo, website.id, thirtyDaysAgo]
       )) as AiThread[];
+
+      // Fetch TextConversations in the last 30 days
+      const textConversationRows = (await query(
+        `SELECT tc.id, tc.sessionId, tc.createdAt, tc.mostRecentConversationAt as lastMessageAt, 
+                tc.totalMessages as messageCount
+         FROM TextConversations tc
+         JOIN Session s ON tc.sessionId COLLATE utf8mb4_unicode_ci = s.id COLLATE utf8mb4_unicode_ci
+         WHERE s.websiteId = ? AND (tc.mostRecentConversationAt >= ? OR tc.createdAt >= ?)
+         ORDER BY COALESCE(tc.mostRecentConversationAt, tc.createdAt) DESC`,
+        [website.id, thirtyDaysAgo, thirtyDaysAgo]
+      )) as any[];
+
+      // Fetch VoiceConversations in the last 30 days
+      const voiceConversationRows = (await query(
+        `SELECT vc.id, vc.sessionId, vc.createdAt, vc.mostRecentConversationAt as lastMessageAt, 
+                vc.totalMessages as messageCount
+         FROM VoiceConversations vc
+         JOIN Session s ON vc.sessionId = s.id
+         WHERE s.websiteId = ? AND (vc.mostRecentConversationAt >= ? OR vc.createdAt >= ?)
+         ORDER BY COALESCE(vc.mostRecentConversationAt, vc.createdAt) DESC`,
+        [website.id, thirtyDaysAgo, thirtyDaysAgo]
+      )) as any[];
 
       // For each thread, fetch its messages
       for (const thread of aiThreads) {
@@ -270,9 +293,116 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Use all threads within the 30-day window
-      const windowThreads = aiThreads;
-      const recentThreads = windowThreads;
+      // Convert TextConversations to AiThread format
+      const textThreads: AiThread[] = [];
+      for (const conv of textConversationRows) {
+        // Get messages
+        const chatRows = (await query(
+          `SELECT id, messageType, content, createdAt, textConversationId as threadId
+           FROM TextChats WHERE textConversationId = ? AND createdAt >= ? 
+           ORDER BY createdAt ASC`,
+          [conv.id, thirtyDaysAgo]
+        )) as any[];
+
+        const messages: AiMessage[] = chatRows.map((m) => ({
+          id: m.id,
+          threadId: m.threadId,
+          role: m.messageType === "user" ? "user" : "assistant",
+          content: m.content,
+          type: m.messageType === "user" ? "text" : null,
+          createdAt: new Date(m.createdAt),
+          pageUrl: null,
+          scrollToText: null,
+        }));
+
+        if (messages.length > 0) {
+          // Ensure dates are properly handled
+          const createdAt =
+            conv.createdAt instanceof Date
+              ? conv.createdAt
+              : new Date(conv.createdAt);
+          const lastMessageAt =
+            conv.lastMessageAt instanceof Date
+              ? conv.lastMessageAt
+              : new Date(conv.lastMessageAt || conv.mostRecentConversationAt || conv.createdAt);
+
+          textThreads.push({
+            id: conv.id,
+            threadId: conv.id,
+            title: "Text Conversation",
+            createdAt: createdAt,
+            lastMessageAt: lastMessageAt,
+            messageCount: messages.length,
+            messages: messages,
+            sessions: [],
+            source_type: "textconversation", // Add source type for frontend
+          });
+        }
+      }
+
+      // Convert VoiceConversations to AiThread format
+      const voiceThreads: AiThread[] = [];
+      for (const conv of voiceConversationRows) {
+        // Get messages
+        const chatRows = (await query(
+          `SELECT id, messageType, content, createdAt, voiceConversationId as threadId
+           FROM VoiceChats WHERE voiceConversationId = ? AND createdAt >= ? 
+           ORDER BY createdAt ASC`,
+          [conv.id, thirtyDaysAgo]
+        )) as any[];
+
+        const messages: AiMessage[] = chatRows.map((m) => ({
+          id: m.id,
+          threadId: m.threadId,
+          role: m.messageType === "user" ? "user" : "assistant",
+          content: m.content,
+          type: m.messageType === "user" ? "voice" : null,
+          createdAt: new Date(m.createdAt),
+          pageUrl: null,
+          scrollToText: null,
+        }));
+
+        if (messages.length > 0) {
+          // Ensure dates are properly handled
+          const createdAt =
+            conv.createdAt instanceof Date
+              ? conv.createdAt
+              : new Date(conv.createdAt);
+          const lastMessageAt =
+            conv.lastMessageAt instanceof Date
+              ? conv.lastMessageAt
+              : new Date(conv.lastMessageAt || conv.mostRecentConversationAt || conv.createdAt);
+
+          voiceThreads.push({
+            id: conv.id,
+            threadId: conv.id,
+            title: "Voice Conversation",
+            createdAt: createdAt,
+            lastMessageAt: lastMessageAt,
+            messageCount: messages.length,
+            messages: messages,
+            sessions: [],
+            source_type: "voiceconversation", // Add source type for frontend
+          });
+        }
+      }
+
+      // Combine all threads
+      const windowThreads = [...aiThreads, ...textThreads, ...voiceThreads];
+
+      // Sort by lastMessageAt (most recent first)
+      const recentThreads = windowThreads.sort((a, b) => {
+        // Safely convert to dates and then compare
+        const dateA =
+          a.lastMessageAt instanceof Date
+            ? a.lastMessageAt.getTime()
+            : new Date(a.lastMessageAt).getTime();
+        const dateB =
+          b.lastMessageAt instanceof Date
+            ? b.lastMessageAt.getTime()
+            : new Date(b.lastMessageAt).getTime();
+        return dateB - dateA;
+      });
 
       // Format threads with all their messages
       const formattedThreads = recentThreads.map((thread) => ({
@@ -326,7 +456,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Fetch threads for the last 30 days for this website with their complete messages
+    // Fetch AiThreads for the last 30 days for this website with their complete messages
     const aiThreads = (await query(
       `SELECT at.*, COUNT(am.id) as messageCount 
        FROM AiThread at
@@ -336,6 +466,28 @@ export async function POST(request: NextRequest) {
        ORDER BY at.lastMessageAt DESC`,
       [thirtyDaysAgo, website.id, thirtyDaysAgo]
     )) as AiThread[];
+
+    // Fetch TextConversations in the last 30 days
+    const textConversationRows = (await query(
+      `SELECT tc.id, tc.sessionId, tc.createdAt, tc.mostRecentConversationAt as lastMessageAt, 
+              tc.totalMessages as messageCount
+       FROM TextConversations tc
+       JOIN Session s ON tc.sessionId COLLATE utf8mb4_unicode_ci = s.id COLLATE utf8mb4_unicode_ci
+       WHERE s.websiteId = ? AND (tc.mostRecentConversationAt >= ? OR tc.createdAt >= ?)
+       ORDER BY COALESCE(tc.mostRecentConversationAt, tc.createdAt) DESC`,
+      [website.id, thirtyDaysAgo, thirtyDaysAgo]
+    )) as any[];
+
+    // Fetch VoiceConversations in the last 30 days
+    const voiceConversationRows = (await query(
+      `SELECT vc.id, vc.sessionId, vc.createdAt, vc.mostRecentConversationAt as lastMessageAt, 
+              vc.totalMessages as messageCount
+       FROM VoiceConversations vc
+       JOIN Session s ON vc.sessionId = s.id
+       WHERE s.websiteId = ? AND (vc.mostRecentConversationAt >= ? OR vc.createdAt >= ?)
+       ORDER BY COALESCE(vc.mostRecentConversationAt, vc.createdAt) DESC`,
+      [website.id, thirtyDaysAgo, thirtyDaysAgo]
+    )) as any[];
 
     // For each thread, fetch its messages
     for (const thread of aiThreads) {
@@ -369,11 +521,121 @@ export async function POST(request: NextRequest) {
           session.customer = null;
         }
       }
+
+      // Add source type for aiThreads
+      thread.source_type = "aithread";
     }
 
-    // Use all threads within the 30-day window
-    const windowThreads = aiThreads;
-    const recentThreads = windowThreads;
+    // Convert TextConversations to AiThread format
+    const textThreads: AiThread[] = [];
+    for (const conv of textConversationRows) {
+      // Get messages
+      const chatRows = (await query(
+        `SELECT id, messageType, content, createdAt, textConversationId as threadId
+         FROM TextChats WHERE textConversationId = ? AND createdAt >= ? 
+         ORDER BY createdAt ASC`,
+        [conv.id, thirtyDaysAgo]
+      )) as any[];
+
+      const messages: AiMessage[] = chatRows.map((m) => ({
+        id: m.id,
+        threadId: m.threadId,
+        role: m.messageType === "user" ? "user" : "assistant",
+        content: m.content,
+        type: m.messageType === "user" ? "text" : null,
+        createdAt: new Date(m.createdAt),
+        pageUrl: null,
+        scrollToText: null,
+      }));
+
+      if (messages.length > 0) {
+        // Ensure dates are properly handled
+        const createdAt =
+          conv.createdAt instanceof Date
+            ? conv.createdAt
+            : new Date(conv.createdAt);
+        const lastMessageAt =
+          conv.lastMessageAt instanceof Date
+            ? conv.lastMessageAt
+            : new Date(conv.lastMessageAt || conv.mostRecentConversationAt || conv.createdAt);
+
+        textThreads.push({
+          id: conv.id,
+          threadId: conv.id,
+          title: "Text Conversation",
+          createdAt: createdAt,
+          lastMessageAt: lastMessageAt,
+          messageCount: messages.length,
+          messages: messages,
+          sessions: [],
+          source_type: "textconversation", // Add missing source type for frontend
+        });
+      }
+    }
+
+    // Convert VoiceConversations to AiThread format
+    const voiceThreads: AiThread[] = [];
+    for (const conv of voiceConversationRows) {
+      // Get messages
+      const chatRows = (await query(
+        `SELECT id, messageType, content, createdAt, voiceConversationId as threadId
+         FROM VoiceChats WHERE voiceConversationId = ? AND createdAt >= ? 
+         ORDER BY createdAt ASC`,
+        [conv.id, thirtyDaysAgo]
+      )) as any[];
+
+      const messages: AiMessage[] = chatRows.map((m) => ({
+        id: m.id,
+        threadId: m.threadId,
+        role: m.messageType === "user" ? "user" : "assistant",
+        content: m.content,
+        type: m.messageType === "user" ? "voice" : null,
+        createdAt: new Date(m.createdAt),
+        pageUrl: null,
+        scrollToText: null,
+      }));
+
+      if (messages.length > 0) {
+        // Ensure dates are properly handled
+        const createdAt =
+          conv.createdAt instanceof Date
+            ? conv.createdAt
+            : new Date(conv.createdAt);
+        const lastMessageAt =
+          conv.lastMessageAt instanceof Date
+            ? conv.lastMessageAt
+            : new Date(conv.lastMessageAt || conv.mostRecentConversationAt || conv.createdAt);
+
+        voiceThreads.push({
+          id: conv.id,
+          threadId: conv.id,
+          title: "Voice Conversation",
+          createdAt: createdAt,
+          lastMessageAt: lastMessageAt,
+          messageCount: messages.length,
+          messages: messages,
+          sessions: [],
+          source_type: "voiceconversation", // Add missing source type for frontend
+        });
+      }
+    }
+
+    // Combine all threads
+    const windowThreads = [...aiThreads, ...textThreads, ...voiceThreads];
+
+    // Sort by lastMessageAt (most recent first)
+    const recentThreads = windowThreads.sort((a, b) => {
+      // Safely convert to dates and then compare
+      const dateA =
+        a.lastMessageAt instanceof Date
+          ? a.lastMessageAt.getTime()
+          : new Date(a.lastMessageAt).getTime();
+      const dateB =
+        b.lastMessageAt instanceof Date
+          ? b.lastMessageAt.getTime()
+          : new Date(b.lastMessageAt).getTime();
+      return dateB - dateA;
+    });
 
     // Format threads with all their messages
     const formattedThreads = recentThreads.map((thread) => ({
@@ -382,6 +644,7 @@ export async function POST(request: NextRequest) {
       title: thread.title || "Untitled Thread",
       createdAt: thread.createdAt,
       lastMessageAt: thread.lastMessageAt,
+      source_type: thread.source_type || "aithread", // Preserve source type and provide default
       messages: thread.messages.map((msg: AiMessage) => ({
         id: msg.id,
         role: msg.role,

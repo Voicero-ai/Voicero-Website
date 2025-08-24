@@ -66,6 +66,8 @@ interface SearchResult {
   websiteDomain: string;
   websiteName?: string;
   matchContext: string;
+  source_type?: string; // 'aithread', 'textconversation', or 'voiceconversation'
+  type?: string; // 'voice' or 'text'
 }
 
 type SortOption = "recent" | "oldest" | "longest" | "shortest";
@@ -174,6 +176,7 @@ export default function Chats() {
         if (!response.ok) throw new Error("Failed to fetch chat sessions");
 
         const data = await response.json();
+        console.log(data);
         setSessions(data.sessions);
         setHasMore(data.hasMore);
         setTotalCount(data.totalCount);
@@ -491,7 +494,11 @@ export default function Chats() {
                         </p>
                         <div className="flex items-center gap-2">
                           <span className="text-sm text-brand-text-secondary">
-                            {session.messageCount} messages in conversation
+                            {session.messageCount}{" "}
+                            {session.messageCount === 1
+                              ? "message"
+                              : "messages"}{" "}
+                            in conversation
                           </span>
                           {session.hasAction && (
                             <div className="flex items-center gap-1">
@@ -620,7 +627,13 @@ export default function Chats() {
                   className="block bg-white border border-brand-lavender-light/20 rounded-xl p-4 hover:border-brand-lavender-light/40 transition-colors"
                 >
                   <div className="flex justify-between items-start mb-2">
-                    <div>
+                    <div className="flex items-center">
+                      {/* Add icon for voice messages */}
+                      {result.type === "voice" && result.role === "user" && (
+                        <span className="mr-1" title="Voice message">
+                          <FaVolumeUp className="w-3 h-3 text-brand-accent" />
+                        </span>
+                      )}
                       <span className="text-sm font-medium text-brand-text-secondary">
                         {result.websiteDomain}
                       </span>

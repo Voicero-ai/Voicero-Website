@@ -503,8 +503,278 @@ async function fetchWebsiteData(websiteId: string) {
       pageUrl: m.pageUrl ?? null,
       scrollToText: m.scrollToText ?? null,
     }));
-    aiThreads.push({ id: t.id, messages });
+    if (messages.length > 0) {
+      console.log(`AiThread ${t.id}: ${messages.length} messages`);
+      aiThreads.push({ id: t.id, messages });
+    }
   }
+
+  // Fetch TextConversations and their TextChats
+  const textConversationRows = (await query(
+    `SELECT tc.id, tc.sessionId, tc.createdAt, tc.mostRecentConversationAt, 
+            tc.firstConversationAt, tc.conversationDuration, tc.totalMessages, tc.closed
+     FROM TextConversations tc
+     JOIN Session s ON tc.sessionId COLLATE utf8mb4_unicode_ci = s.id COLLATE utf8mb4_unicode_ci
+     WHERE s.websiteId = ? ORDER BY tc.mostRecentConversationAt DESC`,
+    [websiteId]
+  )) as any[];
+
+  console.log(
+    `Found ${textConversationRows.length} TextConversations for website ${websiteId}`
+  );
+
+  for (const conv of textConversationRows) {
+    const chatRows = (await query(
+      `SELECT id, messageType, content, createdAt, responseId, textConversationId, action, actionType, research, researchContext
+       FROM TextChats WHERE textConversationId = ? ORDER BY createdAt ASC`,
+      [conv.id]
+    )) as any[];
+
+    const messages: Message[] = chatRows.map((m) => ({
+      id: m.id,
+      createdAt: new Date(m.createdAt),
+      content: m.content,
+      type: m.messageType === "user" ? "text" : "ai",
+      threadId: conv.id,
+      role: m.messageType === "user" ? "user" : "assistant",
+      pageUrl: null,
+      scrollToText: null,
+      // Add action data for processing
+      action: m.action,
+      actionType: m.actionType,
+      research: m.research,
+      researchContext: m.researchContext,
+    } as any));
+
+    if (messages.length > 0) {
+      console.log(`TextConversation ${conv.id}: ${messages.length} messages`);
+      aiThreads.push({ id: conv.id, messages });
+    }
+  }
+
+  // Fetch VoiceConversations and their VoiceChats
+  const voiceConversationRows = (await query(
+    `SELECT vc.id, vc.sessionId, vc.createdAt, vc.mostRecentConversationAt, 
+            vc.firstConversationAt, vc.conversationDuration, vc.totalMessages, vc.closed
+     FROM VoiceConversations vc
+     JOIN Session s ON vc.sessionId = s.id
+     WHERE s.websiteId = ? ORDER BY vc.mostRecentConversationAt DESC`,
+    [websiteId]
+  )) as any[];
+
+  console.log(
+    `Found ${voiceConversationRows.length} VoiceConversations for website ${websiteId}`
+  );
+
+  for (const conv of voiceConversationRows) {
+    const chatRows = (await query(
+      `SELECT id, messageType, content, createdAt, responseId, voiceConversationId, action, actionType, research, researchContext
+       FROM VoiceChats WHERE voiceConversationId = ? ORDER BY createdAt ASC`,
+      [conv.id]
+    )) as any[];
+
+    const messages: Message[] = chatRows.map((m) => ({
+      id: m.id,
+      createdAt: new Date(m.createdAt),
+      content: m.content,
+      type: m.messageType === "user" ? "voice" : "ai",
+      threadId: conv.id,
+      role: m.messageType === "user" ? "user" : "assistant",
+      pageUrl: null,
+      scrollToText: null,
+      // Add action data for processing
+      action: m.action,
+      actionType: m.actionType,
+      research: m.research,
+      researchContext: m.researchContext,
+    } as any));
+
+    if (messages.length > 0) {
+      console.log(`VoiceConversation ${conv.id}: ${messages.length} messages`);
+      aiThreads.push({ id: conv.id, messages });
+    }
+  }
+
+  const totalMessages = aiThreads.reduce(
+    (sum, thread) => sum + thread.messages.length,
+    0
+  );
+  const messageTypeBreakdown = aiThreads.reduce((acc, thread) => {
+    thread.messages.forEach((msg) => {
+      const type = msg.type || "unknown";
+      acc[type] = (acc[type] || 0) + 1;
+    });
+    return acc;
+  }, {} as Record<string, number>);
+
+  const roleBreakdown = aiThreads.reduce((acc, thread) => {
+    thread.messages.forEach((msg) => {
+      const role = msg.role || "unknown";
+      acc[role] = (acc[role] || 0) + 1;
+    });
+    return acc;
+  }, {} as Record<string, number>);
+
+  const threadsWithPageUrl = aiThreads.filter((thread) =>
+    thread.messages.some((msg) => msg.pageUrl !== null)
+  ).length;
+
+  console.log(
+    `Total threads after merging: ${aiThreads.length} (AiThreads: ${threadRows.length}, TextConversations: ${textConversationRows.length}, VoiceConversations: ${voiceConversationRows.length})`
+  );
+  console.log(`Total messages: ${totalMessages}`);
+  console.log(`Message type breakdown:`, messageTypeBreakdown);
+  console.log(`Role breakdown:`, roleBreakdown);
+  console.log(`Threads with pageUrl (AiThreads): ${threadsWithPageUrl}`);
+
+  // Log breakdown by source type
+  const sourceBreakdown = {
+    aiThreads: threadRows.length,
+    textConversations: textConversationRows.length,
+    voiceConversations: voiceConversationRows.length,
+    total: aiThreads.length,
+  };
+
+  // Count messages by source type
+  const messageSourceBreakdown = {
+    aiThreads: aiThreads
+      .filter((t) => t.messages.some((m) => m.pageUrl !== null))
+      .reduce((sum, t) => sum + t.messages.length, 0),
+    textConversations: aiThreads
+      .filter((t) =>
+        t.messages.some((m) => m.type === "text" && m.pageUrl === null)
+      )
+      .reduce((sum, t) => sum + t.messages.length, 0),
+    voiceConversations: aiThreads
+      .filter((t) =>
+        t.messages.some((m) => m.type === "voice" && m.pageUrl === null)
+      )
+      .reduce((sum, t) => sum + t.messages.length, 0),
+  };
+
+  console.log(`Source breakdown:`, sourceBreakdown);
+  console.log(`Message source breakdown:`, messageSourceBreakdown);
+
+  // Count user vs assistant messages by source type
+  const roleSourceBreakdown = {
+    aiThreads: {
+      user: aiThreads
+        .filter((t) => t.messages.some((m) => m.pageUrl !== null))
+        .reduce(
+          (sum, t) => sum + t.messages.filter((m) => m.role === "user").length,
+          0
+        ),
+      assistant: aiThreads
+        .filter((t) => t.messages.some((m) => m.pageUrl !== null))
+        .reduce(
+          (sum, t) =>
+            sum + t.messages.filter((m) => m.role === "assistant").length,
+          0
+        ),
+    },
+    textConversations: {
+      user: aiThreads
+        .filter((t) =>
+          t.messages.some((m) => m.type === "text" && m.pageUrl === null)
+        )
+        .reduce(
+          (sum, t) => sum + t.messages.filter((m) => m.role === "user").length,
+          0
+        ),
+      assistant: aiThreads
+        .filter((t) =>
+          t.messages.some((m) => m.type === "text" && m.pageUrl === null)
+        )
+        .reduce(
+          (sum, t) =>
+            sum + t.messages.filter((m) => m.role === "assistant").length,
+          0
+        ),
+    },
+    voiceConversations: {
+      user: aiThreads
+        .filter((t) =>
+          t.messages.some((m) => m.type === "voice" && m.pageUrl === null)
+        )
+        .reduce(
+          (sum, t) => sum + t.messages.filter((m) => m.role === "user").length,
+          0
+        ),
+      assistant: aiThreads
+        .filter((t) =>
+          t.messages.some((m) => m.type === "voice" && m.pageUrl === null)
+        )
+        .reduce(
+          (sum, t) =>
+            sum + t.messages.filter((m) => m.role === "assistant").length,
+          0
+        ),
+    },
+  };
+
+  console.log(`Role source breakdown:`, roleSourceBreakdown);
+
+  // Count message types by source
+  const typeSourceBreakdown = {
+    aiThreads: {
+      text: aiThreads
+        .filter((t) => t.messages.some((m) => m.pageUrl !== null))
+        .reduce(
+          (sum, t) => sum + t.messages.filter((m) => m.type === "text").length,
+          0
+        ),
+      voice: aiThreads
+        .filter((t) => t.messages.some((m) => m.pageUrl !== null))
+        .reduce(
+          (sum, t) => sum + t.messages.filter((m) => m.type === "voice").length,
+          0
+        ),
+      ai: aiThreads
+        .filter((t) => t.messages.some((m) => m.pageUrl !== null))
+        .reduce(
+          (sum, t) => sum + t.messages.filter((m) => m.type === "ai").length,
+          0
+        ),
+    },
+    textConversations: {
+      text: aiThreads
+        .filter((t) =>
+          t.messages.some((m) => m.type === "text" && m.pageUrl === null)
+        )
+        .reduce(
+          (sum, t) => sum + t.messages.filter((m) => m.type === "text").length,
+          0
+        ),
+      ai: aiThreads
+        .filter((t) =>
+          t.messages.some((m) => m.type === "text" && m.pageUrl === null)
+        )
+        .reduce(
+          (sum, t) => sum + t.messages.filter((m) => m.type === "ai").length,
+          0
+        ),
+    },
+    voiceConversations: {
+      voice: aiThreads
+        .filter((t) =>
+          t.messages.some((m) => m.type === "voice" && m.pageUrl === null)
+        )
+        .reduce(
+          (sum, t) => sum + t.messages.filter((m) => m.type === "voice").length,
+          0
+        ),
+      ai: aiThreads
+        .filter((t) =>
+          t.messages.some((m) => m.type === "voice" && m.pageUrl === null)
+        )
+        .reduce(
+          (sum, t) => sum + t.messages.filter((m) => m.type === "ai").length,
+          0
+        ),
+    },
+  };
+
+  console.log(`Type source breakdown:`, typeSourceBreakdown);
 
   return { website, aiThreads };
 }
@@ -539,34 +809,25 @@ function initializeStats() {
       }>,
     },
     actionsDetails: {
-      redirect: [] as Array<{
+      cart: [] as Array<{
         threadId: string;
-        url?: string;
-        normalizedUrl?: string;
+        actionType: string;
         messageId: string;
         createdAt: string;
       }>,
-      scroll: [] as Array<{
+      movement: [] as Array<{
         threadId: string;
+        actionType: string;
         sectionId?: string;
         scrollToText?: string | null;
-        messageId: string;
-        createdAt: string;
-      }>,
-      purchase: [] as Array<{
-        threadId: string;
-        url?: string;
-        handle?: string;
-        productId?: string;
-        productName?: string;
-        messageId: string;
-        createdAt: string;
-      }>,
-      click: [] as Array<{
-        threadId: string;
         url?: string;
         buttonText?: string;
-        css_selector?: string;
+        messageId: string;
+        createdAt: string;
+      }>,
+      orders: [] as Array<{
+        threadId: string;
+        actionType: string;
         messageId: string;
         createdAt: string;
       }>,
@@ -602,13 +863,27 @@ function processThreadsAndMessages(aiThreads: Thread[], stats: any) {
 
       // Process assistant messages for actions and redirects
       if (message.role === "assistant") {
-        processAssistantMessage(
-          message,
-          redirectMaps,
-          globalStats,
-          purchases,
-          actionsDetails
-        );
+        // For AiThread messages (have pageUrl), use existing logic
+        if (message.pageUrl !== null) {
+          processAssistantMessage(
+            message,
+            redirectMaps,
+            globalStats,
+            purchases,
+            actionsDetails
+          );
+        } 
+        // For TextChat/VoiceChat messages (no pageUrl), process actions from action field
+        else if (message.pageUrl === null) {
+          console.log(`Processing TextChat/VoiceChat message ${message.id} in thread ${thread.id}: type=${message.type}, role=${message.role}, action=${(message as any).action}, actionType=${(message as any).actionType}`);
+          processTextVoiceChatActions(
+            message,
+            thread.id,
+            globalStats,
+            purchases,
+            actionsDetails
+          );
+        }
       }
     });
 
@@ -617,6 +892,14 @@ function processThreadsAndMessages(aiThreads: Thread[], stats: any) {
       // Update global stats for the thread
       if (hasVoiceMessage) globalStats.totalVoiceChats++;
       if (hasTextMessage) globalStats.totalTextChats++;
+    }
+
+    // Log thread type for debugging
+    if (thread.messages.length > 0) {
+      const firstMessage = thread.messages[0];
+      console.log(
+        `Thread ${thread.id}: type=${firstMessage.type}, role=${firstMessage.role}, pageUrl=${firstMessage.pageUrl}`
+      );
     }
   });
 }
@@ -638,6 +921,100 @@ function normalizeUrl(url: string) {
   } catch (e) {
     console.error("Error normalizing URL:", url, e);
     return url;
+  }
+}
+
+function processTextVoiceChatActions(
+  message: Message,
+  threadId: string,
+  globalStats: any,
+  purchases?: {
+    byThread: Map<string, Set<string>>;
+    raw: Array<{
+      threadId: string;
+      url?: string;
+      handle?: string;
+      productId?: string;
+      productName?: string;
+      createdAt?: string;
+    }>;
+  },
+  actionsDetails?: any
+) {
+  // This function processes actions from TextChats and VoiceChats stored in database columns
+  // We need to query the database to get the action information
+  // For now, we'll need to extend the Message interface to include action data
+  // The action data should be fetched when loading TextChats/VoiceChats in fetchWebsiteData
+  
+  // Since the action data isn't available in the current Message interface,
+  // we'll extract it from the message content or add it to the query
+  // For cart actions: add_to_cart, get_cart, delete_from_cart
+  // For movement actions: scroll, highlight, navigate, fill_form (in VoiceChats)
+  // For order actions: get_order, track_order, return_order, cancel_order, exchange_order (in TextChats)
+  
+  // We'll need to add action data to the message when fetching from database
+  // For now, let's add placeholder processing that we can enhance once we update the fetch logic
+  const actionData = (message as any).action; // Will be populated once we update the queries
+  const actionType = (message as any).actionType;
+  
+  // Check if this is a text or voice message to determine which actions to look for
+  // Since we can't easily determine if an AI message came from TextChats vs VoiceChats,
+  // we'll categorize actions based on the actionType instead
+  const isMovementAction = ["scroll", "highlight", "navigate", "fill_form", "fillForm", "click"].includes(actionType);
+  const isCartAction = ["add_to_cart", "get_cart", "delete_from_cart"].includes(actionType);
+  const isOrderAction = ["get_order", "track_order", "return_order", "cancel_order", "exchange_order"].includes(actionType);
+  
+  // Debug logging
+  if (actionData) {
+    console.log(`Found action: ${actionData} (type: ${actionType}) for message ${message.id} in thread ${threadId}`);
+  }
+  
+  if (!actionData || !actionType) {
+    if (actionData && !actionType) {
+      console.log(`Skipping action with null actionType for message ${message.id}`);
+    }
+    return; // No action to process
+  }
+  
+  // Process actions based on their category
+  if (isCartAction) {
+    // Cart actions
+    globalStats.totalAiClicks++; // Using clicks as cart interaction counter
+    if (actionsDetails && threadId) {
+      actionsDetails.cart.push({
+        threadId: threadId,
+        messageId: message.id,
+        createdAt: message.createdAt.toISOString(),
+        actionType: actionType,
+      });
+    }
+  } else if (isMovementAction) {
+    // Movement actions (from voice chats)
+    if (actionType === "scroll") {
+      globalStats.totalAiScrolls++;
+    } else {
+      globalStats.totalAiClicks++; // Other movement actions count as clicks
+    }
+    if (actionsDetails && threadId) {
+      actionsDetails.movement.push({
+        threadId: threadId,
+        messageId: message.id,
+        createdAt: message.createdAt.toISOString(),
+        actionType: actionType,
+        scrollToText: actionType === "scroll" ? (message as any).scrollToText || null : null,
+      });
+    }
+  } else if (isOrderAction) {
+    // Order actions (from text chats)
+    globalStats.totalAiClicks++; // Count as interactions
+    if (actionsDetails && threadId) {
+      actionsDetails.orders.push({
+        threadId: threadId,
+        messageId: message.id,
+        createdAt: message.createdAt.toISOString(),
+        actionType: actionType,
+      });
+    }
   }
 }
 
@@ -758,12 +1135,12 @@ function processAssistantMessage(
             );
             countRedirectByType(normalizedUrl);
             if (actionsDetails && message.threadId) {
-              actionsDetails.redirect.push({
+              actionsDetails.movement.push({
                 threadId: message.threadId,
                 url: redirectUrl,
-                normalizedUrl,
                 messageId: message.id,
                 createdAt: message.createdAt.toISOString(),
+                actionType: "redirect",
               });
             }
           }
@@ -771,12 +1148,13 @@ function processAssistantMessage(
         case "scroll":
           globalStats.totalAiScrolls++;
           if (actionsDetails && message.threadId) {
-            actionsDetails.scroll.push({
+            actionsDetails.movement.push({
               threadId: message.threadId,
               sectionId: contentObj.action_context?.section_id,
               scrollToText: contentObj.action_context?.exact_text ?? null,
               messageId: message.id,
               createdAt: message.createdAt.toISOString(),
+              actionType: "scroll",
             });
           }
           break;
@@ -823,14 +1201,11 @@ function processAssistantMessage(
               });
             }
             if (actionsDetails && message.threadId) {
-              actionsDetails.purchase.push({
+              actionsDetails.cart.push({
                 threadId: message.threadId,
-                url: url ?? undefined,
-                handle: productHandle ?? undefined,
-                productId: productId ?? undefined,
-                productName: productName ?? undefined,
                 messageId: message.id,
                 createdAt: message.createdAt.toISOString(),
+                actionType: "purchase",
               });
             }
           } catch {}
@@ -838,13 +1213,13 @@ function processAssistantMessage(
         case "click":
           globalStats.totalAiClicks++;
           if (actionsDetails && message.threadId) {
-            actionsDetails.click.push({
+            actionsDetails.movement.push({
               threadId: message.threadId,
               url: contentObj.action_context?.url,
               buttonText: contentObj.action_context?.button_text,
-              css_selector: contentObj.action_context?.css_selector,
               messageId: message.id,
               createdAt: message.createdAt.toISOString(),
+              actionType: "click",
             });
           }
           break;
@@ -877,12 +1252,12 @@ function processAssistantMessage(
         );
         countRedirectByType(normalizedUrl);
         if (actionsDetails && message.threadId) {
-          actionsDetails.redirect.push({
+          actionsDetails.movement.push({
             threadId: message.threadId,
             url,
-            normalizedUrl,
             messageId: message.id,
             createdAt: message.createdAt.toISOString(),
+            actionType: "redirect",
           });
         }
       });
@@ -944,10 +1319,11 @@ function processAssistantMessage(
     if (message.content.includes('"action":"click"')) {
       globalStats.totalAiClicks++;
       if (actionsDetails && message.threadId) {
-        actionsDetails.click.push({
+        actionsDetails.movement.push({
           threadId: message.threadId,
           messageId: message.id,
           createdAt: message.createdAt.toISOString(),
+          actionType: "click",
         });
       }
     }
@@ -1643,11 +2019,13 @@ function buildResponseData(
 
   // Expose action details for UI to render clickable lists per action type
   base.actionDetails = stats.actionsDetails || {
-    redirect: [],
-    scroll: [],
-    purchase: [],
-    click: [],
+    cart: [],
+    movement: [],
+    orders: [],
   };
+  
+  // Debug final action counts
+  console.log(`Final action counts: cart=${base.actionDetails.cart.length}, movement=${base.actionDetails.movement.length}, orders=${base.actionDetails.orders.length}`);
 
   // Embed full messages for each action entry so the frontend can render conversations directly
   try {
@@ -1662,10 +2040,9 @@ function buildResponseData(
         }
       }
     };
-    enrich(base.actionDetails.redirect as any[]);
-    enrich(base.actionDetails.scroll as any[]);
-    enrich(base.actionDetails.purchase as any[]);
-    enrich(base.actionDetails.click as any[]);
+    enrich(base.actionDetails.cart as any[]);
+    enrich(base.actionDetails.movement as any[]);
+    enrich(base.actionDetails.orders as any[]);
   } catch {}
 
   // Keep original product title/handle to help frontend link purchase entries to products
@@ -1688,10 +2065,9 @@ function buildResponseData(
         .filter((x) => x.thread);
     };
     base.actionConversations = {
-      redirect: mapThreadsForAction("redirect"),
-      scroll: mapThreadsForAction("scroll"),
-      purchase: mapThreadsForAction("purchase"),
-      click: mapThreadsForAction("click"),
+      cart: mapThreadsForAction("cart"),
+      movement: mapThreadsForAction("movement"),
+      orders: mapThreadsForAction("orders"),
     };
   } catch {}
 

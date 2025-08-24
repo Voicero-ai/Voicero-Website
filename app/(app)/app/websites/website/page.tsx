@@ -218,6 +218,7 @@ interface ActionConversation {
   actions: Array<{
     messageId: string;
     createdAt: string;
+    actionType?: string;
     url?: string;
     normalizedUrl?: string;
     buttonText?: string;
@@ -230,10 +231,9 @@ interface ActionConversation {
 }
 
 interface ActionDetails {
-  click: ActionConversation[];
-  purchase: ActionConversation[];
-  redirect: ActionConversation[];
-  scroll: ActionConversation[];
+  cart: ActionConversation[];
+  movement: ActionConversation[];
+  orders: ActionConversation[];
 }
 
 interface AIOverview {
@@ -424,7 +424,7 @@ export default function WebsiteSettings() {
   const [cachedData, setCachedData] = useState<WebsiteData | null>(null);
   const [isRefreshingAI, setIsRefreshingAI] = useState(false);
   const [isActionsOpen, setIsActionsOpen] = useState(false);
-  type ActionType = "redirect" | "scroll" | "click" | "purchase";
+  type ActionType = "cart" | "movement" | "orders";
   const [selectedAction, setSelectedAction] = useState<ActionType | null>(null);
   const [expandedThreads, setExpandedThreads] = useState<
     Record<string, boolean>
@@ -2661,49 +2661,38 @@ export default function WebsiteSettings() {
               <h3 className="text-lg font-medium text-brand-text-primary mb-4">
                 AI Action Breakdown
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <button
-                  onClick={() => setSelectedAction("redirect")}
+                  onClick={() => setSelectedAction("cart")}
                   className="text-center p-4 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
                 >
                   <div className="text-2xl font-bold text-blue-600">
-                    {websiteData.actionDetails.redirect.length}
+                    {websiteData.actionDetails?.cart?.length || 0}
                   </div>
                   <div className="text-sm text-brand-text-secondary">
-                    Redirects
+                    Cart Actions
                   </div>
                 </button>
                 <button
-                  onClick={() => setSelectedAction("scroll")}
+                  onClick={() => setSelectedAction("movement")}
                   className="text-center p-4 bg-green-50 rounded-lg hover:bg-green-100 transition-colors"
                 >
                   <div className="text-2xl font-bold text-green-600">
-                    {websiteData.actionDetails.scroll.length}
+                    {websiteData.actionDetails?.movement?.length || 0}
                   </div>
                   <div className="text-sm text-brand-text-secondary">
-                    Scrolls
+                    Movement Actions
                   </div>
                 </button>
                 <button
-                  onClick={() => setSelectedAction("click")}
+                  onClick={() => setSelectedAction("orders")}
                   className="text-center p-4 bg-purple-50 rounded-lg hover:bg-purple-100 transition-colors"
                 >
                   <div className="text-2xl font-bold text-purple-600">
-                    {websiteData.actionDetails.click.length}
+                    {websiteData.actionDetails?.orders?.length || 0}
                   </div>
                   <div className="text-sm text-brand-text-secondary">
-                    Clicks
-                  </div>
-                </button>
-                <button
-                  onClick={() => setSelectedAction("purchase")}
-                  className="text-center p-4 bg-orange-50 rounded-lg hover:bg-orange-100 transition-colors"
-                >
-                  <div className="text-2xl font-bold text-orange-600">
-                    {websiteData.actionDetails.purchase.length}
-                  </div>
-                  <div className="text-sm text-brand-text-secondary">
-                    Add to Cart
+                    Order Actions
                   </div>
                 </button>
               </div>
@@ -2783,34 +2772,22 @@ export default function WebsiteSettings() {
                                           <span className="font-medium capitalize mr-1">
                                             {selectedAction}:
                                           </span>
-                                          {selectedAction === "redirect" && (
+                                          {selectedAction === "cart" && (
                                             <span className="text-black">
-                                              {a.normalizedUrl ||
-                                                a.url ||
-                                                "(no url)"}
+                                              {a.actionType || "(cart action)"}
                                             </span>
                                           )}
-                                          {selectedAction === "scroll" && (
+                                          {selectedAction === "movement" && (
                                             <span className="text-black">
-                                              {a.scrollToText ||
-                                                a.sectionId ||
-                                                "(section)"}
+                                              {a.actionType === "scroll" && (a.scrollToText || a.sectionId || "(scroll)")}
+                                              {a.actionType === "redirect" && (a.url || "(redirect)")}
+                                              {a.actionType === "click" && (a.buttonText || a.url || "(click)")}
+                                              {a.actionType && !["scroll", "redirect", "click"].includes(a.actionType) && a.actionType}
                                             </span>
                                           )}
-                                          {selectedAction === "click" && (
+                                          {selectedAction === "orders" && (
                                             <span className="text-black">
-                                              {a.buttonText ||
-                                                a.css_selector ||
-                                                a.url ||
-                                                "(click)"}
-                                            </span>
-                                          )}
-                                          {selectedAction === "purchase" && (
-                                            <span className="text-black">
-                                              {a.productName ||
-                                                a.productId ||
-                                                a.url ||
-                                                "(item)"}
+                                              {a.actionType || "(order action)"}
                                             </span>
                                           )}
                                           {a.createdAt && (

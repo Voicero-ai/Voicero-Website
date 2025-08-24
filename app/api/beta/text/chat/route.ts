@@ -2002,11 +2002,13 @@ export async function POST(request: NextRequest) {
 
     // Store AI turn
     await connection.execute(
-      "INSERT INTO TextChats (id, textConversationId, messageType, content, createdAt, responseId) VALUES (UUID(), ?, 'ai', ?, CURRENT_TIMESTAMP(3), ?)",
+      "INSERT INTO TextChats (id, textConversationId, messageType, content, createdAt, responseId, action, actionType) VALUES (UUID(), ?, 'ai', ?, CURRENT_TIMESTAMP(3), ?, ?, ?)",
       [
         conversationIdToUse,
         outputText || "No response",
         openaiResponseId || null,
+        classifierResult.action || null,
+        classifierResult.actionType || null,
       ]
     );
 
@@ -2033,6 +2035,8 @@ export async function POST(request: NextRequest) {
         sessionId: sessionIdToUse,
         conversationId: conversationIdToUse,
         classification: classifierResult,
+        action: classifierResult.action || null,
+        actionType: classifierResult.actionType || null,
         searchResults:
           searchResults && searchResults.length > 0
             ? searchResults.slice(0, 5).map((r) => {

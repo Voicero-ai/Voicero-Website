@@ -11,6 +11,8 @@ import {
   FaUser,
   FaClock,
   FaLink,
+  FaVolumeUp,
+  FaKeyboard,
 } from "react-icons/fa";
 
 interface AiMessage {
@@ -34,6 +36,7 @@ interface ThreadSummary {
   messages: AiMessage[];
   customers?: any[];
   sessions?: Array<{ id: string; customer?: any | null }>;
+  source_type?: string; // 'aithread', 'textconversation', or 'voiceconversation'
 }
 
 interface AiHistoryReport {
@@ -580,19 +583,37 @@ function ThreadActivity({ threads }: { threads: ThreadSummary[] }) {
               className="w-full text-left flex items-center gap-3 hover:bg-brand-lavender-light/10 rounded-lg px-2 py-2"
             >
               <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-brand-lavender-light/20 text-brand-text-primary">
-                <FaComments />
+                {(() => {
+                  // Check if this is a voice conversation
+                  const isVoiceConversation =
+                    t.source_type === "voiceconversation" ||
+                    t.messages?.some((m) => m.type === "voice");
+
+                  if (isVoiceConversation) {
+                    return <FaVolumeUp />;
+                  } else if (t.source_type === "textconversation") {
+                    return <FaKeyboard />;
+                  } else {
+                    return <FaComments />;
+                  }
+                })()}
               </span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <div className="font-medium text-brand-text-primary truncate">
-                    {t.title || "Thread"}
+                    {t.source_type === "voiceconversation"
+                      ? "Voice Conversation"
+                      : t.source_type === "textconversation"
+                      ? "Text Conversation"
+                      : t.title || "AI Thread"}
                   </div>
                   <span className="text-xs text-brand-text-secondary flex items-center gap-1">
                     <FaClock /> {last.toLocaleString()}
                   </span>
                 </div>
                 <div className="text-xs text-brand-text-secondary">
-                  {t.messageCount} messages
+                  {t.messageCount}{" "}
+                  {t.messageCount === 1 ? "message" : "messages"}
                 </div>
               </div>
               <span className="text-xs font-mono text-black/50 truncate max-w-[160px]">
@@ -613,8 +634,15 @@ function ThreadActivity({ threads }: { threads: ThreadSummary[] }) {
                   >
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-xs uppercase tracking-wide text-brand-text-secondary flex items-center gap-1">
-                        {m.role === "assistant" ? <FaRobot /> : <FaUser />}
-                        {m.role}
+                        {m.role === "assistant" ? (
+                          <FaRobot />
+                        ) : m.type === "voice" ? (
+                          <FaVolumeUp className="text-brand-accent" />
+                        ) : (
+                          <FaUser />
+                        )}
+                        {m.role}{" "}
+                        {m.type === "voice" && m.role === "user" && "(voice)"}
                       </span>
                       <span className="text-[11px] text-brand-text-secondary flex items-center gap-1">
                         <FaClock /> {new Date(m.createdAt).toLocaleString()}
