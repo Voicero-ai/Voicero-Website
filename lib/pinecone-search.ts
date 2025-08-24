@@ -2,7 +2,7 @@ import { Pinecone } from "@pinecone-database/pinecone";
 import {
   buildHybridQueryVectors,
   shouldFallbackToCollections,
-} from './sparse/hybrid_query_tuning';
+} from "./sparse/hybrid_query_tuning";
 
 // Types for the search functions
 export type QuestionClassification = {
@@ -10,7 +10,7 @@ export type QuestionClassification = {
   category: string;
   "sub-category": string;
   page?: string;
-  interaction_type?: "sales" | "support" | "general" | "noneSpecified";
+  interaction_type?: "sales" | "support" | "discounts" | "noneSpecified";
   action_intent?:
     | string
     | "purchase"
@@ -36,7 +36,7 @@ export function rerankMainResults(
 ) {
   // Enhance query with classification data but EXCLUDE type
   const enhancedQuery = `${query} ${classification.category} ${
-    classification["sub-category"] || "general"
+    classification["sub-category"] || "discounts"
   }`;
 
   // Deduplicate results by handle
@@ -62,7 +62,7 @@ export function rerankMainResults(
       }
       if (
         result.metadata?.["sub-category"] === classification["sub-category"] ||
-        classification["sub-category"] === "general" ||
+        classification["sub-category"] === "discounts" ||
         !result.metadata?.["sub-category"]
       ) {
         classificationMatch++;
@@ -120,7 +120,7 @@ export function rerankQAResults(
 ) {
   // Enhance query with classification data but EXCLUDE type
   const enhancedQuery = `${query} ${classification.category} ${
-    classification["sub-category"] || "general"
+    classification["sub-category"] || "discounts"
   }`;
 
   // No previous context needed
@@ -147,7 +147,7 @@ export function rerankQAResults(
       }
       if (
         result.metadata["sub-category"] === classification["sub-category"] ||
-        classification["sub-category"] === "general" ||
+        classification["sub-category"] === "discounts" ||
         !result.metadata["sub-category"]
       ) {
         classificationMatch++;
@@ -215,7 +215,7 @@ export async function performMainSearch(
     );
 
     // Define the interaction types to search across
-    const interactionTypes = ["sales", "support", "general"];
+    const interactionTypes = ["sales", "support", "discounts"];
     console.log(
       `Vectorization strategy: searching across multiple namespaces: ${interactionTypes.join(
         ", "
@@ -342,7 +342,7 @@ export async function performMainSearch(
   } else {
     // Standard search when interaction type is specified
     const mainNamespace = `${website.id}-${
-      classification?.interaction_type || "general"
+      classification?.interaction_type || "discounts"
     }`;
     console.log(
       `Vectorization strategy: using specific namespace: ${mainNamespace}`
@@ -453,9 +453,9 @@ export async function performQASearch(
     );
 
     // Define the interaction types to search across
-    const interactionTypes = ["sales", "support", "general"];
+    const interactionTypes = ["sales", "support", "discounts"];
     console.log(
-      `QA Vectorization strategy: searching across multiple QA namespaces: ${interactionTypes.join(
+      `Vectorization strategy: searching across multiple namespaces: ${interactionTypes.join(
         ", "
       )}`
     );
@@ -469,52 +469,52 @@ export async function performQASearch(
         console.error("Website is null, cannot create QA namespace");
         continue;
       }
-      const typeQaNamespace = `${website.id}-${type}-qa`;
-      console.log(`Searching QA namespace: ${typeQaNamespace}`);
+      const typeNamespace = `${website.id}-${type}`;
+      console.log(`Searching namespace: ${typeNamespace}`);
 
       try {
-        // Perform hybrid search in this QA namespace
-        const tQaNsSearchStart = Date.now();
-        const qaSearchResponse = await pinecone
+        // Perform hybrid search in this namespace
+        const tNsSearchStart = Date.now();
+        const searchResponse = await pinecone
           .index("voicero-hybrid")
-          .namespace(typeQaNamespace)
+          .namespace(typeNamespace)
           .query({
             vector: enhancedDense,
             sparseVector: enhancedSparse,
-            topK: 7, // Reduced to get top results from each namespace
+            topK: 7, // Get top 7 results from each namespace
             includeMetadata: true,
           });
-        timeMarks[`ns:${typeQaNamespace}:qaSearchMs`] =
-          Date.now() - tQaNsSearchStart;
+        timeMarks[`ns:${typeNamespace}:searchMs`] = Date.now() - tNsSearchStart;
 
         // Add results if they exist
-        if (qaSearchResponse?.matches?.length > 0) {
+        if (searchResponse?.matches?.length > 0) {
           console.log(
-            `Found ${qaSearchResponse.matches.length} QA results in namespace ${typeQaNamespace}`
+            `Found ${searchResponse.matches.length} results in namespace ${typeNamespace}`
           );
           // Log the first 2 results for debugging
-          if (qaSearchResponse.matches.length > 0) {
-            console.log(`First QA result from ${typeQaNamespace}:`, {
-              id: qaSearchResponse.matches[0].id,
-              score: qaSearchResponse.matches[0].score,
-              question: qaSearchResponse.matches[0].metadata?.question,
+          if (searchResponse.matches.length > 0) {
+            console.log(`First result from ${typeNamespace}:`, {
+              id: searchResponse.matches[0].id,
+              score: searchResponse.matches[0].score,
+              title:
+                searchResponse.matches[0].metadata?.title ||
+                searchResponse.matches[0].metadata?.question,
             });
 
-            if (qaSearchResponse.matches.length > 1) {
-              console.log(`Second QA result from ${typeQaNamespace}:`, {
-                id: qaSearchResponse.matches[1].id,
-                score: qaSearchResponse.matches[1].score,
-                question: qaSearchResponse.matches[1].metadata?.question,
+            if (searchResponse.matches.length > 1) {
+              console.log(`Second result from ${typeNamespace}:`, {
+                id: searchResponse.matches[1].id,
+                score: searchResponse.matches[1].score,
+                title:
+                  searchResponse.matches[1].metadata?.title ||
+                  searchResponse.matches[1].metadata?.question,
               });
             }
           }
-          allResults.push(...qaSearchResponse.matches);
+          allResults.push(...searchResponse.matches);
         }
       } catch (error) {
-        console.error(
-          `Error searching QA namespace ${typeQaNamespace}:`,
-          error
-        );
+        console.error(`Error searching namespace ${typeNamespace}:`, error);
         // Continue with other namespaces even if one fails
       }
     }
@@ -532,20 +532,20 @@ export async function performQASearch(
     }
 
     console.log(
-      `Combined ${allResults.length} QA results into ${uniqueResults.length} unique results`
+      `Combined ${allResults.length} results into ${uniqueResults.length} unique results`
     );
 
-    // Add default classification to QA results before reranking
+    // Add default classification to results before reranking
     uniqueResults.forEach((result) => {
       if (!result.metadata) {
         result.metadata = {};
       }
 
       // Force metadata to match classification for consistent reranking
-      result.metadata.type = classification?.type || "general";
-      result.metadata.category = classification?.category || "general";
+      result.metadata.type = classification?.type || "discounts";
+      result.metadata.category = classification?.category || "discounts";
       result.metadata["sub-category"] =
-        classification?.["sub-category"] || "general";
+        classification?.["sub-category"] || "discounts";
     });
 
     // Ensure classification is not null before calling rerankQAResults
@@ -559,67 +559,71 @@ export async function performQASearch(
     }
 
     // Rerank combined results with classification
-    return rerankQAResults(uniqueResults, classification, question);
+    return rerankMainResults(uniqueResults, classification, question);
   } else {
-    // Standard QA search when interaction type is specified
-    const mainQaNamespace = `${website.id}-${
-      classification?.interaction_type || "general"
-    }-qa`;
+    // Standard search when interaction type is specified
+    const mainNamespace = `${website.id}-${
+      classification?.interaction_type || "discounts"
+    }`;
     console.log(
-      `QA Vectorization strategy: using specific namespace: ${mainQaNamespace}`
+      `Vectorization strategy: using specific namespace: ${mainNamespace}`
     );
 
     // Initialize allResults array for this branch
     const allResults = [];
 
-    // Perform hybrid search in the main QA namespace
-    const tQaSearchStart = Date.now();
-    const qaSearchResponse = await pinecone
+    // Perform hybrid search in the main namespace
+    const tSearchStart = Date.now();
+    const searchResponse = await pinecone
       .index("voicero-hybrid")
-      .namespace(mainQaNamespace)
+      .namespace(mainNamespace)
       .query({
         vector: enhancedDense,
         sparseVector: enhancedSparse,
-        topK: 10,
+        topK: 7,
         includeMetadata: true,
       });
-    timeMarks.qaSearchMs = Date.now() - tQaSearchStart;
+    timeMarks.searchMs = Date.now() - tSearchStart;
 
     // Add results if they exist
-    if (qaSearchResponse?.matches?.length > 0) {
+    if (searchResponse?.matches?.length > 0) {
       console.log(
-        `Found ${qaSearchResponse.matches.length} QA results in namespace ${mainQaNamespace}`
+        `Found ${searchResponse.matches.length} results in namespace ${mainNamespace}`
       );
       // Log the first 2 results for debugging
-      if (qaSearchResponse.matches.length > 0) {
-        console.log(`First QA result from ${mainQaNamespace}:`, {
-          id: qaSearchResponse.matches[0].id,
-          score: qaSearchResponse.matches[0].score,
-          question: qaSearchResponse.matches[0].metadata?.question,
+      if (searchResponse.matches.length > 0) {
+        console.log(`First result from ${mainNamespace}:`, {
+          id: searchResponse.matches[0].id,
+          score: searchResponse.matches[0].score,
+          title:
+            searchResponse.matches[0].metadata?.title ||
+            searchResponse.matches[0].metadata?.question,
         });
 
-        if (qaSearchResponse.matches.length > 1) {
-          console.log(`Second QA result from ${mainQaNamespace}:`, {
-            id: qaSearchResponse.matches[1].id,
-            score: qaSearchResponse.matches[1].score,
-            question: qaSearchResponse.matches[1].metadata?.question,
+        if (searchResponse.matches.length > 1) {
+          console.log(`Second result from ${mainNamespace}:`, {
+            id: searchResponse.matches[1].id,
+            score: searchResponse.matches[1].score,
+            title:
+              searchResponse.matches[1].metadata?.title ||
+              searchResponse.matches[1].metadata?.question,
           });
         }
       }
-      allResults.push(...qaSearchResponse.matches);
+      allResults.push(...searchResponse.matches);
     }
 
-    // Add default classification to QA results before reranking
+    // Add default classification to results before reranking
     allResults.forEach((result) => {
       if (!result.metadata) {
         result.metadata = {};
       }
 
       // Force metadata to match classification for consistent reranking
-      result.metadata.type = classification?.type || "general";
-      result.metadata.category = classification?.category || "general";
+      result.metadata.type = classification?.type || "discounts";
+      result.metadata.category = classification?.category || "discounts";
       result.metadata["sub-category"] =
-        classification?.["sub-category"] || "general";
+        classification?.["sub-category"] || "discounts";
     });
 
     // Ensure classification is not null before calling rerankQAResults
@@ -633,6 +637,6 @@ export async function performQASearch(
     }
 
     // Rerank results with classification
-    return rerankQAResults(allResults, classification, question);
+    return rerankMainResults(allResults, classification, question);
   }
 }

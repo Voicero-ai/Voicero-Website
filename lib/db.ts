@@ -7,14 +7,15 @@ const pool = mysql.createPool({
   password: process.env.DATABASE_PASSWORD,
   database: process.env.DATABASE_NAME,
   waitForConnections: true,
-  connectionLimit: 10,
+  connectionLimit: 15, // Increased from 10
   queueLimit: 0,
-  connectTimeout: 15_000, // ms
+  connectTimeout: 30_000, // Increased from 15_000 ms
   enableKeepAlive: true,
   keepAliveInitialDelay: 0,
   // Add more robust connection handling
   multipleStatements: false,
   dateStrings: true,
+  // Set a longer query timeout in the execute method instead
 });
 
 // Helper function to execute queries with improved retry logic
@@ -46,7 +47,7 @@ export async function query(sql: string, params: any[] = []) {
 
       // Pass per-query timeout to abort long-running reads
       const [rows] = await (pool.execute as any)(
-        { sql, timeout: 30_000 }, // Increased timeout
+        { sql, timeout: 60_000 }, // Increased timeout for long-running queries
         sanitizedParams
       );
       return rows;

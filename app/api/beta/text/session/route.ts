@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as mysql from "mysql2/promise";
-import { verifyToken, getWebsiteIdFromToken } from '../../../../../lib/token-verifier';
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../../../lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -81,21 +84,61 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log("getting session data for website", { websiteId });
+    console.log("SESSION API: Getting session data for website", {
+      websiteId,
+      endpoint: "GET /api/beta/text/session",
+    });
 
     // Connect to database
     connection = await mysql.createConnection(dbConfig);
 
-    // Get the most recent session for this website
+    // Get the session that has active conversations (instead of just the newest)
     const [sessionRows] = await connection.execute(
-      "SELECT id, websiteId, createdAt, textOpen FROM Session WHERE websiteId = ? ORDER BY createdAt DESC LIMIT 1",
+      `SELECT s.id, s.websiteId, s.createdAt, s.textOpen 
+       FROM Session s 
+       WHERE s.websiteId = ? 
+       AND EXISTS (SELECT 1 FROM TextConversations tc WHERE tc.sessionId COLLATE utf8mb4_unicode_ci = s.id COLLATE utf8mb4_unicode_ci)
+       ORDER BY s.createdAt DESC 
+       LIMIT 1`,
       [websiteId]
     );
 
     if (!sessionRows || (sessionRows as any[]).length === 0) {
+      // If no session with conversations found, get the most recent session
+      console.log(
+        "No session with conversations found, falling back to most recent"
+      );
+
+      const [fallbackSessionRows] = await connection.execute(
+        "SELECT id, websiteId, createdAt, textOpen FROM Session WHERE websiteId = ? ORDER BY createdAt DESC LIMIT 1",
+        [websiteId]
+      );
+
+      if (!fallbackSessionRows || (fallbackSessionRows as any[]).length === 0) {
+        return NextResponse.json(
+          { error: "No session found for this website" },
+          { status: 404 }
+        );
+      }
+
+      // Use the most recent session
       return NextResponse.json(
-        { error: "No session found for this website" },
-        { status: 404 }
+        {
+          sessionId: (fallbackSessionRows as any[])[0].id,
+          websiteId: websiteId,
+          sessionCreatedAt: (fallbackSessionRows as any[])[0].createdAt,
+          textOpen: (fallbackSessionRows as any[])[0].textOpen,
+          textConversations: [], // Empty array as there are no conversations
+          message:
+            "This is the most recent session, but it has no conversations",
+        },
+        {
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          },
+        }
       );
     }
 

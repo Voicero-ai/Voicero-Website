@@ -48,6 +48,10 @@ function mapActionToActionIntent(action: string): string {
       return "exchange_order";
     case "add_to_cart":
       return "purchase";
+    case "delete_from_cart":
+      return "delete_from_cart";
+    case "get_cart":
+      return "get_cart";
     default:
       return "none";
   }
@@ -108,6 +112,7 @@ export async function POST(request: NextRequest) {
       attachedImage, // { contentPreview: "data:image/png;base64,...", ... } or null
       attachedFile, // { contentPreview: "data:application/pdf;base64,...", ... } or null
       attachedImages, // optional array of images (data URL or fileId)
+      baseUrl, // Include the current page URL
     }: {
       question: string;
       responseId?: string;
@@ -117,6 +122,7 @@ export async function POST(request: NextRequest) {
       attachedImage?: IncomingAttachment | null;
       attachedFile?: IncomingAttachment | null;
       attachedImages?: IncomingAttachment[] | null;
+      baseUrl?: string | null;
     } = body;
 
     // Auth
@@ -128,6 +134,12 @@ export async function POST(request: NextRequest) {
         { status: 401 }
       );
     }
+
+    console.log("INCOMING REQUEST IDs:", {
+      sessionId,
+      conversationId,
+      responseId: incomingResponseId,
+    });
 
     if (!question && !attachedImage && !attachedFile) {
       return NextResponse.json(
@@ -141,6 +153,11 @@ export async function POST(request: NextRequest) {
 
     // Find or create session
     let sessionIdToUse = sessionId;
+    console.log("SESSION ID DECISION:", {
+      receivedSessionId: sessionId,
+      willCreateNew: !sessionIdToUse || sessionIdToUse === "",
+    });
+
     if (!sessionIdToUse || sessionIdToUse === "") {
       const websiteId = await getWebsiteIdFromToken(authHeader);
       if (!websiteId) {
@@ -149,6 +166,8 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
+      console.log("CREATING NEW SESSION for website:", websiteId);
+
       await connection.execute(
         "INSERT INTO Session (id, websiteId, textOpen) VALUES (UUID(), ?, ?)",
         [websiteId, true]
@@ -158,11 +177,22 @@ export async function POST(request: NextRequest) {
         [websiteId]
       );
       sessionIdToUse = (newSessionResult as any[])[0].id;
+      console.log("CREATED NEW SESSION:", sessionIdToUse);
+    } else {
+      console.log("USING EXISTING SESSION:", sessionIdToUse);
     }
 
     // Conversation handling
     let conversationIdToUse = conversationId;
+    console.log("CONVERSATION ID DECISION:", {
+      receivedConversationId: conversationId,
+      willCreateNew: !conversationIdToUse || conversationIdToUse === "",
+      usingSessionId: sessionIdToUse,
+    });
+
     if (!conversationIdToUse || conversationIdToUse === "") {
+      console.log("CREATING NEW CONVERSATION for session:", sessionIdToUse);
+
       await connection.execute(
         "INSERT INTO TextConversations (id, sessionId, createdAt, mostRecentConversationAt, firstConversationAt) VALUES (UUID(), ?, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3))",
         [sessionIdToUse]
@@ -172,7 +202,29 @@ export async function POST(request: NextRequest) {
         [sessionIdToUse]
       );
       conversationIdToUse = (newConversationIdResult as any[])[0].id;
+      console.log("CREATED NEW CONVERSATION:", {
+        newConversationId: conversationIdToUse,
+        linkedToSessionId: sessionIdToUse,
+      });
     } else {
+      console.log("UPDATING EXISTING CONVERSATION:", conversationIdToUse);
+
+      // Verify the session ID of this conversation
+      const [convSessionRows] = await connection.execute(
+        "SELECT sessionId FROM TextConversations WHERE id = ?",
+        [conversationIdToUse]
+      );
+
+      if (convSessionRows && (convSessionRows as any[]).length > 0) {
+        const actualSessionId = (convSessionRows as any[])[0].sessionId;
+        console.log("CONVERSATION SESSION CHECK:", {
+          conversationId: conversationIdToUse,
+          storedSessionId: actualSessionId,
+          receivedSessionId: sessionIdToUse,
+          match: actualSessionId === sessionIdToUse,
+        });
+      }
+
       await connection.execute(
         "UPDATE TextConversations SET mostRecentConversationAt = CURRENT_TIMESTAMP(3), totalMessages = totalMessages + 1 WHERE id = ?",
         [conversationIdToUse]
@@ -569,6 +621,43 @@ export async function POST(request: NextRequest) {
         : undefined;
 
     // ---- First, call the classifier to determine the intent, language, and actions ----
+    // Get previous context if there's a valid responseId
+    let previousContext = null;
+
+    // If we have a previous responseId, we should maintain context
+    // This is crucial for follow-up messages in the same conversation
+    if (previousResponseIdForOpenAI) {
+      console.log(
+        "[CONTEXT] Using previous response ID for context:",
+        previousResponseIdForOpenAI
+      );
+
+      // Look up the previous action from the database to maintain context
+      try {
+        const [prevRows] = await connection.execute(
+          "SELECT content FROM TextChats WHERE responseId = ? AND messageType = 'ai' LIMIT 1",
+          [incomingResponseId]
+        );
+
+        if (prevRows && (prevRows as any[]).length > 0) {
+          const prevContent = (prevRows as any[])[0].content;
+          console.log(
+            "[CONTEXT] Found previous AI response:",
+            prevContent.substring(0, 100) +
+              (prevContent.length > 100 ? "..." : "")
+          );
+
+          // If the previous response was about a return, maintain that context
+          if (prevContent.includes("return process")) {
+            previousContext = "return_order";
+            console.log("[CONTEXT] Maintaining previous context: return_order");
+          }
+        }
+      } catch (err) {
+        console.error("[CONTEXT] Error fetching previous context:", err);
+      }
+    }
+
     const classifierCompletion = await openai.responses.create({
       model: "gpt-4.1-mini",
       instructions: [
@@ -578,18 +667,23 @@ export async function POST(request: NextRequest) {
         "{",
         '  "category": one of ["sales", "support", "discount"],',
         '  "language": the language detected in the user query (e.g., "english", "spanish"),',
-        '  "action": one of ["get_order", "track_order", "return_order", "exchange_order", "add_to_cart", "none"],',
-        '  "actionType": the specific data needed for the action (e.g., order_id, order_email, item_id, item_name) or null if action is "none",',
-        '  "needsResearch": boolean indicating if the answer requires complex research (true) or is straightforward (false),',
-        '  "researchContext": if needsResearch is true, provide specific context on what to research; otherwise null',
+        '  "action": one of ["get_order", "track_order", "return_order", "cancel_order", "exchange_order", "get_cart", "add_to_cart", "delete_from_cart", "none"],',
+        '  "actionType": the specific data needed for the action (e.g., order_id, order_email, item_id, item_name) or null if action is "none"',
         "}",
         "Analyze the query thoroughly before making classifications.",
         "For actions, extract specific IDs, emails, or product names mentioned in the query.",
         "Only set an action if the user is clearly asking to perform that specific action.",
-        "Only set needsResearch to true if answering requires information not directly available in the query or page content.",
+        // Add context maintenance instructions
+        previousContext
+          ? `IMPORTANT: This is a follow-up to a previous "${previousContext}" conversation. If the user is providing additional information for the same action, maintain the action context.`
+          : "",
+        previousResponseIdForOpenAI
+          ? "This is a follow-up message in an ongoing conversation. Consider the context of previous messages."
+          : "",
       ].join(" "),
       input: [{ role: "user", content: contentParts }],
       max_output_tokens: 200,
+      previous_response_id: previousResponseIdForOpenAI,
     });
 
     // Parse the classifier result
@@ -608,190 +702,995 @@ export async function POST(request: NextRequest) {
         classifierResult = JSON.parse(classifierText);
       }
 
+      // Override the classifier result if we have a previous context
+      if (previousContext === "return_order") {
+        if (
+          classifierResult.action === "get_order" &&
+          classifierResult.actionType
+        ) {
+          console.log(
+            "[CLASSIFIER] Overriding action from get_order to return_order based on previous context"
+          );
+          // Keep the actionType from get_order but change the action to return_order
+          classifierResult.action = "return_order";
+        }
+
+        // Fix string-based order_id in actionType
+        if (
+          classifierResult.action === "return_order" &&
+          classifierResult.actionType === "order_id"
+        ) {
+          // Extract order ID and email from the message if available
+          const orderIdMatch = userText.match(/order(?:\s+number)?\s+(\d+)/i);
+          const emailMatch = userText.match(
+            /email\s+(?:is|:)?\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i
+          );
+
+          const orderInfo: any = {};
+          if (orderIdMatch && orderIdMatch[1]) {
+            orderInfo.order_id = orderIdMatch[1];
+          }
+          if (emailMatch && emailMatch[1]) {
+            orderInfo.order_email = emailMatch[1];
+          }
+
+          if (Object.keys(orderInfo).length > 0) {
+            console.log(
+              "[CLASSIFIER] Extracted order details from text:",
+              orderInfo
+            );
+            classifierResult.actionType = orderInfo;
+          }
+        }
+      }
+
       console.log("[CLASSIFIER] Parsed result:", classifierResult);
     } catch (error) {
       console.error("Error parsing classifier result:", error);
       classifierResult = {
         category: "support",
         language: "english",
-        action: "none",
+        action: previousContext || "none", // Use previous context if available
         actionType: null,
-        needsResearch: false,
-        researchContext: null,
       };
     }
 
     // Determine if we need to generate a full response or a generic action response
-    let outputText: string;
+    let outputText = ""; // Initialize with empty string
     let openaiResponseId = (classifierCompletion as any)?.id || null;
+    console.log("RESPONSE ID SETUP:", {
+      incomingResponseId,
+      initialOpenAIResponseId: openaiResponseId,
+    });
     let fullCompletion: any = null;
 
     // Convert classifier result to QuestionClassification type for Pinecone search
     const pineconeClassification: QuestionClassification = {
-      type: "general", // Default type
-      category: classifierResult.category || "general",
-      "sub-category": "general",
+      type: classifierResult.category || "sales", // Use AI classifier category
+      category: classifierResult.category || "sales",
+      "sub-category": classifierResult.category || "sales",
       interaction_type:
         classifierResult.category === "sales"
           ? "sales"
           : classifierResult.category === "support"
           ? "support"
-          : "general",
+          : "sales",
       action_intent: mapActionToActionIntent(classifierResult.action),
     };
 
     console.log("[PINECONE] Using classification:", pineconeClassification);
 
-    // Prepare for Pinecone search if research is needed
+    // Always perform Pinecone search
     let searchResults = [];
-    if (classifierResult.needsResearch) {
-      try {
-        console.log("[PINECONE] Research needed, performing search");
-        // Get website ID for Pinecone namespace
-        const websiteId = await getWebsiteIdFromToken(authHeader);
-        if (!websiteId) {
-          throw new Error("Could not determine website ID from token");
-        }
-
-        // Get website details from DB
-        const [websiteRows] = await connection.execute(
-          "SELECT id, name FROM Website WHERE id = ? LIMIT 1",
-          [websiteId]
-        );
-        const website = (websiteRows as any[])[0];
-
-        if (!website) {
-          throw new Error("Could not find website in database");
-        }
-
-        // Generate query vectors
-        const { denseScaled: queryDense, sparseScaled: querySparse } =
-          await buildHybridQueryVectors(question, {
-            alpha: 0.6,
-            featureSpace: 2_000_003,
-          });
-
-        // Perform search
-        const timeMarks: Record<string, number> = {};
-        searchResults = await performMainSearch(
-          pinecone,
-          website,
-          question,
-          queryDense,
-          querySparse,
-          pineconeClassification,
-          false, // useAllNamespaces
-          timeMarks
-        );
-
-        console.log(
-          `[PINECONE] Search returned ${searchResults.length} results`
-        );
-
-        // Log more detailed information about the search results
-        if (searchResults.length > 0) {
-          // Log the top 3 results with more details
-          const topResults = searchResults.slice(0, 3);
-          topResults.forEach((result, index) => {
-            console.log(`[PINECONE] Result #${index + 1}:`);
-            console.log(
-              `  Score: ${result.score || 0}, RerankScore: ${
-                result.rerankScore || "N/A"
-              }`
-            );
-            console.log(
-              `  ClassificationMatch: ${result.classificationMatch || "N/A"}`
-            );
-            console.log(`  Type: ${result.metadata?.type || "unknown"}`);
-            console.log(
-              `  Category: ${result.metadata?.category || "unknown"}`
-            );
-
-            // Log content preview based on content type
-            if (result.metadata?.question) {
-              console.log(`  Question: ${result.metadata.question}`);
-              console.log(
-                `  Answer preview: ${(result.metadata.answer || "").substring(
-                  0,
-                  100
-                )}${result.metadata.answer?.length > 100 ? "..." : ""}`
-              );
-            } else if (result.metadata?.title) {
-              console.log(`  Title: ${result.metadata.title}`);
-              console.log(
-                `  Content preview: ${(result.metadata.content || "").substring(
-                  0,
-                  100
-                )}${result.metadata.content?.length > 100 ? "..." : ""}`
-              );
-            } else if (result.metadata?.handle) {
-              console.log(`  Handle: ${result.metadata.handle}`);
-            }
-
-            console.log(""); // Empty line for separation
-          });
-
-          // Log the complete raw data of just the top result for debugging
-          console.log("[PINECONE] Raw top result data:");
-          console.log(JSON.stringify(searchResults[0], null, 2));
-        }
-      } catch (error) {
-        console.error("[PINECONE] Search error:", error);
-        // Continue execution even if search fails
+    try {
+      console.log("[PINECONE] Performing search");
+      // Get website ID for Pinecone namespace
+      const websiteId = await getWebsiteIdFromToken(authHeader);
+      if (!websiteId) {
+        throw new Error("Could not determine website ID from token");
       }
+
+      // Get website details from DB
+      const [websiteRows] = await connection.execute(
+        "SELECT id, name FROM Website WHERE id = ? LIMIT 1",
+        [websiteId]
+      );
+      const website = (websiteRows as any[])[0];
+
+      if (!website) {
+        throw new Error("Could not find website in database");
+      }
+
+      // Generate query vectors
+      const { denseScaled: queryDense, sparseScaled: querySparse } =
+        await buildHybridQueryVectors(question, {
+          alpha: 0.6,
+          featureSpace: 2_000_003,
+        });
+
+      // Perform search
+      const timeMarks: Record<string, number> = {};
+      const useAllNamespaces = false;
+      searchResults = await performMainSearch(
+        pinecone,
+        website,
+        question,
+        queryDense,
+        querySparse,
+        pineconeClassification,
+        useAllNamespaces,
+        timeMarks
+      );
+
+      console.log(`[PINECONE] Search returned ${searchResults.length} results`);
+    } catch (error) {
+      console.error("[PINECONE] Search error:", error);
+      // Continue execution even if search fails
     }
 
     if (classifierResult.action !== "none") {
       // For action-based responses, generate a generic response based on the action
       let actionResponseText = "I'll help you with that ";
+
+      // For actions with formatted responses, we'll generate proper markdown
+      let actionLinks = [];
       console.log(
         "[ACTION] Generating action-based response for action:",
         classifierResult.action
       );
 
+      // Special handling for string-based actionType in add_to_cart
+      if (
+        classifierResult.action === "add_to_cart" &&
+        typeof classifierResult.actionType === "string"
+      ) {
+        console.log(
+          "[ACTION] Converting string actionType to object for add_to_cart:",
+          classifierResult.actionType
+        );
+        const productName = classifierResult.actionType;
+        classifierResult.actionType = {
+          product_name: productName,
+          quantity: 1,
+        };
+      }
+
+      // Special handling for string-based actionType in delete_from_cart
+      if (
+        classifierResult.action === "delete_from_cart" &&
+        typeof classifierResult.actionType === "string"
+      ) {
+        console.log(
+          "[ACTION] Converting string actionType to object for delete_from_cart:",
+          classifierResult.actionType
+        );
+        const productName = classifierResult.actionType;
+        classifierResult.actionType = {
+          product_name: productName,
+          quantity: 0,
+        };
+      }
+
       switch (classifierResult.action) {
         case "get_order":
-          actionResponseText += `order information${
-            classifierResult.actionType
-              ? ` for ${classifierResult.actionType}`
-              : ""
-          }.`;
+          let orderDetails = "";
+          if (classifierResult.actionType) {
+            if (typeof classifierResult.actionType === "object") {
+              // Format object properties
+              const details = [];
+              if (classifierResult.actionType.order_id) {
+                details.push(`order #${classifierResult.actionType.order_id}`);
+              }
+              if (classifierResult.actionType.order_email) {
+                details.push(
+                  `email: ${classifierResult.actionType.order_email}`
+                );
+              }
+              // Ensure email is also available in action_context
+              if (
+                classifierResult.actionType.order_email &&
+                !classifierResult.actionType.email
+              ) {
+                classifierResult.actionType.email =
+                  classifierResult.actionType.order_email;
+              }
+              orderDetails =
+                details.length > 0 ? ` for ${details.join(", ")}` : "";
+            } else {
+              // Handle string-based actionType - try to extract order numbers
+              const orderIdMatch = String(classifierResult.actionType).match(
+                /(\d+)/
+              );
+              if (orderIdMatch && orderIdMatch[1]) {
+                orderDetails = ` for order #${orderIdMatch[1]}`;
+                // Convert string to object with proper fields
+                classifierResult.actionType = {
+                  order_id: orderIdMatch[1],
+                };
+              } else {
+                orderDetails = ` for ${classifierResult.actionType}`;
+              }
+            }
+          }
+          actionResponseText += `order information${orderDetails}.`;
           break;
         case "track_order":
-          actionResponseText += `order tracking${
-            classifierResult.actionType
-              ? ` for ${classifierResult.actionType}`
-              : ""
-          }.`;
+          let trackingDetails = "";
+          if (classifierResult.actionType) {
+            if (typeof classifierResult.actionType === "object") {
+              // Format object properties
+              const details = [];
+              if (classifierResult.actionType.order_id) {
+                details.push(`order #${classifierResult.actionType.order_id}`);
+              }
+              if (classifierResult.actionType.tracking_number) {
+                details.push(
+                  `tracking #${classifierResult.actionType.tracking_number}`
+                );
+              }
+              if (classifierResult.actionType.order_email) {
+                details.push(
+                  `email: ${classifierResult.actionType.order_email}`
+                );
+              }
+              // Ensure email is also available in action_context
+              if (
+                classifierResult.actionType.order_email &&
+                !classifierResult.actionType.email
+              ) {
+                classifierResult.actionType.email =
+                  classifierResult.actionType.order_email;
+              }
+              trackingDetails =
+                details.length > 0 ? ` for ${details.join(", ")}` : "";
+            } else {
+              // Handle string-based actionType - try to extract order numbers
+              const orderIdMatch = String(classifierResult.actionType).match(
+                /(\d+)/
+              );
+              if (orderIdMatch && orderIdMatch[1]) {
+                trackingDetails = ` for order #${orderIdMatch[1]}`;
+                // Convert string to object with proper fields
+                classifierResult.actionType = {
+                  order_id: orderIdMatch[1],
+                };
+              } else {
+                trackingDetails = ` for ${classifierResult.actionType}`;
+              }
+            }
+          }
+          actionResponseText += `order tracking${trackingDetails}.`;
           break;
         case "return_order":
-          actionResponseText += `return process${
-            classifierResult.actionType
-              ? ` for ${classifierResult.actionType}`
-              : ""
-          }.`;
+          let returnDetails = "";
+          if (classifierResult.actionType) {
+            if (typeof classifierResult.actionType === "object") {
+              // Format object properties
+              const details = [];
+              if (classifierResult.actionType.order_id) {
+                details.push(`order #${classifierResult.actionType.order_id}`);
+              }
+              if (classifierResult.actionType.order_email) {
+                details.push(
+                  `email: ${classifierResult.actionType.order_email}`
+                );
+              }
+              if (classifierResult.actionType.product_name) {
+                details.push(`${classifierResult.actionType.product_name}`);
+              }
+
+              // Add return reason if present
+              if (classifierResult.actionType.reason) {
+                details.push(`reason: ${classifierResult.actionType.reason}`);
+              } else {
+                // Try to extract return reason from user text
+                const reasonMap = {
+                  "too small": "SIZE_TOO_SMALL",
+                  small: "SIZE_TOO_SMALL",
+                  "too large": "SIZE_TOO_LARGE",
+                  large: "SIZE_TOO_LARGE",
+                  big: "SIZE_TOO_LARGE",
+                  "don't want": "UNWANTED",
+                  "dont want": "UNWANTED",
+                  unwanted: "UNWANTED",
+                  "changed mind": "UNWANTED",
+                  "not as described": "NOT_AS_DESCRIBED",
+                  "not described": "NOT_AS_DESCRIBED",
+                  "wrong item": "WRONG_ITEM",
+                  "incorrect item": "WRONG_ITEM",
+                  defect: "DEFECTIVE",
+                  defective: "DEFECTIVE",
+                  broken: "DEFECTIVE",
+                  damaged: "DEFECTIVE",
+                  style: "STYLE",
+                  color: "COLOR",
+                  "wrong color": "COLOR",
+                };
+
+                // Check if user text contains any reason keywords
+                const userTextLower = userText.toLowerCase();
+                let foundReason = null;
+
+                for (const [keyword, code] of Object.entries(reasonMap)) {
+                  if (userTextLower.includes(keyword)) {
+                    foundReason = code;
+                    details.push(`reason: ${keyword}`);
+                    break;
+                  }
+                }
+
+                if (foundReason) {
+                  classifierResult.actionType.reason = foundReason;
+                  classifierResult.actionType.reason_code = foundReason;
+                } else {
+                  // Default reason if none specified
+                  classifierResult.actionType.reason = "UNKNOWN";
+                  classifierResult.actionType.reason_code = "UNKNOWN";
+                }
+              }
+
+              // Ensure email is also available in action_context
+              if (
+                classifierResult.actionType.order_email &&
+                !classifierResult.actionType.email
+              ) {
+                classifierResult.actionType.email =
+                  classifierResult.actionType.order_email;
+              }
+
+              returnDetails =
+                details.length > 0 ? ` for ${details.join(", ")}` : "";
+            } else {
+              // Handle string-based actionType - try to extract order numbers
+              const orderIdMatch = String(classifierResult.actionType).match(
+                /(\d+)/
+              );
+              if (orderIdMatch && orderIdMatch[1]) {
+                returnDetails = ` for order #${orderIdMatch[1]}`;
+                // Convert string to object with proper fields
+                classifierResult.actionType = {
+                  order_id: orderIdMatch[1],
+                  reason: "UNKNOWN", // Default reason
+                  reason_code: "UNKNOWN",
+                };
+              } else {
+                returnDetails = ` for ${classifierResult.actionType}`;
+                // Try to create an object with reason
+                classifierResult.actionType = {
+                  reason: "UNKNOWN",
+                  reason_code: "UNKNOWN",
+                };
+              }
+            }
+          } else {
+            // If no actionType at all, create one with at least a reason
+            classifierResult.actionType = {
+              reason: "UNKNOWN",
+              reason_code: "UNKNOWN",
+            };
+          }
+          actionResponseText += `return process${returnDetails}.`;
+          break;
+        case "cancel_order":
+          let cancelDetails = "";
+          if (classifierResult.actionType) {
+            if (typeof classifierResult.actionType === "object") {
+              // Format object properties
+              const details = [];
+              if (classifierResult.actionType.order_id) {
+                details.push(`order #${classifierResult.actionType.order_id}`);
+              }
+              if (classifierResult.actionType.order_email) {
+                details.push(
+                  `email: ${classifierResult.actionType.order_email}`
+                );
+              }
+              // Ensure email is also available in action_context
+              if (
+                classifierResult.actionType.order_email &&
+                !classifierResult.actionType.email
+              ) {
+                classifierResult.actionType.email =
+                  classifierResult.actionType.order_email;
+              }
+              cancelDetails =
+                details.length > 0 ? ` for ${details.join(", ")}` : "";
+            } else {
+              // Handle string-based actionType - try to extract order numbers
+              const orderIdMatch = String(classifierResult.actionType).match(
+                /(\d+)/
+              );
+              if (orderIdMatch && orderIdMatch[1]) {
+                cancelDetails = ` for order #${orderIdMatch[1]}`;
+                // Convert string to object with proper fields
+                classifierResult.actionType = {
+                  order_id: orderIdMatch[1],
+                };
+              } else {
+                cancelDetails = ` for ${classifierResult.actionType}`;
+              }
+            }
+          }
+          actionResponseText += `cancellation process${cancelDetails}.`;
           break;
         case "exchange_order":
-          actionResponseText += `exchange process${
-            classifierResult.actionType
-              ? ` for ${classifierResult.actionType}`
-              : ""
-          }.`;
+          let exchangeDetails = "";
+          if (classifierResult.actionType) {
+            if (typeof classifierResult.actionType === "object") {
+              // Format object properties
+              const details = [];
+              if (classifierResult.actionType.order_id) {
+                details.push(`order #${classifierResult.actionType.order_id}`);
+              }
+              if (classifierResult.actionType.order_email) {
+                details.push(
+                  `email: ${classifierResult.actionType.order_email}`
+                );
+              }
+              if (classifierResult.actionType.product_name) {
+                details.push(`${classifierResult.actionType.product_name}`);
+              }
+              // Ensure email is also available in action_context
+              if (
+                classifierResult.actionType.order_email &&
+                !classifierResult.actionType.email
+              ) {
+                classifierResult.actionType.email =
+                  classifierResult.actionType.order_email;
+              }
+              exchangeDetails =
+                details.length > 0 ? ` for ${details.join(", ")}` : "";
+            } else {
+              // Handle string-based actionType - try to extract order numbers
+              const orderIdMatch = String(classifierResult.actionType).match(
+                /(\d+)/
+              );
+              if (orderIdMatch && orderIdMatch[1]) {
+                exchangeDetails = ` for order #${orderIdMatch[1]}`;
+                // Convert string to object with proper fields
+                classifierResult.actionType = {
+                  order_id: orderIdMatch[1],
+                };
+              } else {
+                exchangeDetails = ` for ${classifierResult.actionType}`;
+              }
+            }
+          }
+          actionResponseText += `exchange process${exchangeDetails}.`;
+          break;
+        case "get_cart":
+          // Get cart doesn't need any specific action context
+          actionResponseText += `retrieving your shopping cart.`;
+          // Ensure we have at least an empty object for actionType
+          if (!classifierResult.actionType) {
+            classifierResult.actionType = {};
+          }
           break;
         case "add_to_cart":
+          let cartItem = "that item";
+          let quantity = 1; // Default quantity
+
+          if (classifierResult.actionType) {
+            if (typeof classifierResult.actionType === "object") {
+              // Format object properties
+              if (classifierResult.actionType.product_name) {
+                cartItem = classifierResult.actionType.product_name;
+              } else if (classifierResult.actionType.item_name) {
+                cartItem = classifierResult.actionType.item_name;
+              } else if (classifierResult.actionType.variant_id) {
+                cartItem = `product variant ${classifierResult.actionType.variant_id}`;
+              } else {
+                cartItem = JSON.stringify(classifierResult.actionType).replace(
+                  /[{}]/g,
+                  ""
+                );
+              }
+
+              // Get quantity if specified
+              if (
+                classifierResult.actionType.quantity &&
+                !isNaN(Number(classifierResult.actionType.quantity))
+              ) {
+                quantity = Number(classifierResult.actionType.quantity);
+              } else {
+                // Try to extract quantity from user text
+                const quantityMatch =
+                  userText.match(/(\d+)\s+(item|items|pieces?|pcs?)/i) ||
+                  userText.match(/quantity\s+(?:of\s+)?(\d+)/i) ||
+                  userText.match(/(\d+)\s+quantity/i);
+                if (quantityMatch && quantityMatch[1]) {
+                  quantity = Number(quantityMatch[1]);
+                  classifierResult.actionType.quantity = quantity;
+                } else {
+                  classifierResult.actionType.quantity = 1; // Default to 1
+                }
+              }
+
+              // Ensure variant_id is present
+              if (!classifierResult.actionType.variant_id) {
+                // Try to extract product ID from user text
+                const productIdMatch =
+                  userText.match(/product\s+(?:id\s+)?(\d+)/i) ||
+                  userText.match(/item\s+(?:id\s+)?(\d+)/i);
+                if (productIdMatch && productIdMatch[1]) {
+                  classifierResult.actionType.variant_id = productIdMatch[1];
+                } else {
+                  // Try to find the product in the ShopifyProduct table by name
+                  try {
+                    // Get website ID for database lookup
+                    const websiteId = await getWebsiteIdFromToken(authHeader);
+                    if (websiteId) {
+                      // Get product name to search for
+                      let productName =
+                        classifierResult.actionType.product_name ||
+                        classifierResult.actionType.item_name ||
+                        cartItem;
+
+                      if (typeof classifierResult.actionType === "string") {
+                        productName = classifierResult.actionType;
+                      }
+
+                      console.log(
+                        "[CART] Searching for product in database:",
+                        productName
+                      );
+
+                      // Search for the product in ShopifyProduct table with proper fields
+                      const [productRows] = await connection.execute(
+                        `SELECT sp.id, sp.shopifyId, sp.title, 
+                          (SELECT GROUP_CONCAT(spv.shopifyId) FROM ShopifyProductVariant spv WHERE spv.productId = sp.id) AS variantIds,
+                          (SELECT JSON_OBJECT('id', spv.shopifyId, 'title', spv.title, 'price', spv.price) 
+                           FROM ShopifyProductVariant spv 
+                           WHERE spv.productId = sp.id 
+                           LIMIT 1) AS firstVariant
+                         FROM ShopifyProduct sp
+                         WHERE sp.websiteId = ? AND sp.title LIKE ?`,
+                        [websiteId, `%${productName}%`]
+                      );
+
+                      if (productRows && (productRows as any[]).length > 0) {
+                        const product = (productRows as any[])[0];
+                        console.log(
+                          "[CART] Found matching product:",
+                          product.title
+                        );
+
+                        // Try to get variant ID
+                        try {
+                          // First try to get variant ID from the firstVariant field
+                          if (product.firstVariant) {
+                            let firstVariant;
+                            try {
+                              // If it's a string, parse it; if it's already an object, use it directly
+                              if (typeof product.firstVariant === "string") {
+                                firstVariant = JSON.parse(product.firstVariant);
+                              } else {
+                                firstVariant = product.firstVariant;
+                              }
+
+                              if (firstVariant && firstVariant.id) {
+                                classifierResult.actionType.variant_id = String(
+                                  firstVariant.id
+                                );
+                                console.log(
+                                  "[CART] Using first variant ID:",
+                                  classifierResult.actionType.variant_id
+                                );
+                              }
+                            } catch (e) {
+                              console.error(
+                                "[CART] Error parsing first variant:",
+                                e
+                              );
+                            }
+                          }
+
+                          // If no variant ID yet, try variantIds
+                          if (
+                            !classifierResult.actionType.variant_id &&
+                            product.variantIds
+                          ) {
+                            // variantIds might be a comma-separated string of IDs
+                            const variantIdArray = String(
+                              product.variantIds
+                            ).split(",");
+                            if (variantIdArray.length > 0) {
+                              classifierResult.actionType.variant_id =
+                                variantIdArray[0];
+                              console.log(
+                                "[CART] Using first variant ID from array:",
+                                classifierResult.actionType.variant_id
+                              );
+                            }
+                          }
+
+                          // If still no variant ID, use the product ID as fallback
+                          if (!classifierResult.actionType.variant_id) {
+                            classifierResult.actionType.variant_id = String(
+                              product.shopifyId
+                            );
+                            console.log(
+                              "[CART] Using product shopifyId as fallback:",
+                              classifierResult.actionType.variant_id
+                            );
+                          }
+
+                          // Update the cart item name with the actual product title
+                          cartItem = product.title;
+                        } catch (e) {
+                          console.error(
+                            "[CART] Error extracting variant ID:",
+                            e
+                          );
+                        }
+                      } else {
+                        console.log(
+                          "[CART] No matching product found in database"
+                        );
+                      }
+                    }
+                  } catch (err) {
+                    console.error(
+                      "[CART] Error searching for product in database:",
+                      err
+                    );
+                  }
+                }
+              }
+            } else {
+              cartItem = classifierResult.actionType;
+              // Convert string actionType to object with variant_id
+              const variantMatch = String(classifierResult.actionType).match(
+                /(\d+)/
+              );
+              if (variantMatch && variantMatch[1]) {
+                classifierResult.actionType = {
+                  variant_id: variantMatch[1],
+                  quantity: 1,
+                };
+              } else {
+                classifierResult.actionType = {
+                  quantity: 1,
+                };
+              }
+            }
+          } else {
+            // Create default actionType
+            classifierResult.actionType = {
+              quantity: 1,
+            };
+          }
+
           actionResponseText += `adding ${
-            classifierResult.actionType || "that item"
-          } to your cart.`;
+            quantity > 1 ? quantity + " " : ""
+          }${cartItem} to your cart.`;
+          break;
+        case "delete_from_cart":
+          let deleteItem = "that item";
+
+          if (classifierResult.actionType) {
+            if (typeof classifierResult.actionType === "object") {
+              // Format object properties
+              if (classifierResult.actionType.product_name) {
+                deleteItem = classifierResult.actionType.product_name;
+              } else if (classifierResult.actionType.item_name) {
+                deleteItem = classifierResult.actionType.item_name;
+              } else if (classifierResult.actionType.variant_id) {
+                deleteItem = `product variant ${classifierResult.actionType.variant_id}`;
+              } else {
+                deleteItem = JSON.stringify(
+                  classifierResult.actionType
+                ).replace(/[{}]/g, "");
+              }
+
+              // Ensure variant_id is present
+              if (!classifierResult.actionType.variant_id) {
+                // Try to extract product ID from user text
+                const productIdMatch =
+                  userText.match(/product\s+(?:id\s+)?(\d+)/i) ||
+                  userText.match(/item\s+(?:id\s+)?(\d+)/i);
+                if (productIdMatch && productIdMatch[1]) {
+                  classifierResult.actionType.variant_id = productIdMatch[1];
+                } else {
+                  // Try to find the product in the ShopifyProduct table by name
+                  try {
+                    // Get website ID for database lookup
+                    const websiteId = await getWebsiteIdFromToken(authHeader);
+                    if (websiteId) {
+                      // Get product name to search for
+                      let productName =
+                        classifierResult.actionType.product_name ||
+                        classifierResult.actionType.item_name ||
+                        deleteItem;
+
+                      if (typeof classifierResult.actionType === "string") {
+                        productName = classifierResult.actionType;
+                      }
+
+                      console.log(
+                        "[CART] Searching for product in database for delete:",
+                        productName
+                      );
+
+                      // Search for the product in ShopifyProduct table with proper fields
+                      const [productRows] = await connection.execute(
+                        `SELECT sp.id, sp.shopifyId, sp.title, 
+                          (SELECT GROUP_CONCAT(spv.shopifyId) FROM ShopifyProductVariant spv WHERE spv.productId = sp.id) AS variantIds,
+                          (SELECT JSON_OBJECT('id', spv.shopifyId, 'title', spv.title, 'price', spv.price) 
+                           FROM ShopifyProductVariant spv 
+                           WHERE spv.productId = sp.id 
+                           LIMIT 1) AS firstVariant
+                         FROM ShopifyProduct sp
+                         WHERE sp.websiteId = ? AND sp.title LIKE ?`,
+                        [websiteId, `%${productName}%`]
+                      );
+
+                      if (productRows && (productRows as any[]).length > 0) {
+                        const product = (productRows as any[])[0];
+                        console.log(
+                          "[CART] Found matching product for delete:",
+                          product.title
+                        );
+
+                        // Try to get variant ID
+                        try {
+                          // First try to get variant ID from the firstVariant field
+                          if (product.firstVariant) {
+                            let firstVariant;
+                            try {
+                              // If it's a string, parse it; if it's already an object, use it directly
+                              if (typeof product.firstVariant === "string") {
+                                firstVariant = JSON.parse(product.firstVariant);
+                              } else {
+                                firstVariant = product.firstVariant;
+                              }
+
+                              if (firstVariant && firstVariant.id) {
+                                classifierResult.actionType.variant_id = String(
+                                  firstVariant.id
+                                );
+                                console.log(
+                                  "[CART] Using first variant ID for delete:",
+                                  classifierResult.actionType.variant_id
+                                );
+                              }
+                            } catch (e) {
+                              console.error(
+                                "[CART] Error parsing first variant for delete:",
+                                e
+                              );
+                            }
+                          }
+
+                          // If no variant ID yet, try variantIds
+                          if (
+                            !classifierResult.actionType.variant_id &&
+                            product.variantIds
+                          ) {
+                            // variantIds might be a comma-separated string of IDs
+                            const variantIdArray = String(
+                              product.variantIds
+                            ).split(",");
+                            if (variantIdArray.length > 0) {
+                              classifierResult.actionType.variant_id =
+                                variantIdArray[0];
+                              console.log(
+                                "[CART] Using first variant ID from array for delete:",
+                                classifierResult.actionType.variant_id
+                              );
+                            }
+                          }
+
+                          // If still no variant ID, use the product ID as fallback
+                          if (!classifierResult.actionType.variant_id) {
+                            classifierResult.actionType.variant_id = String(
+                              product.shopifyId
+                            );
+                            console.log(
+                              "[CART] Using product shopifyId as fallback for delete:",
+                              classifierResult.actionType.variant_id
+                            );
+                          }
+
+                          // Update the delete item name with the actual product title
+                          deleteItem = product.title;
+                        } catch (e) {
+                          console.error(
+                            "[CART] Error extracting variant ID for delete:",
+                            e
+                          );
+                        }
+                      } else {
+                        console.log(
+                          "[CART] No matching product found in database for delete"
+                        );
+                      }
+                    }
+                  } catch (err) {
+                    console.error(
+                      "[CART] Error searching for product in database for delete:",
+                      err
+                    );
+                  }
+                }
+              }
+
+              // Always set quantity to 0 for delete
+              classifierResult.actionType.quantity = 0;
+            } else {
+              deleteItem = classifierResult.actionType;
+              // Convert string actionType to object with variant_id
+              const variantMatch = String(classifierResult.actionType).match(
+                /(\d+)/
+              );
+              if (variantMatch && variantMatch[1]) {
+                classifierResult.actionType = {
+                  variant_id: variantMatch[1],
+                  quantity: 0,
+                };
+              } else {
+                classifierResult.actionType = {
+                  quantity: 0,
+                };
+              }
+            }
+          } else {
+            // Create default actionType
+            classifierResult.actionType = {
+              quantity: 0,
+            };
+          }
+
+          actionResponseText += `removing ${deleteItem} from your cart.`;
           break;
         default:
           actionResponseText += "request right away.";
       }
 
-      outputText = actionResponseText;
-      console.log("[ACTION] Generated response:", outputText);
-    } else {
-      // For non-action responses or research needed, call the full completion API
+      // Check if we have any search results to enrich the action response
+      let enhancedActionResponse = actionResponseText;
 
+      if (searchResults && searchResults.length > 0) {
+        // Find relevant results that might match the action
+        const relevantResults = searchResults
+          .filter((result) => {
+            const metadata = result.metadata || {};
+
+            // Look for results that might be related to the current action
+            if (
+              classifierResult.action === "get_order" &&
+              (metadata.title?.toLowerCase().includes("order") ||
+                metadata.content?.toLowerCase().includes("order tracking"))
+            ) {
+              return true;
+            } else if (
+              classifierResult.action === "return_order" &&
+              (metadata.title?.toLowerCase().includes("return") ||
+                metadata.content?.toLowerCase().includes("return"))
+            ) {
+              return true;
+            }
+            // Add more cases for other actions as needed
+            return false;
+          })
+          .slice(0, 2); // Limit to max 2 relevant results
+
+        // Add links and images if available
+        if (relevantResults.length > 0) {
+          enhancedActionResponse += "\n\n**Helpful resources:**";
+
+          relevantResults.forEach((result, index) => {
+            const metadata = result.metadata || {};
+            const title = metadata.title || `Resource ${index + 1}`;
+            let urlValue =
+              metadata.url || metadata.handle || metadata.path || "";
+            let imageUrlValue =
+              metadata.image_url || metadata.imageUrl || metadata.image || "";
+
+            // Format URL based on content type and make it relative to baseUrl
+            if (urlValue) {
+              // Handle shopify domain URLs that might have incorrect structure
+              if (urlValue.includes("myshopify.com")) {
+                // Extract just the path part after the domain
+                const urlParts = urlValue.split("myshopify.com/");
+                if (urlParts.length > 1) {
+                  const path = urlParts[1];
+
+                  // If the path doesn't already start with /products/, /pages/, etc.,
+                  // then assume it's a product URL and prefix with /products/
+                  if (
+                    !path.startsWith("products/") &&
+                    !path.startsWith("pages/") &&
+                    !path.startsWith("collections/") &&
+                    !path.startsWith("blogs/")
+                  ) {
+                    urlValue = `/products/${path}`;
+                  } else {
+                    // Already has a proper prefix, just ensure it starts with a slash
+                    urlValue = `/${path}`;
+                  }
+                }
+              }
+              // For non-http URLs (relative paths), process by content type
+              else if (!urlValue.startsWith("http")) {
+                // Handle specific content types with their correct URL format
+                const contentType = metadata.type?.toLowerCase() || "";
+                const handle =
+                  metadata.handle ||
+                  urlValue
+                    .replace(/^\/|\/$/g, "")
+                    .split("/")
+                    .pop() ||
+                  "";
+
+                if (contentType.includes("product") || metadata.product_id) {
+                  urlValue = `/products/${handle}`;
+                } else if (contentType.includes("page")) {
+                  urlValue = `/pages/${handle}`;
+                } else if (
+                  contentType.includes("collection") ||
+                  metadata.collection_id
+                ) {
+                  urlValue = `/collections/${handle}`;
+                } else if (
+                  contentType.includes("blog") ||
+                  contentType.includes("post") ||
+                  metadata.blog_id
+                ) {
+                  // For blogs, we need both blog handle and post handle
+                  const blogHandle = metadata.blog_handle || "blog";
+                  const postHandle = metadata.post_handle || handle;
+                  urlValue = `/blogs/${blogHandle}/${postHandle}`;
+                } else {
+                  // If no specific content type detected, assume it's a product
+                  // This ensures all URLs have a proper path structure
+                  urlValue = `/products/${handle}`;
+                }
+              }
+              // If not a specific type, keep original URL structure
+
+              // Add baseUrl if available
+              if (baseUrl) {
+                if (urlValue.startsWith("/")) {
+                  urlValue = `${baseUrl}${urlValue}`;
+                } else {
+                  urlValue = `${baseUrl}/${urlValue}`;
+                }
+              }
+            }
+
+            if (imageUrlValue && !imageUrlValue.startsWith("http") && baseUrl) {
+              // If imageUrl starts with /, just append it to baseUrl
+              if (imageUrlValue.startsWith("/")) {
+                imageUrlValue = `${baseUrl}${imageUrlValue}`;
+              } else {
+                imageUrlValue = `${baseUrl}/${imageUrlValue}`;
+              }
+            }
+
+            if (urlValue) {
+              enhancedActionResponse += `\n- [${title}](${urlValue})`;
+            }
+
+            if (imageUrlValue) {
+              enhancedActionResponse += `\n![${title}](${imageUrlValue})`;
+            }
+          });
+        }
+      }
+
+      outputText = enhancedActionResponse;
+      console.log(
+        "[ACTION] Generated response:",
+        outputText.substring(0, 100) + (outputText.length > 100 ? "..." : "")
+      );
+      console.log(
+        "[ACTION] Using action-based response, skipping full completion call."
+      );
+    }
+
+    // For non-action responses, call the full completion API
+    if (classifierResult.action === "none") {
       // Add search results context to the content parts if available
       if (searchResults && searchResults.length > 0) {
         // Extract relevant information from top search results (max 3)
@@ -799,18 +1698,118 @@ export async function POST(request: NextRequest) {
         const searchContext = topResults
           .map((result, index) => {
             const metadata = result.metadata || {};
+            // Extract url if available
+            let urlValue =
+              metadata.url || metadata.handle || metadata.path || "";
+            let imageUrlValue =
+              metadata.image_url || metadata.imageUrl || metadata.image || "";
+
             // Format depends on the type of content
+            let resultText = "";
             if (metadata.question && metadata.answer) {
-              return `[${index + 1}] Q: ${metadata.question}\nA: ${
+              resultText = `[${index + 1}] Q: ${metadata.question}\nA: ${
                 metadata.answer
               }`;
             } else if (metadata.title && metadata.content) {
-              return `[${index + 1}] ${metadata.title}:\n${metadata.content}`;
+              resultText = `[${index + 1}] ${metadata.title}:\n${
+                metadata.content
+              }`;
             } else if (metadata.title) {
-              return `[${index + 1}] ${metadata.title}`;
+              resultText = `[${index + 1}] ${metadata.title}`;
             } else {
-              return `[${index + 1}] ${JSON.stringify(metadata)}`;
+              resultText = `[${index + 1}] ${JSON.stringify(metadata)}`;
             }
+
+            // Format URL based on content type and make it relative to baseUrl
+            if (urlValue) {
+              // Handle shopify domain URLs that might have incorrect structure
+              if (urlValue.includes("myshopify.com")) {
+                // Extract just the path part after the domain
+                const urlParts = urlValue.split("myshopify.com/");
+                if (urlParts.length > 1) {
+                  const path = urlParts[1];
+
+                  // If the path doesn't already start with /products/, /pages/, etc.,
+                  // then assume it's a product URL and prefix with /products/
+                  if (
+                    !path.startsWith("products/") &&
+                    !path.startsWith("pages/") &&
+                    !path.startsWith("collections/") &&
+                    !path.startsWith("blogs/")
+                  ) {
+                    urlValue = `/products/${path}`;
+                  } else {
+                    // Already has a proper prefix, just ensure it starts with a slash
+                    urlValue = `/${path}`;
+                  }
+                }
+              }
+              // For non-http URLs (relative paths), process by content type
+              else if (!urlValue.startsWith("http")) {
+                // Handle specific content types with their correct URL format
+                const contentType = metadata.type?.toLowerCase() || "";
+                const handle =
+                  metadata.handle ||
+                  urlValue
+                    .replace(/^\/|\/$/g, "")
+                    .split("/")
+                    .pop() ||
+                  "";
+
+                if (contentType.includes("product") || metadata.product_id) {
+                  urlValue = `/products/${handle}`;
+                } else if (contentType.includes("page")) {
+                  urlValue = `/pages/${handle}`;
+                } else if (
+                  contentType.includes("collection") ||
+                  metadata.collection_id
+                ) {
+                  urlValue = `/collections/${handle}`;
+                } else if (
+                  contentType.includes("blog") ||
+                  contentType.includes("post") ||
+                  metadata.blog_id
+                ) {
+                  // For blogs, we need both blog handle and post handle
+                  const blogHandle = metadata.blog_handle || "blog";
+                  const postHandle = metadata.post_handle || handle;
+                  urlValue = `/blogs/${blogHandle}/${postHandle}`;
+                } else {
+                  // If no specific content type detected, assume it's a product
+                  // This ensures all URLs have a proper path structure
+                  urlValue = `/products/${handle}`;
+                }
+              }
+              // If not a specific type, keep original URL structure
+
+              // Add baseUrl if available
+              if (baseUrl) {
+                if (urlValue.startsWith("/")) {
+                  urlValue = `${baseUrl}${urlValue}`;
+                } else {
+                  urlValue = `${baseUrl}/${urlValue}`;
+                }
+              }
+            }
+
+            if (imageUrlValue && !imageUrlValue.startsWith("http") && baseUrl) {
+              // If imageUrl starts with /, just append it to baseUrl
+              if (imageUrlValue.startsWith("/")) {
+                imageUrlValue = `${baseUrl}${imageUrlValue}`;
+              } else {
+                imageUrlValue = `${baseUrl}/${imageUrlValue}`;
+              }
+            }
+
+            // Add URL and image information if available
+            if (urlValue) {
+              resultText += `\nURL: ${urlValue}`;
+            }
+            if (imageUrlValue) {
+              resultText += `\nImage: ${imageUrlValue}`;
+            }
+
+            return resultText;
           })
           .join("\n\n");
 
@@ -822,9 +1821,90 @@ export async function POST(request: NextRequest) {
 
           contentParts.unshift({
             type: "input_text",
-            text: `Search Results:\n${searchContext}\n\n`,
+            text: `Search Results:\n${searchContext}\n\nIMPORTANT: If you see any URLs or Image links in the search results above, include them in your response using proper markdown formatting: [link text](URL) for links and ![alt text](image_url) for images.\n\n`,
           });
         }
+      }
+
+      // Get previous context for better continuity
+      let previousUserEmail = null;
+      let previousOrderId = null;
+
+      // Extract email and order ID from previous messages
+      try {
+        // Check if we have an email in the current message
+        const emailMatch = userText.match(
+          /email\s+(?:is|:)?\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i
+        );
+        if (emailMatch && emailMatch[1]) {
+          previousUserEmail = emailMatch[1];
+          console.log(
+            "[CONTEXT] Found email in current message:",
+            previousUserEmail
+          );
+        }
+
+        // Check if we have an order ID in the current message
+        const orderIdMatch = userText.match(/order(?:\s+number)?\s+(\d+)/i);
+        if (orderIdMatch && orderIdMatch[1]) {
+          previousOrderId = orderIdMatch[1];
+          console.log(
+            "[CONTEXT] Found order ID in current message:",
+            previousOrderId
+          );
+        }
+
+        // If we don't have both, check previous messages
+        if (
+          (!previousUserEmail || !previousOrderId) &&
+          previousResponseIdForOpenAI
+        ) {
+          const [prevMessages] = await connection.execute(
+            "SELECT content FROM TextChats WHERE textConversationId = ? AND messageType = 'user' ORDER BY createdAt DESC LIMIT 5",
+            [conversationIdToUse]
+          );
+
+          if (prevMessages && (prevMessages as any[]).length > 0) {
+            for (const msg of prevMessages as any[]) {
+              const content = msg.content || "";
+
+              // Extract email if we don't have it yet
+              if (!previousUserEmail) {
+                const emailMatch = content.match(
+                  /email\s+(?:is|:)?\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i
+                );
+                if (emailMatch && emailMatch[1]) {
+                  previousUserEmail = emailMatch[1];
+                  console.log(
+                    "[CONTEXT] Found email in previous message:",
+                    previousUserEmail
+                  );
+                  break;
+                }
+              }
+
+              // Extract order ID if we don't have it yet
+              if (!previousOrderId) {
+                const orderIdMatch = content.match(
+                  /order(?:\s+number)?\s+(\d+)/i
+                );
+                if (orderIdMatch && orderIdMatch[1]) {
+                  previousOrderId = orderIdMatch[1];
+                  console.log(
+                    "[CONTEXT] Found order ID in previous message:",
+                    previousOrderId
+                  );
+                  break;
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error(
+          "[CONTEXT] Error extracting context from previous messages:",
+          err
+        );
       }
 
       fullCompletion = await openai.responses.create({
@@ -838,6 +1918,10 @@ export async function POST(request: NextRequest) {
           "Keep responses helpful and informative.",
           "When an image or file is attached, DO NOT ask follow-up questions first. Immediately describe (for images) or summarize (for files) before anything else.",
           "If the user did not ask a specific question, assume they want a description/summary of the attachment and provide it succinctly.",
+          "IMPORTANT: You DO have the ability to help with order tracking, returns, and other e-commerce actions. DO NOT say you don't have access to order systems.",
+          "IMPORTANT: When a user provides order information, assume you can help them directly with their request.",
+          previousUserEmail ? `User's email is ${previousUserEmail}.` : "",
+          previousOrderId ? `User's order number is ${previousOrderId}.` : "",
           attachedImage
             ? "If an image is attached, first describe clearly what you see (objects, text, colors, layout), then answer the user's request using the image."
             : "",
@@ -847,7 +1931,30 @@ export async function POST(request: NextRequest) {
           pageContent
             ? "Use provided page context to give precise, relevant guidance."
             : "",
-          "Format the response with concise markdown.",
+          baseUrl
+            ? `EXTREMELY IMPORTANT: All URLs and links in your response MUST be relative to the user's site: ${baseUrl}. Do NOT link to external sites unless absolutely necessary.`
+            : "",
+          "Format the response using proper markdown formatting.",
+          "ALWAYS include relevant links in your response using proper markdown formatting like [link text](URL).",
+          "When referring to products, pages, or resources that might have URLs, include them as markdown links.",
+          baseUrl
+            ? `IMPORTANT: Always follow these URL format conventions:
+            - For products: ${baseUrl}/products/[product-handle]
+            - For pages: ${baseUrl}/pages/[page-handle]
+            - For collections: ${baseUrl}/collections/[collection-handle]
+            - For blog posts: ${baseUrl}/blogs/[blog-handle]/[post-handle]`
+            : "IMPORTANT: Always follow these URL format conventions for e-commerce sites:\n- For products: /products/[product-handle]\n- For pages: /pages/[page-handle]\n- For collections: /collections/[collection-handle]\n- For blog posts: /blogs/[blog-handle]/[post-handle]",
+          "If product images are available, include them in markdown format using ![alt text](image_url).",
+          "When referencing search results, use their URLs and include them as markdown links.",
+          "NEVER refer users to external websites - keep them on the original site.",
+          "NEVER mention 'other sites' or suggest leaving the current website - all helpful resources should be on THIS website.",
+          "EXTREMELY IMPORTANT: Your response MUST directly answer the user's specific question. DO NOT provide generic product information unless explicitly asked.",
+          "DO NOT talk about products being 'sold out' or 'not in stock' unless this information comes directly from search results about the specific product the user asked about.",
+          "NEVER make up information - only use what's provided in the context, search results, or what the user has told you.",
+          "CRITICAL: When formatting Shopify links, ALWAYS use the /products/ prefix for product URLs. For example:",
+          "  ❌ INCORRECT: https://example.myshopify.com/item-handle",
+          "  ✅ CORRECT: https://example.myshopify.com/products/item-handle",
+          "If you see any myshopify.com URLs without /products/, /pages/, or /collections/ prefixes, add the appropriate prefix, defaulting to /products/ for any unspecified type.",
         ]
           .filter(Boolean)
           .join(" "),
@@ -859,19 +1966,28 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Extract text from the full completion
-    outputText =
-      (fullCompletion as any)?.output_text ??
-      (Array.isArray((fullCompletion as any)?.output)
-        ? (fullCompletion as any).output
-            .map((p: any) =>
-              (p.content ?? []).map((c: any) => c.text?.value ?? "").join("")
-            )
-            .join("")
-        : "");
+    // Only extract text from the full completion if we don't already have an action-based response
+    // outputText might be set already if we have an action-based response
+    if (outputText === undefined || outputText === null || outputText === "") {
+      outputText =
+        (fullCompletion as any)?.output_text ??
+        (Array.isArray((fullCompletion as any)?.output)
+          ? (fullCompletion as any).output
+              .map((p: any) =>
+                (p.content ?? []).map((c: any) => c.text?.value ?? "").join("")
+              )
+              .join("")
+          : "");
+    }
 
     // Update response ID from the full completion
     openaiResponseId = (fullCompletion as any)?.id || openaiResponseId;
+    console.log("FINAL RESPONSE ID STATUS:", {
+      incomingResponseId,
+      finalOpenAIResponseId: openaiResponseId,
+      usedExistingResponseId:
+        incomingResponseId !== null && incomingResponseId !== undefined,
+    });
 
     if (fullCompletion) {
       console.log(
@@ -894,9 +2010,25 @@ export async function POST(request: NextRequest) {
       ]
     );
 
+    // Make sure we're using the action-based response if it was generated
+    // This ensures the response from line 790 is actually used
+    const finalResponse = outputText || "No response";
+
+    // Log the final response being sent to the client
+    console.log(
+      "[FINAL] Sending response to client:",
+      finalResponse.substring(0, 100)
+    );
+
+    console.log("SENDING FINAL RESPONSE WITH IDs:", {
+      responseId: openaiResponseId,
+      sessionId: sessionIdToUse,
+      conversationId: conversationIdToUse,
+    });
+
     return NextResponse.json(
       {
-        answer: outputText || "No response",
+        answer: finalResponse,
         responseId: openaiResponseId,
         sessionId: sessionIdToUse,
         conversationId: conversationIdToUse,
@@ -907,12 +2039,15 @@ export async function POST(request: NextRequest) {
                 // Log what's being included in the response
                 console.log(
                   `[PINECONE] Including in response: ${
-                    r.metadata?.title || r.metadata?.question || r.id
+                    r.metadata?.title ||
+                    r.metadata?.question ||
+                    r.id ||
+                    "unknown"
                   }`
                 );
                 return {
-                  score: r.rerankScore || r.score,
-                  metadata: r.metadata,
+                  score: r.rerankScore || r.score || 0,
+                  metadata: r.metadata || {},
                 };
               })
             : [],

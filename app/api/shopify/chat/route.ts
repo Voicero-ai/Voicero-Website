@@ -4,9 +4,9 @@ import { Pinecone } from "@pinecone-database/pinecone";
 import {
   buildHybridQueryVectors,
   shouldFallbackToCollections,
-} from '../../../../lib/sparse/hybrid_query_tuning';
+} from "../../../../lib/sparse/hybrid_query_tuning";
 // Removed OpenSearch; using deterministic sparse generator for documents only
-import { generateSparseVectorsStable } from '../../../../lib/sparse/stable';
+import { generateSparseVectorsStable } from "../../../../lib/sparse/stable";
 import { cors } from "../../../../lib/cors";
 import OpenAI from "openai";
 import {
@@ -27,14 +27,14 @@ import {
   GENERATE_IMAGE_PROMPT,
   PURCHASE_PROMPT,
   RETURN_ORDERS_PROMPT,
-} from '../../../../lib/systemPrompts';
+} from "../../../../lib/systemPrompts";
 import {
   normalizeReturnReason,
   coerceReturnReasonNote,
   ALLOWED_RETURN_REASONS,
-} from '../../../../lib/returns';
+} from "../../../../lib/returns";
 import Stripe from "stripe";
-import { query } from '../../../../lib/db';
+import { query } from "../../../../lib/db";
 export const dynamic = "force-dynamic";
 
 // Use the imported prisma client instead of creating a new one
@@ -143,7 +143,7 @@ type QuestionClassification = {
   "sub-category": string;
   page?: string;
   context_dependency?: "high" | "low";
-  interaction_type?: "sales" | "support" | "general" | "noneSpecified";
+  interaction_type?: "sales" | "support" | "discounts" | "noneSpecified";
   action_intent?:
     | string
     | "redirect"
@@ -389,7 +389,7 @@ When a user asks a question, you must respond with a JSON object containing ONLY
 - type: one of ["product", "post", "collection", "discount", "page"]
 - category: depends on the type
 - sub-category: depends on the type and category
-- interaction_type: one of ["sales", "support", "general", "noneSpecified"] - determines which vector index to search
+- interaction_type: one of ["sales", "support", "discounts", "noneSpecified"] - determines which vector index to search
 
 Your task is to FOCUS EXCLUSIVELY on classifying what the question is ABOUT, not what action should be taken.
 
@@ -440,7 +440,7 @@ INTERACTION TYPE CLASSIFICATION RULES:
    - Mentioning problems with products/services
    - Example queries: "Where's my order?", "How do I return this?", "My product isn't working", "Can I cancel my order?", "How do I track my package?"
 
-3. "general" - Use when the user is:
+3. "discounts" - Use when the user is:
    - Asking general questions about the store/company
    - Asking about store policies, locations, hours
    - Making small talk or greeting
@@ -1064,7 +1064,7 @@ const buildSystemPrompt = (
       case "support":
         prompt = SHOPIFY_SUPPORT_PROMPT + "\n\n";
         break;
-      case "general":
+      case "discounts":
         prompt = SHOPIFY_GENERAL_PROMPT + "\n\n";
         break;
       default:

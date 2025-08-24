@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { query } from '../../../../lib/db';
-import { getWebsiteAIOverview, RevenueSummary } from '../../../../lib/websiteAIGet';
+import { query } from "../../../../lib/db";
+import {
+  getWebsiteAIOverview,
+  RevenueSummary,
+} from "../../../../lib/websiteAIGet";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../../lib/auth";
-import { cors } from '../../../../lib/cors';
-import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
+import { cors } from "../../../../lib/cors";
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../../lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -1235,6 +1241,12 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   // Map collections - with date validation
   const collections = shopifyCollections.map((collection) => {
     const collectionUrl = `/collections/${collection.handle}`;
+    // Format dates safely
+    const createdDate =
+      collection.createdAt && isValidDate(collection.createdAt)
+        ? collection.createdAt.toISOString()
+        : new Date().toISOString();
+
     return {
       id: collection.id,
       title: collection.title || "",
@@ -1243,8 +1255,8 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
       image: collection.image,
       ruleSet: collection.ruleSet,
       sortOrder: collection.sortOrder,
-      updatedAt: collection.createdAt.toISOString(), // Just use createdAt which should be valid
-      createdAt: collection.createdAt.toISOString(),
+      updatedAt: createdDate,
+      createdAt: createdDate,
       products: Array.isArray(collection.products)
         ? collection.products.map((p: any) => ({
             ...p,
@@ -1282,12 +1294,18 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   // Map products - with date validation
   const products = shopifyProducts.map((prod) => {
     const productUrl = `/products/${prod.handle}`;
+    // Format date safely
+    const lastUpdated =
+      prod.createdAt && isValidDate(prod.createdAt)
+        ? prod.createdAt.toISOString()
+        : new Date().toISOString();
+
     return {
       id: prod.id,
       title: prod.title,
       url: productUrl,
       type: "product" as const,
-      lastUpdated: prod.createdAt.toISOString(), // Use createdAt instead of updatedAt
+      lastUpdated: lastUpdated, // Use createdAt instead of updatedAt
       aiRedirects: redirectMaps.productRedirects.get(prod.handle) || 0,
       description: prod.description,
       vendor: prod.vendor,
@@ -1300,21 +1318,33 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
         sku: v.sku,
         inventory: v.inventory,
       })),
-      reviews: prod.reviews.map((r: any) => ({
-        id: r.id,
-        reviewer: r.reviewer,
-        rating: r.rating,
-        review: r.body,
-        title: r.title,
-        verified: r.verified,
-        date: r.createdAt.toISOString(),
-      })),
-      images: prod.images.map((img: any) => ({
-        id: img.id,
-        url: img.url,
-        altText: img.altText,
-        caption: img.caption,
-      })),
+      reviews: Array.isArray(prod.reviews)
+        ? prod.reviews.map((r: any) => {
+            // Format review date safely
+            const reviewDate =
+              r.createdAt && isValidDate(r.createdAt)
+                ? r.createdAt.toISOString()
+                : new Date().toISOString();
+
+            return {
+              id: r.id,
+              reviewer: r.reviewer,
+              rating: r.rating,
+              review: r.body,
+              title: r.title,
+              verified: r.verified,
+              date: reviewDate,
+            };
+          })
+        : [],
+      images: Array.isArray(prod.images)
+        ? prod.images.map((img: any) => ({
+            id: img.id,
+            url: img.url,
+            altText: img.altText,
+            caption: img.caption,
+          }))
+        : [],
     };
   });
 
@@ -1322,12 +1352,18 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   const blogPosts = shopifyBlogs.flatMap((blog) =>
     blog.posts.map((post: any) => {
       const postUrl = `/blogs/${blog.handle}/${post.handle}`;
+      // Format date safely
+      const postDate =
+        post.createdAt && isValidDate(post.createdAt)
+          ? post.createdAt.toISOString()
+          : new Date().toISOString();
+
       return {
         id: post.id,
         title: post.title,
         url: postUrl,
         type: "post" as const,
-        lastUpdated: post.createdAt.toISOString(), // Use createdAt instead of updatedAt
+        lastUpdated: postDate, // Use createdAt instead of updatedAt
         aiRedirects: redirectMaps.blogRedirects.get(post.handle || "") || 0,
         content: post.content,
         author: post.author,
@@ -1337,14 +1373,24 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
           title: blog.title,
           handle: blog.handle,
         },
-        comments: post.comments.map((c: any) => ({
-          id: c.id,
-          author: c.author,
-          content: c.body,
-          email: c.email,
-          status: c.status,
-          date: c.createdAt.toISOString(),
-        })),
+        comments: Array.isArray(post.comments)
+          ? post.comments.map((c: any) => {
+              // Format comment date safely
+              const commentDate =
+                c.createdAt && isValidDate(c.createdAt)
+                  ? c.createdAt.toISOString()
+                  : new Date().toISOString();
+
+              return {
+                id: c.id,
+                author: c.author,
+                content: c.body,
+                email: c.email,
+                status: c.status,
+                date: commentDate,
+              };
+            })
+          : [],
       };
     })
   );
@@ -1352,12 +1398,18 @@ async function fetchShopifyContent(websiteId: string, stats: any) {
   // Map pages - with date validation
   const pages = shopifyPages.map((p) => {
     const pageUrl = `/pages/${p.handle}`;
+    // Format date safely
+    const pageDate =
+      p.createdAt && isValidDate(p.createdAt)
+        ? p.createdAt.toISOString()
+        : new Date().toISOString();
+
     return {
       id: p.id,
       title: p.title,
       url: pageUrl,
       type: "page" as const,
-      lastUpdated: p.createdAt.toISOString(), // Use createdAt instead of updatedAt
+      lastUpdated: pageDate, // Use createdAt instead of updatedAt
       aiRedirects: redirectMaps.pageRedirects.get(p.handle) || 0,
       content: p.content,
     };

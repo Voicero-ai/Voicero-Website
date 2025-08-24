@@ -6,6 +6,11 @@ import {
   getWebsiteIdFromToken,
 } from "../../../../lib/token-verifier";
 import Stripe from "stripe";
+import { Pinecone } from "@pinecone-database/pinecone";
+import {
+  performMainSearch,
+  QuestionClassification,
+} from "../../../../lib/pinecone-search";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +54,11 @@ const dbConfig = {
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Initialize Pinecone client
+const pinecone = new Pinecone({
+  apiKey: process.env.PINECONE_API_KEY!,
 });
 
 export async function OPTIONS(request: NextRequest) {
@@ -440,7 +450,7 @@ export async function POST(request: NextRequest) {
 
     const idIn =
       typeof incomingResponseId === "string" ? incomingResponseId : undefined;
-    console.log("doing responses", { id: idIn || "new" });
+    console.log("doing classifier", { id: idIn || "new" });
 
     // Only forward a previous_response_id if it looks like an OpenAI Responses ID
     const previousResponseIdForOpenAI =
@@ -449,67 +459,50 @@ export async function POST(request: NextRequest) {
         ? incomingResponseId
         : undefined;
 
-    const completion = await openai.responses.create({
+    const classifierCompletion = await openai.responses.create({
       model: "gpt-4.1-mini",
       instructions: [
-        // ROLE & PURPOSE
-        "You are a friendly, helpful AI assistant that navigates websites and finds information for users.",
-        "Your sole job is to help users move around, locate content, and complete tasks on the site.",
-        "Be warm, encouraging, and helpful — like a friendly tour guide.",
-        "Always be conversational, direct, and approachable.",
-        language ? `Respond in ${language}.` : "Respond in English.",
+        "You are a classifier AI tasked with analyzing user queries for a website navigation assistant.",
+        "DO NOT answer the query directly. Instead, classify it according to the requested categories.",
+        "Your response must be valid JSON with the following structure:",
+        "{",
+        '  "takeAction": boolean indicating if the user EXPLICITLY needs help with navigation or interaction on the website,',
+        '  "research": boolean indicating if the user needs information NOT available on the current page,',
+        '  "actionType": one of ["navigate", "click", "scroll", "fill_form", "highlight", ""] - empty string if takeAction is false,',
+        '  "researchContext": specific context of what to research if research is true, otherwise empty string',
+        '  "contentType": one of ["sales", "support", "discounts"] - classify what type of content the user is asking about',
+        '  "language": the language detected in the user query (e.g., "english", "spanish")',
+        "}",
 
-        // LENGTH LIMIT
-        "All responses must be 30 words or fewer.",
+        // DECISION RULES - BE EXTREMELY STRICT ABOUT THESE
+        "Set research=true ONLY IF the information requested is NOT on the current page.",
+        "Use the provided page content to determine whether the answer is already available.",
+        "If the user asks for information (e.g., contact details, pricing specifics, hours, policies), and it is not explicitly present in page content, set research=true and set researchContext clearly (what to find).",
 
-        // ACTION OWNERSHIP (CRITICAL)
-        "NEVER tell users to do anything themselves — you take all actions.",
-        "You decide all actions and research — do not wait for instructions.",
-        "If user asks to find/go/click/scroll/navigate, respond as if you will take them there.",
-        "If user asks about pricing, plans, or content location, respond as if you will find it for them.",
-        "ALWAYS consider page context to give relevant help.",
+        "Set takeAction=true ONLY IF the user clearly asks for navigation or direct interaction (go to, click, scroll, fill form, highlight).",
+        "If the user is asking for information or explanation, set takeAction=false (even if the question mentions a page or a button).",
 
-        // ACTION TYPE EXAMPLES
-        "When user says 'go to ...' → actionType: 'navigate'",
-        "When user says 'click the button' → actionType: 'click'",
-        "When user says 'scroll down' → actionType: 'scroll'",
-        "When user says 'fill out the form' → actionType: 'fill_form'",
-        "When user says 'highlight that text' → actionType: 'highlight'",
+        "NEVER set both takeAction=true AND research=true - they are mutually exclusive.",
 
-        // DECISION LOGIC
-        "Set either takeAction=true OR research=true, never both.",
-        "takeAction=true, research=false → for navigation/click/scroll/fill_form/highlight requests.",
-        "Use 'navigate' for page navigation (go to, navigate to, visit, etc.)",
-        "Use 'click' only for clicking buttons/links on current page",
-        "Use 'scroll' for scrolling up/down on current page",
-        "Use 'fill_form' for form inputs",
-        "Use 'highlight' for highlighting text/content",
-        "research=true, takeAction=false → for information/content requests not answerable from current page.",
-        "If answerable from current page → research=false.",
-        "Only set research=true if info is NOT on current page.",
-        "For research: respond with a short confirmation (5–10 words) that you're finding it.",
-        "For navigation: briefly confirm what you're doing.",
+        "Action Types - ONLY use when takeAction=true:",
+        "- navigate: for explicit requests to go to another page",
+        "- click: for explicit requests to click on something visible",
+        "- scroll: for explicit requests to scroll up/down",
+        "- fill_form: for explicit requests to fill out forms",
+        "- highlight: for explicit requests to highlight content",
 
-        // JSON RESPONSE FORMAT
-        "Respond in JSON with these fields:",
-        "answer: your helpful response (≤30 words)",
-        "takeAction: true/false",
-        "research: true/false",
-        "actionType: click, scroll, navigate, search, etc. or empty string",
-        "researchContext: topic to find or empty string",
+        "CRITICAL: DEFAULT TO BOTH takeAction=false AND research=false for most queries.",
+        "If the information appears to be on the current page, DO NOT set research=true.",
+        "If the user isn't explicitly asking for navigation or interaction, DO NOT set takeAction=true.",
+        "Never rely on the main assistant to instruct the user to click or navigate; your job is only to set the correct flags for action vs research.",
 
-        // TTS RULES
-        "Write for clear text-to-speech.",
-        "Use short, simple sentences — max 10 words each.",
-        "Avoid complex punctuation and abbreviations.",
-        "Separate ideas into distinct sentences.",
-        "If listing, use 'and' or separate into short sentences.",
-        "Example: 'The Starter plan costs one dollar per query. It includes up to one hundred chat interactions. You get returns management and order management. Plus page navigation and tracking.'",
-
-        // PAGE CONTEXT
-        pageContent
-          ? "Use provided page context to give precise, relevant guidance."
-          : "",
+        "Analyze the query carefully with page context before classifying.",
+        "ALWAYS consider page context when deciding if research is needed.",
+        "",
+        "Content Type Classification:",
+        '- "sales": Questions about products, pricing, features, purchasing, recommendations',
+        '- "support": Questions about troubleshooting, how-to guides, technical help, customer service',
+        '- "discounts": ONLY if user specifically asks about promotions, coupons, deals, discounts, or special offers',
       ]
         .filter(Boolean)
         .join(" "),
@@ -519,59 +512,327 @@ export async function POST(request: NextRequest) {
       previous_response_id: previousResponseIdForOpenAI,
     });
 
-    const outputText =
-      (completion as any).output_text ??
-      (Array.isArray((completion as any).output)
-        ? (completion as any).output
-            .map((p: any) =>
-              (p.content ?? []).map((c: any) => c.text?.value ?? "").join("")
-            )
-            .join("")
-        : "");
-
-    const openaiResponseId: string | undefined = (completion as any)?.id;
-    console.log("done responses", {
-      id: openaiResponseId || idIn || "unknown",
-    });
-
-    console.log("answer", outputText);
-
-    // Parse AI's JSON response to extract the fields
+    // Parse the classifier result
     let takeAction = false;
     let research = false;
     let actionType = "";
     let researchContext = "";
-    let aiAnswer = outputText;
+    let detectedLanguage = "english";
+    let contentType = "sales"; // Default fallback
 
     try {
-      // Try to parse the AI's response as JSON
-      const aiResponse = JSON.parse(outputText);
+      const classifierText = (classifierCompletion as any).output_text || "{}";
+      console.log("[CLASSIFIER] Raw output:", classifierText);
 
-      // Extract the fields from AI's response
-      aiAnswer = aiResponse.answer || outputText;
-      takeAction = Boolean(aiResponse.takeAction) || false;
-      research = Boolean(aiResponse.research) || false;
-      actionType = aiResponse.actionType || "";
-      researchContext = aiResponse.researchContext || "";
+      // Parse the JSON response
+      let classifierResult;
+      if (
+        classifierText.startsWith("```json") &&
+        classifierText.endsWith("```")
+      ) {
+        classifierResult = JSON.parse(classifierText.slice(7, -3).trim());
+      } else {
+        classifierResult = JSON.parse(classifierText);
+      }
+
+      // Extract the classification
+      takeAction = Boolean(classifierResult.takeAction) || false;
+      research = Boolean(classifierResult.research) || false;
+      actionType = classifierResult.actionType || "";
+      researchContext = classifierResult.researchContext || "";
+      detectedLanguage = classifierResult.language || "english";
+      contentType = classifierResult.contentType || "sales";
 
       // Ensure takeAction and research are mutually exclusive
       if (takeAction && research) {
-        // If both are true, prioritize takeAction for navigation/action requests
+        // If both are true, we don't want either (being more conservative)
+        takeAction = false;
         research = false;
+        actionType = "";
         researchContext = "";
-        console.log("Fixed: Both flags were true, prioritizing takeAction");
+        console.log(
+          "Fixed: Both flags were true, setting both to false for conservative approach"
+        );
       }
 
-      console.log("Successfully parsed AI JSON response");
+      // Remove hard-coded action phrase validation; rely on classifier + page context
+
+      // For research, make sure it's only when we're certain info isn't on page
+      if (research && pageContent) {
+        // If we have page content, be very conservative about research
+        // Simple heuristic: if query terms appear in the page content, likely answerable from page
+        const queryTerms = userText
+          .toLowerCase()
+          .split(/\s+/)
+          .filter((term: string) => term.length > 3);
+
+        // Count how many key query terms appear in the page content
+        const pageContentLower = pageContent.toLowerCase();
+        const matchingTerms = queryTerms.filter((term: string) =>
+          pageContentLower.includes(term)
+        );
+
+        // If more than half of key terms are on page, assume research isn't needed
+        // But do not undo research for contact-intent queries
+        const lowerQ2 = (userText || "").toLowerCase();
+        const isContactIntent =
+          lowerQ2.includes("contact") ||
+          lowerQ2.includes("support") ||
+          lowerQ2.includes("reach you") ||
+          lowerQ2.includes("reach out") ||
+          lowerQ2.includes("email you") ||
+          lowerQ2.includes("call you") ||
+          lowerQ2.includes("customer service");
+
+        if (
+          !isContactIntent &&
+          queryTerms.length > 0 &&
+          matchingTerms.length > queryTerms.length / 2
+        ) {
+          research = false;
+          researchContext = "";
+          console.log(
+            "Fixed: Key query terms found on page, setting research=false"
+          );
+        }
+      }
+
+      console.log("[CLASSIFIER] Parsed result:", {
+        takeAction,
+        research,
+        actionType,
+        researchContext,
+        contentType,
+        language: detectedLanguage,
+      });
     } catch (error) {
-      // If parsing fails, use the original text as answer and default values
-      console.log("AI response is not valid JSON, using defaults");
-      aiAnswer = outputText;
+      console.error("[CLASSIFIER] Error parsing classifier result:", error);
+      // Default to no action/research on parse error
       takeAction = false;
       research = false;
       actionType = "";
       researchContext = "";
+      detectedLanguage = "english";
+      contentType = "sales";
     }
+
+    // Get OpenAI response ID from the classifier completion
+    let openaiResponseId = (classifierCompletion as any)?.id || null;
+
+    // Variable to store our final answer
+    let aiAnswer = "";
+
+    // Perform vector search if research is needed
+    let searchResults = [];
+    if (research) {
+      try {
+        console.log("[PINECONE] Research needed, performing search");
+        // Get website ID for Pinecone namespace
+        const websiteId = await getWebsiteIdFromToken(authHeader);
+        if (!websiteId) {
+          throw new Error("Could not determine website ID from token");
+        }
+
+        // Get website details from DB
+        const [websiteRows] = await connection.execute(
+          "SELECT id, name FROM Website WHERE id = ? LIMIT 1",
+          [websiteId]
+        );
+        const website = (websiteRows as any[])[0];
+
+        if (!website) {
+          throw new Error("Could not find website in database");
+        }
+
+        // Perform search
+        searchResults = await performMainSearch(
+          pinecone,
+          website,
+          userText,
+          [], // queryDense - we'll use defaults from the function
+          [], // querySparse - we'll use defaults from the function
+          {
+            type: contentType,
+            category: contentType,
+            "sub-category": contentType,
+            interaction_type: contentType as "sales" | "support" | "discounts",
+            action_intent: "none",
+          } as QuestionClassification, // Use AI classifier results
+          true, // useAllNamespaces - search all sections
+          {} // timeMarks
+        );
+
+        console.log(
+          `[PINECONE] Search returned ${searchResults.length} results`
+        );
+
+        // Log top results for debugging
+        if (searchResults.length > 0) {
+          searchResults.slice(0, 3).forEach((result, index) => {
+            console.log(`[PINECONE] Result #${index + 1}:`);
+            if (result.metadata?.title) {
+              console.log(`  Title: ${result.metadata.title}`);
+            }
+            if (result.metadata?.content) {
+              console.log(
+                `  Content preview: ${result.metadata.content.substring(
+                  0,
+                  100
+                )}...`
+              );
+            }
+          });
+        }
+      } catch (error) {
+        console.error("[PINECONE] Search error:", error);
+      }
+    }
+
+    // Either generate action-based response or call main completion
+    let completion;
+
+    if (takeAction) {
+      // For takeAction=true, we can generate the response directly without a second AI call
+      const actionResponseMap: Record<string, string> = {
+        navigate: "I'll navigate to that for you.",
+        click: "I'll click on that for you.",
+        scroll: "I'll scroll to that section.",
+        fill_form: "I'll help you fill out that form.",
+        highlight: "I'll highlight that for you.",
+      };
+
+      aiAnswer =
+        actionType && actionResponseMap[actionType]
+          ? actionResponseMap[actionType]
+          : "I'll help you with that right away.";
+      console.log("[ACTION] Using direct action response:", aiAnswer);
+    } else if (research && searchResults.length > 0) {
+      // For research=true with search results, call the main completion
+      console.log("[RESEARCH] Calling main completion with search results");
+
+      // Extract search context from results to include in prompt
+      const searchContext = searchResults
+        .slice(0, 3)
+        .map((result, index) => {
+          const metadata = result.metadata || {};
+          if (metadata.title && metadata.content) {
+            return `[${index + 1}] ${metadata.title}:\n${metadata.content}`;
+          } else if (metadata.content) {
+            return `[${index + 1}] ${metadata.content}`;
+          } else {
+            return `[${index + 1}] ${JSON.stringify(metadata)}`;
+          }
+        })
+        .join("\n\n");
+
+      completion = await openai.responses.create({
+        model: "gpt-4.1-mini",
+        instructions: [
+          // ROLE & PURPOSE
+          "You are a friendly, helpful AI assistant that helps users with information and questions.",
+          "Your job is to provide helpful answers based on the search results provided.",
+          "Be warm, encouraging, and helpful — like a friendly guide.",
+          "Always be conversational, direct, and approachable. It may not seem like it but they are TALKING TO YOU SO YOU CAN HEAR THEM, and should respond as if you are talking to them.",
+          `Respond in ${detectedLanguage}.`,
+
+          // LENGTH LIMIT
+          "All responses must be 30 words or fewer.",
+
+          // IMPORTANT: STRICTLY NO ACTION PROMISES
+          "Do NOT say you will navigate, click, scroll, open, or fill forms.",
+          "Do NOT tell the user to do anything. Present the information directly.",
+          "If asked about navigation, say what you found instead of promising actions.",
+          "Always use the search results provided to craft your response.",
+
+          // TTS RULES
+          "Write for clear text-to-speech.",
+          "Use short, simple sentences — max 10 words each.",
+          "Avoid complex punctuation and abbreviations.",
+          "Separate ideas into distinct sentences.",
+          "If listing, use 'and' or separate into short sentences.",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        input: `Search Results:\n${searchContext}\n\nQuestion: ${userText}`,
+        previous_response_id: openaiResponseId, // Chain from the classifier completion
+      });
+
+      // Extract the text from the completion
+      aiAnswer =
+        (completion as any).output_text ||
+        (Array.isArray((completion as any).output)
+          ? (completion as any).output
+              .map((p: any) =>
+                (p.content ?? []).map((c: any) => c.text?.value ?? "").join("")
+              )
+              .join("")
+          : "I'll find that information for you.");
+
+      // Update response ID
+      openaiResponseId = (completion as any)?.id || openaiResponseId;
+    } else {
+      // For non-research, non-action queries, or if search failed, call the main completion
+      console.log("[GENERAL] Calling main completion for regular response");
+
+      completion = await openai.responses.create({
+        model: "gpt-4.1-mini",
+        instructions: [
+          // ROLE & PURPOSE
+          "You are a friendly, helpful AI assistant that helps users with information and questions.",
+          "Your job is to provide helpful answers based on available context.",
+          "Be warm, encouraging, and helpful — like a friendly guide.",
+          "Always be conversational, direct, and approachable.",
+          `Respond in ${detectedLanguage}.`,
+
+          // LENGTH LIMIT
+          "All responses must be 30 words or fewer.",
+
+          // IMPORTANT: STRICTLY NO ACTION PROMISES
+          "Do NOT say you will navigate, click, scroll, open, or fill forms.",
+          "Do NOT tell the user to do anything. Present the information directly.",
+          "If asked about navigation, say what you found instead of promising actions.",
+          "ALWAYS consider page context to give relevant help.",
+
+          // TTS RULES
+          "Write for clear text-to-speech.",
+          "Use short, simple sentences — max 10 words each.",
+          "Avoid complex punctuation and abbreviations.",
+          "Separate ideas into distinct sentences.",
+          "If listing, use 'and' or separate into short sentences.",
+
+          // PAGE CONTEXT
+          pageContent
+            ? "Use provided page context to give precise, relevant guidance."
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+        input: `${
+          pageContent ? `Page Context: ${pageContent}\n\n` : ""
+        }Question: ${userText}`,
+        previous_response_id: openaiResponseId, // Chain from the classifier completion
+      });
+
+      // Extract the text from the completion
+      aiAnswer =
+        (completion as any).output_text ||
+        (Array.isArray((completion as any).output)
+          ? (completion as any).output
+              .map((p: any) =>
+                (p.content ?? []).map((c: any) => c.text?.value ?? "").join("")
+              )
+              .join("")
+          : "I'll help you with that.");
+
+      // Update response ID
+      openaiResponseId = (completion as any)?.id || openaiResponseId;
+    }
+
+    console.log("done responses", {
+      id: openaiResponseId || idIn || "unknown",
+    });
+
+    console.log("answer", aiAnswer);
 
     // Store AI response
     await connection.execute(
@@ -603,6 +864,13 @@ export async function POST(request: NextRequest) {
         researchContext: research ? researchContext : "",
         sessionId: sessionIdToUse,
         conversationId: conversationIdToUse,
+        searchResults:
+          research && searchResults && searchResults.length > 0
+            ? searchResults.slice(0, 5).map((r) => ({
+                score: r.score || r.rerankScore,
+                metadata: r.metadata,
+              }))
+            : [],
       },
       {
         headers: {
