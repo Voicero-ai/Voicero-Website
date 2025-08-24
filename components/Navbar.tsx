@@ -10,7 +10,7 @@ const navigation = [
   { name: "Voice AI", href: "/voice-ai" },
   { name: "Text AI", href: "/text-ai" },
   { name: "Features", href: "/features" },
-  { name: "Pricing", href: "/pricing" },
+  // { name: "Pricing", href: "/pricing" },
   { name: "Our Why", href: "/about" },
   { name: "Contact", href: "/contact" },
 ];
