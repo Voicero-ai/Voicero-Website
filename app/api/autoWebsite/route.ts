@@ -196,28 +196,8 @@ export async function GET(request: NextRequest) {
       "<meta http-equiv=\"Content-Security-Policy\" content=\"img-src * data:; default-src *; style-src * 'unsafe-inline'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src *;\">"
     );
 
-    // Add viewport meta tag if it doesn't exist to help with scaling
-    if ($("meta[name=viewport]").length === 0) {
-      $("head").append(
-        '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">'
-      );
-    } else {
-      // Modify existing viewport tag
-      $("meta[name=viewport]").attr(
-        "content",
-        "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-      );
-    }
-
-    // Create the Voicero script to inject with zoom adjustment
+    // Create the Voicero script to inject
     const voiceroScript = `
-    <script>
-      // Auto-adjust zoom level for better fit in iframe
-      document.documentElement.style.zoom = "85%";
-      document.body.style.transformOrigin = "top left";
-      document.body.style.transform = "scale(0.85)";
-      document.body.style.width = "118%";
-    </script>
     <script
       src="https://voicero-text-frontend.vercel.app/widget.js"
       data-token="33f83f3ff4ec25585718df2716c8a81956f8244a50dc92bb87b59cdbf9a80e04" 
