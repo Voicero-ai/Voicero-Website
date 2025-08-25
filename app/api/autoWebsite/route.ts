@@ -28,19 +28,12 @@ export async function GET(request: NextRequest) {
     const parsedUrl = new URL(fullUrl);
     const baseUrl = `${parsedUrl.protocol}//${parsedUrl.host}`;
 
-    // Fetch the target website with improved headers
+    // Fetch the target website
     const response = await fetch(fullUrl, {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
       },
-      cache: "no-cache",
-      referrerPolicy: "no-referrer-when-downgrade",
     });
 
     if (!response.ok) {
@@ -56,13 +49,12 @@ export async function GET(request: NextRequest) {
     // Use Cheerio to parse and modify the HTML
     const $ = cheerio.load(html);
 
-    // Fix ALL image sources and improve image loading
-    $("img, image, [src]").each((_, element) => {
+    // Fix relative URLs in src and href attributes
+    // Special attention to images and logo files
+    $("[src]").each((_, element) => {
       const src = $(element).attr("src");
-      if (!src) return; // Skip if no src attribute
-
-      // Always use absolute URLs
       if (
+        src &&
         !src.startsWith("http") &&
         !src.startsWith("//") &&
         !src.startsWith("data:")
@@ -75,19 +67,12 @@ export async function GET(request: NextRequest) {
         }
         $(element).attr("src", newSrc);
 
-        // For images, add additional attributes to help with loading
-        if ($(element).is("img")) {
-          $(element).attr("loading", "eager"); // Prioritize image loading
-          $(element).attr("decoding", "sync"); // Use synchronous decoding for important images
-          $(element).attr("importance", "high"); // Mark as high importance
-          $(element).attr("crossorigin", "anonymous"); // Allow cross-origin loading
-
-          // Log all image fixes for debugging
-          console.log(`Fixed image src: ${src} → ${newSrc}`);
-
-          // Add onerror handler to retry loading with different approaches
-          const errorHandler = `this.onerror=null;console.error('Image load failed: '+this.src);if(!this.dataset.retried){this.dataset.retried='true';this.src='${newSrc}';}`;
-          $(element).attr("onerror", errorHandler);
+        // Log important image fixes for debugging
+        if (
+          $(element).is("img") &&
+          (src.includes("logo") || $(element).attr("alt")?.includes("logo"))
+        ) {
+          console.log(`Fixed logo image: ${src} → ${newSrc}`);
         }
       }
     });
@@ -112,12 +97,11 @@ export async function GET(request: NextRequest) {
       }
     });
 
-    // Handle ALL background images in style attributes more thoroughly
+    // Handle background images in style attributes
     $("[style]").each((_, element) => {
       const style = $(element).attr("style");
       if (style && style.includes("url(")) {
-        // More comprehensive regex to catch different URL formats in CSS
-        const urlRegex = /url\(\s*['"]?([^'"\s\)]+)['"]?\s*\)/gi;
+        const urlRegex = /url\(['"]?([^'")\s]+)['"]?\)/g;
         let match;
         let newStyle = style;
 
@@ -134,8 +118,7 @@ export async function GET(request: NextRequest) {
             } else {
               newUrl = `${baseUrl}/${url}`;
             }
-            // Replace the entire url() declaration for better reliability
-            newStyle = newStyle.replace(match[0], `url("${newUrl}")`);
+            newStyle = newStyle.replace(url, newUrl);
             console.log(`Fixed background image: ${url} → ${newUrl}`);
           }
         }
@@ -208,47 +191,10 @@ export async function GET(request: NextRequest) {
     // Handle Content Security Policy to allow resources
     $('meta[http-equiv="Content-Security-Policy"]').remove();
 
-    // Allow image loading from all sources with more permissive CSP
+    // Allow image loading from all sources
     $("head").append(
-      "<meta http-equiv=\"Content-Security-Policy\" content=\"img-src * data: blob:; default-src *; style-src * 'unsafe-inline'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src *; font-src * data:;\">"
+      "<meta http-equiv=\"Content-Security-Policy\" content=\"img-src * data:; default-src *; style-src * 'unsafe-inline'; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src *;\">"
     );
-
-    // Fix all CSS stylesheets
-    $('link[rel="stylesheet"]').each((_, element) => {
-      const href = $(element).attr("href");
-      if (href && !href.startsWith("http") && !href.startsWith("//")) {
-        let newHref = "";
-        if (href.startsWith("/")) {
-          newHref = `${baseUrl}${href}`;
-        } else {
-          newHref = `${baseUrl}/${href}`;
-        }
-        $(element).attr("href", newHref);
-        console.log(`Fixed CSS stylesheet: ${href} → ${newHref}`);
-      }
-    });
-
-    // Add special CSS to force image display
-    $("head").append(`
-      <style>
-        /* Force images to display */
-        img[src], image[src] {
-          visibility: visible !important;
-          opacity: 1 !important;
-          display: inline-block !important;
-        }
-        
-        /* Fix common background image issues */
-        [style*="background-image"] {
-          background-repeat: no-repeat !important;
-        }
-        
-        /* Add a special border to help identify images for debugging */
-        .voicero-debug-image-border img {
-          outline: 2px solid rgba(0, 255, 0, 0.3);
-        }
-      </style>
-    `);
 
     // Add viewport meta tag if it doesn't exist to help with scaling
     if ($("meta[name=viewport]").length === 0) {
@@ -263,7 +209,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Create the Voicero script to inject with zoom adjustment and image fixes
+    // Create the Voicero script to inject with zoom adjustment
     const voiceroScript = `
     <script>
       // Auto-adjust zoom level for better fit in iframe
@@ -271,43 +217,6 @@ export async function GET(request: NextRequest) {
       document.body.style.transformOrigin = "top left";
       document.body.style.transform = "scale(0.85)";
       document.body.style.width = "118%";
-      
-      // Fix image loading and display issues
-      window.addEventListener('DOMContentLoaded', function() {
-        // Force load all images
-        var allImgs = document.querySelectorAll('img');
-        allImgs.forEach(function(img) {
-          // Add loading attributes for better performance
-          img.loading = 'eager';
-          img.decoding = 'sync';
-          
-          // Add crossorigin attribute for CORS images
-          img.setAttribute('crossorigin', 'anonymous');
-          
-          // Create a fetch request to preload the image
-          if (img.src && !img.src.startsWith('data:')) {
-            fetch(img.src, { mode: 'no-cors' })
-              .then(() => console.log('Image prefetched:', img.src))
-              .catch(() => console.error('Failed to prefetch image:', img.src));
-          }
-        });
-        
-        // Find background images and load them
-        var elementsWithBg = document.querySelectorAll('[style*="background"]');
-        elementsWithBg.forEach(function(el) {
-          var style = window.getComputedStyle(el);
-          var bgImg = style.backgroundImage;
-          if (bgImg && bgImg !== 'none') {
-            console.log('Found background image:', bgImg);
-          }
-        });
-        
-        // Debug mode toggle - add 'voicero-debug=true' to URL to enable
-        if (window.location.href.includes('voicero-debug=true')) {
-          document.body.classList.add('voicero-debug-image-border');
-          console.log('Voicero Debug Mode Enabled');
-        }
-      });
     </script>
     <script
       src="https://voicero-text-frontend.vercel.app/widget.js"
