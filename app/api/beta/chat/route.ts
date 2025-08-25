@@ -11,6 +11,7 @@ import {
   performMainSearch,
   QuestionClassification,
 } from "../../../../lib/pinecone-search";
+import { buildHybridQueryVectors } from "../../../../lib/sparse/hybrid_query_tuning";
 
 export const dynamic = "force-dynamic";
 
@@ -644,13 +645,20 @@ export async function POST(request: NextRequest) {
           throw new Error("Could not find website in database");
         }
 
+        // Generate query vectors
+        const { denseScaled: queryDense, sparseScaled: querySparse } =
+          await buildHybridQueryVectors(userText, {
+            alpha: 0.6,
+            featureSpace: 2_000_003,
+          });
+
         // Perform search
         searchResults = await performMainSearch(
           pinecone,
           website,
           userText,
-          [], // queryDense - we'll use defaults from the function
-          [], // querySparse - we'll use defaults from the function
+          queryDense,
+          querySparse,
           {
             type: contentType,
             category: contentType,
@@ -658,7 +666,7 @@ export async function POST(request: NextRequest) {
             interaction_type: contentType as "sales" | "support" | "discounts",
             action_intent: "none",
           } as QuestionClassification, // Use AI classifier results
-          true, // useAllNamespaces - search all sections
+          false, // useAllNamespaces - only search in namespace from classification
           {} // timeMarks
         );
 
