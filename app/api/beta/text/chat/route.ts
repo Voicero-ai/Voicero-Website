@@ -1597,14 +1597,38 @@ export async function POST(request: NextRequest) {
                   const path = urlParts[1];
 
                   // If the path doesn't already start with /products/, /pages/, etc.,
-                  // then assume it's a product URL and prefix with /products/
+                  // then check if it's a policy page first before assuming it's a product
                   if (
                     !path.startsWith("products/") &&
                     !path.startsWith("pages/") &&
+                    !path.startsWith("blogs/") &&
                     !path.startsWith("collections/") &&
-                    !path.startsWith("blogs/")
+                    !path.startsWith("policies/")
                   ) {
-                    urlValue = `/products/${path}`;
+                    // Check if this is a policy page based on the handle
+                    if (
+                      path.includes("privacy-policy") ||
+                      path.includes("privacy_policy") ||
+                      path.includes("return-policy") ||
+                      path.includes("return_policy") ||
+                      path.includes("refund-policy") ||
+                      path.includes("refund_policy") ||
+                      path.includes("contact-information") ||
+                      path.includes("contact_information") ||
+                      path.includes("terms-of-service") ||
+                      path.includes("terms_of_service") ||
+                      path.includes("shipping-policy") ||
+                      path.includes("shipping_policy") ||
+                      path.includes("subscription-policy") ||
+                      path.includes("subscription_policy")
+                    ) {
+                      // Transform underscores to dashes for policy pages
+                      const policyHandle = path.replace(/_/g, "-");
+                      urlValue = `/policies/${policyHandle}`;
+                    } else {
+                      // Default to product for unknown types
+                      urlValue = `/products/${path}`;
+                    }
                   } else {
                     // Already has a proper prefix, just ensure it starts with a slash
                     urlValue = `/${path}`;
@@ -1614,7 +1638,10 @@ export async function POST(request: NextRequest) {
               // For non-http URLs (relative paths), process by content type
               else if (!urlValue.startsWith("http")) {
                 // Handle specific content types with their correct URL format
-                const contentType = metadata.type?.toLowerCase() || "";
+                const contentType =
+                  metadata.contentType?.toLowerCase() ||
+                  metadata.type?.toLowerCase() ||
+                  "";
                 const handle =
                   metadata.handle ||
                   urlValue
@@ -1626,7 +1653,29 @@ export async function POST(request: NextRequest) {
                 if (contentType.includes("product") || metadata.product_id) {
                   urlValue = `/products/${handle}`;
                 } else if (contentType.includes("page")) {
-                  urlValue = `/pages/${handle}`;
+                  // Check if this is a policy page
+                  if (
+                    handle.includes("privacy-policy") ||
+                    handle.includes("privacy_policy") ||
+                    handle.includes("return-policy") ||
+                    handle.includes("return_policy") ||
+                    handle.includes("refund-policy") ||
+                    handle.includes("refund_policy") ||
+                    handle.includes("contact-information") ||
+                    handle.includes("contact_information") ||
+                    handle.includes("terms-of-service") ||
+                    handle.includes("terms_of_service") ||
+                    handle.includes("shipping-policy") ||
+                    handle.includes("shipping_policy") ||
+                    handle.includes("subscription-policy") ||
+                    handle.includes("subscription_policy")
+                  ) {
+                    // Transform underscores to dashes for policy pages
+                    const policyHandle = handle.replace(/_/g, "-");
+                    urlValue = `/policies/${policyHandle}`;
+                  } else {
+                    urlValue = `/pages/${handle}`;
+                  }
                 } else if (
                   contentType.includes("collection") ||
                   metadata.collection_id
@@ -1638,13 +1687,57 @@ export async function POST(request: NextRequest) {
                   metadata.blog_id
                 ) {
                   // For blogs, we need both blog handle and post handle
-                  const blogHandle = metadata.blog_handle || "blog";
-                  const postHandle = metadata.post_handle || handle;
+                  const blogHandle = metadata.blogHandle || "blog";
+                  const postHandle = metadata.handle || handle;
                   urlValue = `/blogs/${blogHandle}/${postHandle}`;
                 } else {
-                  // If no specific content type detected, assume it's a product
-                  // This ensures all URLs have a proper path structure
-                  urlValue = `/products/${handle}`;
+                  // Check if this is a policy page based on handle
+                  if (
+                    handle.includes("privacy-policy") ||
+                    handle.includes("privacy_policy") ||
+                    handle.includes("return-policy") ||
+                    handle.includes("return_policy") ||
+                    handle.includes("refund-policy") ||
+                    handle.includes("refund_policy") ||
+                    handle.includes("contact-information") ||
+                    handle.includes("contact_information") ||
+                    handle.includes("terms-of-service") ||
+                    handle.includes("terms_of_service") ||
+                    handle.includes("shipping-policy") ||
+                    handle.includes("shipping_policy") ||
+                    handle.includes("subscription-policy") ||
+                    handle.includes("subscription_policy")
+                  ) {
+                    // Transform underscores to dashes for policy pages
+                    const policyHandle = handle.replace(/_/g, "-");
+                    urlValue = `/policies/${policyHandle}`;
+                  } else {
+                    // Use the actual content type from metadata instead of assuming product
+                    const contentType = metadata.type?.toLowerCase() || "";
+                    console.log(
+                      `[URL] Content type for handle "${handle}": ${contentType}`
+                    );
+                    if (contentType.includes("page")) {
+                      urlValue = `/pages/${handle}`;
+                    } else if (contentType.includes("collection")) {
+                      urlValue = `/collections/${handle}`;
+                    } else if (
+                      contentType.includes("blog") ||
+                      contentType.includes("post")
+                    ) {
+                      const blogHandle = metadata.blogHandle || "blog";
+                      const postHandle = metadata.handle || handle;
+                      urlValue = `/blogs/${blogHandle}/${postHandle}`;
+                    } else if (contentType.includes("product")) {
+                      urlValue = `/products/${handle}`;
+                    } else {
+                      // Only default to product if we really can't determine the type
+                      console.log(
+                        `[URL] Unknown content type "${contentType}" for handle "${handle}", defaulting to product`
+                      );
+                      urlValue = `/products/${handle}`;
+                    }
+                  }
                 }
               }
               // If not a specific type, keep original URL structure
@@ -1695,6 +1788,24 @@ export async function POST(request: NextRequest) {
       if (searchResults && searchResults.length > 0) {
         // Extract relevant information from top search results (max 3)
         const topResults = searchResults.slice(0, 3);
+
+        // Log search results details for debugging
+        console.log("[PINECONE] Top 3 search results being sent to AI:");
+        topResults.forEach((result, index) => {
+          const metadata = result.metadata || {};
+          const handle = metadata.handle || "no-handle";
+          const name = metadata.title || metadata.question || "no-name";
+          const body = metadata.content || metadata.answer || "no-body";
+          const contentType = metadata.contentType || "unknown";
+          const firstBit =
+            body.substring(0, 100) + (body.length > 100 ? "..." : "");
+
+          console.log(`[${index + 1}] Handle: ${handle}`);
+          console.log(`[${index + 1}] Name: ${name}`);
+          console.log(`[${index + 1}] Content Type: ${contentType}`);
+          console.log(`[${index + 1}] First 100 chars: ${firstBit}`);
+          console.log(`[${index + 1}] ---`);
+        });
         const searchContext = topResults
           .map((result, index) => {
             const metadata = result.metadata || {};
@@ -1730,14 +1841,38 @@ export async function POST(request: NextRequest) {
                   const path = urlParts[1];
 
                   // If the path doesn't already start with /products/, /pages/, etc.,
-                  // then assume it's a product URL and prefix with /products/
+                  // then check if it's a policy page first before assuming it's a product
                   if (
                     !path.startsWith("products/") &&
                     !path.startsWith("pages/") &&
                     !path.startsWith("collections/") &&
-                    !path.startsWith("blogs/")
+                    !path.startsWith("blogs/") &&
+                    !path.startsWith("policies/")
                   ) {
-                    urlValue = `/products/${path}`;
+                    // Check if this is a policy page based on the handle
+                    if (
+                      path.includes("privacy-policy") ||
+                      path.includes("privacy_policy") ||
+                      path.includes("return-policy") ||
+                      path.includes("return_policy") ||
+                      path.includes("refund-policy") ||
+                      path.includes("refund_policy") ||
+                      path.includes("contact-information") ||
+                      path.includes("contact_information") ||
+                      path.includes("terms-of-service") ||
+                      path.includes("terms_of_service") ||
+                      path.includes("shipping-policy") ||
+                      path.includes("shipping_policy") ||
+                      path.includes("subscription-policy") ||
+                      path.includes("subscription_policy")
+                    ) {
+                      // Transform underscores to dashes for policy pages
+                      const policyHandle = path.replace(/_/g, "-");
+                      urlValue = `/policies/${policyHandle}`;
+                    } else {
+                      // Default to product for unknown types
+                      urlValue = `/products/${path}`;
+                    }
                   } else {
                     // Already has a proper prefix, just ensure it starts with a slash
                     urlValue = `/${path}`;
@@ -1747,7 +1882,10 @@ export async function POST(request: NextRequest) {
               // For non-http URLs (relative paths), process by content type
               else if (!urlValue.startsWith("http")) {
                 // Handle specific content types with their correct URL format
-                const contentType = metadata.type?.toLowerCase() || "";
+                const contentType =
+                  metadata.contentType?.toLowerCase() ||
+                  metadata.type?.toLowerCase() ||
+                  "";
                 const handle =
                   metadata.handle ||
                   urlValue
@@ -1759,7 +1897,29 @@ export async function POST(request: NextRequest) {
                 if (contentType.includes("product") || metadata.product_id) {
                   urlValue = `/products/${handle}`;
                 } else if (contentType.includes("page")) {
-                  urlValue = `/pages/${handle}`;
+                  // Check if this is a policy page
+                  if (
+                    handle.includes("privacy-policy") ||
+                    handle.includes("privacy_policy") ||
+                    handle.includes("return-policy") ||
+                    handle.includes("return_policy") ||
+                    handle.includes("refund-policy") ||
+                    handle.includes("refund_policy") ||
+                    handle.includes("contact-information") ||
+                    handle.includes("contact_information") ||
+                    handle.includes("terms-of-service") ||
+                    handle.includes("terms_of_service") ||
+                    handle.includes("shipping-policy") ||
+                    handle.includes("shipping_policy") ||
+                    handle.includes("subscription-policy") ||
+                    handle.includes("subscription_policy")
+                  ) {
+                    // Transform underscores to dashes for policy pages
+                    const policyHandle = handle.replace(/_/g, "-");
+                    urlValue = `/policies/${policyHandle}`;
+                  } else {
+                    urlValue = `/pages/${handle}`;
+                  }
                 } else if (
                   contentType.includes("collection") ||
                   metadata.collection_id
@@ -1771,13 +1931,57 @@ export async function POST(request: NextRequest) {
                   metadata.blog_id
                 ) {
                   // For blogs, we need both blog handle and post handle
-                  const blogHandle = metadata.blog_handle || "blog";
-                  const postHandle = metadata.post_handle || handle;
+                  const blogHandle = metadata.blogHandle || "blog";
+                  const postHandle = metadata.handle || handle;
                   urlValue = `/blogs/${blogHandle}/${postHandle}`;
                 } else {
-                  // If no specific content type detected, assume it's a product
-                  // This ensures all URLs have a proper path structure
-                  urlValue = `/products/${handle}`;
+                  // Check if this is a policy page based on handle
+                  if (
+                    handle.includes("privacy-policy") ||
+                    handle.includes("privacy_policy") ||
+                    handle.includes("return-policy") ||
+                    handle.includes("return_policy") ||
+                    handle.includes("refund-policy") ||
+                    handle.includes("refund_policy") ||
+                    handle.includes("contact-information") ||
+                    handle.includes("contact_information") ||
+                    handle.includes("terms-of-service") ||
+                    handle.includes("terms_of_service") ||
+                    handle.includes("shipping-policy") ||
+                    handle.includes("shipping_policy") ||
+                    handle.includes("subscription-policy") ||
+                    handle.includes("subscription_policy")
+                  ) {
+                    // Transform underscores to dashes for policy pages
+                    const policyHandle = handle.replace(/_/g, "-");
+                    urlValue = `/policies/${policyHandle}`;
+                  } else {
+                    // Use the actual content type from metadata instead of assuming product
+                    const contentType = metadata.type?.toLowerCase() || "";
+                    console.log(
+                      `[URL] Content type for handle "${handle}": ${contentType}`
+                    );
+                    if (contentType.includes("page")) {
+                      urlValue = `/pages/${handle}`;
+                    } else if (contentType.includes("collection")) {
+                      urlValue = `/collections/${handle}`;
+                    } else if (
+                      contentType.includes("blog") ||
+                      contentType.includes("post")
+                    ) {
+                      const blogHandle = metadata.blogHandle || "blog";
+                      const postHandle = metadata.handle || handle;
+                      urlValue = `/blogs/${blogHandle}/${postHandle}`;
+                    } else if (contentType.includes("product")) {
+                      urlValue = `/products/${handle}`;
+                    } else {
+                      // Only default to product if we really can't determine the type
+                      console.log(
+                        `[URL] Unknown content type "${contentType}" for handle "${handle}", defaulting to product`
+                      );
+                      urlValue = `/products/${handle}`;
+                    }
+                  }
                 }
               }
               // If not a specific type, keep original URL structure

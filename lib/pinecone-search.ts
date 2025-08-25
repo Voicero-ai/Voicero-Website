@@ -338,7 +338,37 @@ export async function performMainSearch(
     }
 
     // Rerank combined results with classification
-    return rerankMainResults(uniqueResults, classification, question);
+    const rerankedResults = rerankMainResults(
+      uniqueResults,
+      classification,
+      question
+    );
+
+    // Log the top results being returned from performMainSearch (all namespaces)
+    console.log(
+      "[PINECONE] Returning reranked results from performMainSearch (all namespaces):"
+    );
+    rerankedResults.slice(0, 3).forEach((result, index) => {
+      const metadata = result.metadata || {};
+      const handle = metadata.handle || "no-handle";
+      const name = metadata.title || metadata.question || "no-name";
+      const body = metadata.content || metadata.answer || "no-body";
+      const firstBit =
+        body.substring(0, 100) + (body.length > 100 ? "..." : "");
+
+      console.log(`[${index + 1}] Handle: ${handle}`);
+      console.log(`[${index + 1}] Name: ${name}`);
+      console.log(
+        `[${index + 1}] Content Type: ${metadata.contentType || "unknown"}`
+      );
+      console.log(`[${index + 1}] First 100 chars: ${firstBit}`);
+      console.log(
+        `[${index + 1}] Score: ${result.rerankScore || result.score}`
+      );
+      console.log(`[${index + 1}] ---`);
+    });
+
+    return rerankedResults;
   } else {
     // Standard search when interaction type is specified
     const mainNamespace = `${website.id}-${
@@ -431,7 +461,35 @@ export async function performMainSearch(
     }
 
     // Rerank results with classification
-    return rerankMainResults(allResults, classification, question);
+    const rerankedResults = rerankMainResults(
+      allResults,
+      classification,
+      question
+    );
+
+    // Log the top results being returned from performMainSearch
+    console.log(
+      "[PINECONE] Returning reranked results from performMainSearch (all namespaces):"
+    );
+    rerankedResults.slice(0, 3).forEach((result, index) => {
+      const metadata = result.metadata || {};
+      const handle = metadata.handle || "no-handle";
+      const name = metadata.title || metadata.question || "no-name";
+      const body = metadata.content || metadata.answer || "no-body";
+      const firstBit =
+        body.substring(0, 100) + (body.length > 100 ? "..." : "");
+
+      console.log(`[${index + 1}] Handle: ${handle}`);
+      console.log(`[${index + 1}] Name: ${name}`);
+      console.log(`[${index + 1}] Content Type: ${metadata.type || "unknown"}`);
+      console.log(`[${index + 1}] First 100 chars: ${firstBit}`);
+      console.log(
+        `[${index + 1}] Score: ${result.rerankScore || result.score}`
+      );
+      console.log(`[${index + 1}] ---`);
+    });
+
+    return rerankedResults;
   }
 }
 
@@ -637,6 +695,33 @@ export async function performQASearch(
     }
 
     // Rerank results with classification
-    return rerankMainResults(allResults, classification, question);
+    const rerankedResults = rerankMainResults(
+      allResults,
+      classification,
+      question
+    );
+
+    // Log the top results being returned from performQASearch
+    console.log(
+      "[PINECONE] Returning reranked results from performQASearch (specific namespace):"
+    );
+    rerankedResults.slice(0, 3).forEach((result, index) => {
+      const metadata = result.metadata || {};
+      const handle = metadata.handle || "no-handle";
+      const name = metadata.title || metadata.question || "no-name";
+      const body = metadata.content || metadata.answer || "no-body";
+      const firstBit =
+        body.substring(0, 100) + (body.length > 100 ? "..." : "");
+
+      console.log(`[${index + 1}] Handle: ${handle}`);
+      console.log(`[${index + 1}] Name: ${name}`);
+      console.log(`[${index + 1}] First 100 chars: ${firstBit}`);
+      console.log(
+        `[${index + 1}] Score: ${result.rerankScore || result.score}`
+      );
+      console.log(`[${index + 1}] ---`);
+    });
+
+    return rerankedResults;
   }
 }
