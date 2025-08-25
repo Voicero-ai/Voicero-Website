@@ -1,9 +1,40 @@
-# *
+# General search engines
 User-agent: *
 Allow: /
 
-# Host
-Host: https://www.voicero.ai
+# --- Perplexity (search/discovery) ---
+User-agent: PerplexityBot
+Allow: /
 
-# Sitemaps
+# Note: Perplexity-User is a user-initiated fetcher and may ignore robots.txt.
+# Control via WAF/IP if needed: https://www.perplexity.com/perplexitybot.json
+# User-agent: Perplexity-User
+# Allow: /
+
+# --- Anthropic ---
+# Allow search/discovery fetches; block training
+User-agent: Claude-SearchBot
+Allow: /
+User-agent: Claude-User
+Allow: /
+User-agent: ClaudeBot
+Disallow: /
+
+# --- OpenAI ---
+User-agent: GPTBot
+Disallow: /
+
+# --- Google AI controls (not search indexing) ---
+User-agent: Google-Extended
+Disallow: /
+
+# --- Other common AI/training & bulk crawlers ---
+User-agent: cohere-ai
+Disallow: /
+User-agent: CCBot
+Disallow: /
+
+# Hints
+# LLM helpers: see /llms.txt
+# Sitemap
 Sitemap: https://www.voicero.ai/sitemap.xml

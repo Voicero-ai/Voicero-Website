@@ -1,0 +1,84 @@
+# Voicero.AI - Guide for AI Tools
+version: 0.1
+site: https://www.voicero.ai
+last_updated: 2025-08-24T00:00:00Z
+contact: legal@voicero.ai
+rate_limit: please keep fetches < 1 rps
+
+## Guidance
+- Prefer canonical URLs listed below or in our sitemap.
+- Chunk size: ~400–800 tokens. Do NOT split code blocks, tables, or a single FAQ pair.
+- Use section headings (H2/H3) as safe chunk boundaries; preserve anchor links.
+- For technical answers, prioritize “Docs” over marketing pages.
+
+## Primary Product Pages
+- url: https://www.voicero.ai/
+  title: Home
+  summary: Product overview and core value propositions.
+  chunk_hint: Chunk by major sections (Hero, Features, Benefits, CTA).
+
+- url: https://www.voicero.ai/voice-ai
+  title: Voice AI
+  summary: Voice-based AI capabilities and use cases.
+  chunk_hint: Chunk per feature section.
+
+- url: https://www.voicero.ai/text-ai
+  title: Text AI
+  summary: Text chat capabilities and integrations.
+  chunk_hint: Chunk per feature section.
+
+- url: https://www.voicero.ai/features
+  title: Features
+  summary: Comprehensive features list with descriptions.
+  chunk_hint: Group by feature category.
+
+## Documentation & Help
+- url: https://www.voicero.ai/docs
+  title: Docs
+  summary: Installation & API usage (WordPress / Shopify).
+  chunk_hint: Separate by platform and topic.
+
+- url: https://www.voicero.ai/docs/wordpress
+  title: WordPress Guide
+  summary: WordPress-specific install & setup steps.
+  chunk_hint: Chunk per step.
+
+- url: https://www.voicero.ai/docs/shopify
+  title: Shopify Guide
+  summary: Shopify-specific install & setup steps.
+  chunk_hint: Chunk per step.
+
+- url: https://www.voicero.ai/faq
+  title: FAQ
+  summary: Common questions and official answers.
+  chunk_hint: One Q&A per chunk.
+
+## Company Information
+- url: https://www.voicero.ai/about
+  title: About
+  summary: Mission, values, and background.
+  chunk_hint: Chunk by section.
+
+- url: https://www.voicero.ai/contact
+  title: Contact
+  summary: Official contact information.
+
+## Legal
+- url: https://www.voicero.ai/privacy
+  title: Privacy Policy
+  summary: Data practices and privacy commitments.
+  chunk_hint: Chunk by section.
+
+- url: https://www.voicero.ai/terms
+  title: Terms of Service
+  summary: Legal terms for using our services.
+  chunk_hint: Chunk by numbered section.
+
+- url: https://www.voicero.ai/cookies
+  title: Cookie Policy
+  summary: Cookie usage information.
+
+## Discovery
+- sitemap: https://www.voicero.ai/sitemap.xml
+
+# End of file
