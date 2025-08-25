@@ -28,6 +28,7 @@ import {
   Heart,
 } from "lucide-react";
 import Link from "next/link";
+import WebsitePreview from "../../components/WebsitePreview";
 
 const VoiceroWebsite = () => {
   const [particles, setParticles] = useState<any[]>([]);
@@ -51,7 +52,7 @@ const VoiceroWebsite = () => {
           "Activate AI and click quick connect",
           "Create an account",
           "Click sync and then activate",
-          "Got to App Embeds and Toggle it on"
+          "Got to App Embeds and Toggle it on",
         ];
       case "Custom Store":
         return [
@@ -238,6 +239,29 @@ const VoiceroWebsite = () => {
                 <div className="flex-grow"></div>
               </div>
             </div>
+          </div>
+        </section>
+
+        {/* Website Preview Section - Prominently positioned */}
+        <section className="py-16 px-6 bg-gradient-to-b from-black via-purple-900/10 to-black">
+          <div className="max-w-7xl mx-auto">
+            <div className="text-center mb-10">
+              <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-500/20 to-violet-500/20 rounded-full border border-purple-500/30 mb-4">
+                <Search className="w-4 h-4 text-purple-400" />
+                <span className="text-purple-300 font-medium text-sm">
+                  Try it on your website
+                </span>
+              </div>
+              <h2 className="text-4xl font-bold mb-4 bg-gradient-to-r from-white via-purple-200 to-violet-200 bg-clip-text text-transparent">
+                See Voicero AI Live on Your Website
+              </h2>
+              <p className="text-xl text-gray-300 max-w-3xl mx-auto">
+                Enter your website URL below to instantly see how Voicero AI
+                will look and function on your site
+              </p>
+            </div>
+
+            <WebsitePreview />
           </div>
         </section>
 

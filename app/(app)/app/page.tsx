@@ -145,7 +145,9 @@ export default function Dashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState("7");
-  const [activeChart, setActiveChart] = useState<'actions' | 'conversations'>('actions');
+  const [activeChart, setActiveChart] = useState<"actions" | "conversations">(
+    "actions"
+  );
   const [activeActionLines, setActiveActionLines] = useState({
     cartActions: true,
     movementActions: true,
@@ -290,21 +292,21 @@ export default function Dashboard() {
               </h2>
               <div className="flex bg-gray-100 rounded-lg p-1">
                 <button
-                  onClick={() => setActiveChart('actions')}
+                  onClick={() => setActiveChart("actions")}
                   className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                    activeChart === 'actions'
-                      ? 'bg-white text-brand-text-primary shadow-sm'
-                      : 'text-brand-text-secondary hover:text-brand-text-primary'
+                    activeChart === "actions"
+                      ? "bg-white text-brand-text-primary shadow-sm"
+                      : "text-brand-text-secondary hover:text-brand-text-primary"
                   }`}
                 >
                   Actions
                 </button>
                 <button
-                  onClick={() => setActiveChart('conversations')}
+                  onClick={() => setActiveChart("conversations")}
                   className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                    activeChart === 'conversations'
-                      ? 'bg-white text-brand-text-primary shadow-sm'
-                      : 'text-brand-text-secondary hover:text-brand-text-primary'
+                    activeChart === "conversations"
+                      ? "bg-white text-brand-text-primary shadow-sm"
+                      : "text-brand-text-secondary hover:text-brand-text-primary"
                   }`}
                 >
                   Conversations
@@ -321,7 +323,7 @@ export default function Dashboard() {
               <option value="90">Last 90 days</option>
             </select>
           </div>
-          {activeChart === 'actions' && (
+          {activeChart === "actions" && (
             <div className="flex flex-wrap gap-4 mb-4">
               <button
                 onClick={() =>
@@ -373,8 +375,8 @@ export default function Dashboard() {
               </button>
             </div>
           )}
-          
-          {activeChart === 'conversations' && (
+
+          {activeChart === "conversations" && (
             <div className="flex flex-wrap gap-4 mb-4">
               <button
                 onClick={() =>
@@ -435,9 +437,9 @@ export default function Dashboard() {
                     padding: "8px",
                   }}
                 />
-                
+
                 {/* Actions Graph */}
-                {activeChart === 'actions' && activeActionLines.cartActions && (
+                {activeChart === "actions" && activeActionLines.cartActions && (
                   <Line
                     type="monotone"
                     dataKey="cartActions"
@@ -447,48 +449,52 @@ export default function Dashboard() {
                     connectNulls
                   />
                 )}
-                {activeChart === 'actions' && activeActionLines.movementActions && (
-                  <Line
-                    type="monotone"
-                    dataKey="movementActions"
-                    stroke="#6366f1"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                    connectNulls
-                  />
-                )}
-                {activeChart === 'actions' && activeActionLines.orderActions && (
-                  <Line
-                    type="monotone"
-                    dataKey="orderActions"
-                    stroke="#22c55e"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                    connectNulls
-                  />
-                )}
-                
+                {activeChart === "actions" &&
+                  activeActionLines.movementActions && (
+                    <Line
+                      type="monotone"
+                      dataKey="movementActions"
+                      stroke="#6366f1"
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      connectNulls
+                    />
+                  )}
+                {activeChart === "actions" &&
+                  activeActionLines.orderActions && (
+                    <Line
+                      type="monotone"
+                      dataKey="orderActions"
+                      stroke="#22c55e"
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      connectNulls
+                    />
+                  )}
+
                 {/* Conversations Graph */}
-                {activeChart === 'conversations' && activeConversationLines.textConversations && (
-                  <Line
-                    type="monotone"
-                    dataKey="textConversations"
-                    stroke="#3b82f6"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                    connectNulls
-                  />
-                )}
-                {activeChart === 'conversations' && activeConversationLines.voiceConversations && (
-                  <Line
-                    type="monotone"
-                    dataKey="voiceConversations"
-                    stroke="#ef4444"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                    connectNulls
-                  />
-                )}
+                {activeChart === "conversations" &&
+                  activeConversationLines.textConversations && (
+                    <Line
+                      type="monotone"
+                      dataKey="textConversations"
+                      stroke="#3b82f6"
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      connectNulls
+                    />
+                  )}
+                {activeChart === "conversations" &&
+                  activeConversationLines.voiceConversations && (
+                    <Line
+                      type="monotone"
+                      dataKey="voiceConversations"
+                      stroke="#ef4444"
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      connectNulls
+                    />
+                  )}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -579,7 +585,11 @@ export default function Dashboard() {
                         {site.domain}
                       </h3>
                       <p className="text-sm text-brand-text-secondary">
-                        {site.monthlyChats} chats • {site.cartActions + site.movementActions + site.orderActions} actions
+                        {site.monthlyChats} chats •{" "}
+                        {site.cartActions +
+                          site.movementActions +
+                          site.orderActions}{" "}
+                        actions
                       </p>
                     </div>
                   </div>
