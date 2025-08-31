@@ -859,6 +859,10 @@ export async function POST(request: NextRequest) {
         classifierResult.action
       );
 
+      // Reset action to "none" since we're not performing it
+      classifierResult.action = "none";
+      classifierResult.actionType = null;
+
       // Skip all the specific action processing since we're not supporting actions
       // Just return the generic "cannot perform actions" message
     }
