@@ -4,14 +4,14 @@ import * as mysql from "mysql2/promise";
 import {
   verifyToken,
   getWebsiteIdFromToken,
-} from "../../../../lib/token-verifier";
+} from "../../../../../lib/token-verifier";
 import Stripe from "stripe";
 import { Pinecone } from "@pinecone-database/pinecone";
 import {
   performMainSearch,
   QuestionClassification,
-} from "../../../../lib/pinecone-search";
-import { buildHybridQueryVectors } from "../../../../lib/sparse/hybrid_query_tuning";
+} from "../../../../../lib/pinecone-search";
+import { buildHybridQueryVectors } from "../../../../../lib/sparse/hybrid_query_tuning";
 
 export const dynamic = "force-dynamic";
 
