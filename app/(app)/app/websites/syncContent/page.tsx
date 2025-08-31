@@ -159,6 +159,129 @@ export default function SyncContent() {
     }
   };
 
+  // Function to fetch and parse sitemap files (faster than crawling)
+  const processWebsiteSitemaps = async (baseUrl: string): Promise<string[]> => {
+    try {
+      // Normalize base URL
+      if (!baseUrl.startsWith("http")) {
+        baseUrl = `https://${baseUrl}`;
+      }
+      const baseUrlObj = new URL(baseUrl);
+      const rootDomain = baseUrlObj.origin;
+      console.log(`[SITEMAP] Checking for sitemaps at: ${rootDomain}`);
+
+      // Common sitemap locations to check
+      const sitemapLocations = [
+        "/sitemap.xml",
+        "/sitemap_index.xml",
+        "/sitemap-index.xml",
+        "/sitemaps/sitemap.xml",
+        "/wp-sitemap.xml",
+      ];
+
+      let sitemapFound = false;
+      let foundUrls: string[] = [];
+
+      // Helper function to parse XML sitemap content
+      const parseSitemapXml = (xmlContent: string): string[] => {
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(xmlContent, "text/xml");
+        const urls: string[] = [];
+
+        // Check if it's a sitemap index
+        const sitemapElements = xmlDoc.querySelectorAll("sitemap loc");
+        if (sitemapElements && sitemapElements.length > 0) {
+          console.log(
+            `[SITEMAP] Found sitemap index with ${sitemapElements.length} sitemaps`
+          );
+          return Array.from(sitemapElements).map((el) => el.textContent || "");
+        }
+
+        // Regular sitemap with URLs
+        const urlElements = xmlDoc.querySelectorAll("url loc");
+        console.log(`[SITEMAP] Found ${urlElements.length} URLs in sitemap`);
+        return Array.from(urlElements).map((el) => el.textContent || "");
+      };
+
+      // First try to get sitemap.xml
+      for (const sitemapPath of sitemapLocations) {
+        try {
+          const sitemapUrl = `${rootDomain}${sitemapPath}`;
+          console.log(`[SITEMAP] Trying: ${sitemapUrl}`);
+
+          const proxyUrl = `/api/proxy?url=${encodeURIComponent(sitemapUrl)}`;
+          const response = await fetch(proxyUrl);
+
+          if (response.ok) {
+            const xmlContent = await response.text();
+
+            // Check if it looks like XML
+            if (
+              xmlContent.includes("<?xml") ||
+              xmlContent.includes("<urlset") ||
+              xmlContent.includes("<sitemapindex")
+            ) {
+              sitemapFound = true;
+
+              // Parse the XML content
+              const parsedUrls = parseSitemapXml(xmlContent);
+
+              // If it's a sitemap index, we need to fetch each sitemap
+              if (parsedUrls.some((url) => url.includes("sitemap"))) {
+                console.log(
+                  `[SITEMAP] Found sitemap index, fetching individual sitemaps`
+                );
+
+                // Fetch each sitemap in the index
+                for (const sitemapUrl of parsedUrls) {
+                  try {
+                    const childProxyUrl = `/api/proxy?url=${encodeURIComponent(
+                      sitemapUrl
+                    )}`;
+                    const childResponse = await fetch(childProxyUrl);
+
+                    if (childResponse.ok) {
+                      const childXml = await childResponse.text();
+                      const childUrls = parseSitemapXml(childXml);
+                      foundUrls = [...foundUrls, ...childUrls];
+                    }
+                  } catch (childErr) {
+                    console.error(
+                      `[SITEMAP] Error fetching child sitemap: ${sitemapUrl}`,
+                      childErr
+                    );
+                  }
+                }
+              } else {
+                // It's a regular sitemap with URLs
+                foundUrls = [...foundUrls, ...parsedUrls];
+              }
+
+              // Break after finding a valid sitemap
+              break;
+            }
+          }
+        } catch (err) {
+          console.log(`[SITEMAP] Error checking ${sitemapPath}:`, err);
+          // Continue to next sitemap location
+        }
+      }
+
+      if (sitemapFound) {
+        console.log(
+          `[SITEMAP] Successfully found ${foundUrls.length} URLs from sitemaps`
+        );
+        return foundUrls.filter((url) => !!url); // Filter out empty strings
+      } else {
+        console.log(`[SITEMAP] No sitemaps found, will use regular crawling`);
+        return [];
+      }
+    } catch (error) {
+      console.error("[SITEMAP] Error processing sitemaps:", error);
+      return [];
+    }
+  };
+
   // --- Main crawl function reverted to single-threaded ---
   const crawlWebsite = async () => {
     if (!website) return;
@@ -190,12 +313,49 @@ export default function SyncContent() {
       const domainUrl = new URL(baseUrl);
       domain = domainUrl.hostname;
 
-      const startUrlNormalized = normalizeUrl(baseUrl);
-      urlQueue = [startUrlNormalized];
-      queuedUrls.add(startUrlNormalized);
-      localDiscoveredMap.set(startUrlNormalized, baseUrl);
-      setDiscoveredUrls([baseUrl]);
-      setQueueSize(urlQueue.length);
+      // First try to find URLs via sitemap.xml (much faster than crawling)
+      console.log(`[CRAWL] Starting sitemap discovery for ${baseUrl}`);
+      setCrawlProgress(10); // Set progress to show something is happening
+      setCurrentUrl("Checking sitemaps...");
+
+      const sitemapUrls = await processWebsiteSitemaps(baseUrl);
+
+      // Check if we found a good number of URLs from the sitemap
+      if (sitemapUrls.length > 0) {
+        console.log(`[CRAWL] Found ${sitemapUrls.length} URLs from sitemaps`);
+
+        // Add all sitemap URLs to our discoveries
+        sitemapUrls.forEach((url) => {
+          try {
+            const normalizedUrl = normalizeUrl(url);
+            if (!localDiscoveredMap.has(normalizedUrl)) {
+              localDiscoveredMap.set(normalizedUrl, url);
+              queuedUrls.add(normalizedUrl);
+              urlQueue.push(normalizedUrl);
+            }
+          } catch (err) {
+            console.log(`[CRAWL] Error normalizing sitemap URL: ${url}`, err);
+          }
+        });
+
+        console.log(
+          `[CRAWL] Added ${urlQueue.length} sitemap URLs to processing queue`
+        );
+        setDiscoveredUrls(Array.from(localDiscoveredMap.values()));
+        setQueueSize(urlQueue.length);
+        setCrawlProgress(20); // Made progress by finding sitemap
+      } else {
+        // Fall back to traditional crawling with just the start URL
+        console.log(
+          `[CRAWL] No sitemaps found, falling back to traditional crawling`
+        );
+        const startUrlNormalized = normalizeUrl(baseUrl);
+        urlQueue = [startUrlNormalized];
+        queuedUrls.add(startUrlNormalized);
+        localDiscoveredMap.set(startUrlNormalized, baseUrl);
+        setDiscoveredUrls([baseUrl]);
+        setQueueSize(urlQueue.length);
+      }
 
       let processedCount = 0;
       while (urlQueue.length > 0 && processedCount < maxUrlsToProcess) {
@@ -229,7 +389,7 @@ export default function SyncContent() {
         }
 
         // --- Determine Fetch Strategy ---
-        const isInitialUrl = normalizedUrl === startUrlNormalized;
+        const isInitialUrl = normalizedUrl === normalizeUrl(baseUrl);
         const usePuppeteer = isInitialUrl; // Always use Puppeteer for the initial URL
         const proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}${
           usePuppeteer ? "&renderJS=true" : ""
@@ -709,12 +869,13 @@ export default function SyncContent() {
         <div className="p-6 space-y-6">
           <div className="space-y-4">
             <h3 className="font-medium text-brand-text-primary">
-              1. Crawl Website
+              1. Collect Links
             </h3>
             <p className="text-sm text-brand-text-secondary">
               Click the button below to automatically discover content on your
-              website. The crawler will find all pages on your domain and
-              prepare them for syncing.
+              website. We'll first check for sitemaps (sitemap.xml) which is
+              much faster, and if not found, the crawler will search for pages
+              on your domain.
             </p>
 
             <div className="bg-brand-lavender-light/5 rounded-lg p-4">
@@ -755,12 +916,14 @@ export default function SyncContent() {
                 {isCrawling ? (
                   <>
                     <FaSpider className="animate-pulse" />
-                    Crawling...
+                    {currentUrl === "Checking sitemaps..."
+                      ? "Checking Sitemaps..."
+                      : "Crawling..."}
                   </>
                 ) : (
                   <>
                     <FaSpider />
-                    Start Website Crawling
+                    Start Website Discovery
                   </>
                 )}
               </button>
