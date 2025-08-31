@@ -88,9 +88,15 @@ export default function GetStartedPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Always clear previous submit errors first
+    setErrors((prev) => ({ ...prev, submit: undefined }));
+
+    // Then validate the form
     if (!validateForm()) return;
 
     setIsLoading(true);
+
     try {
       const response = await fetch("/api/auth/register", {
         method: "POST",
@@ -109,17 +115,18 @@ export default function GetStartedPage() {
       const params = new URLSearchParams(searchParams);
       const callbackUrl = params.get("callbackUrl");
 
+      // Always sign in the user regardless of callback URL
+      const result = await signIn("credentials", {
+        login: formData.email,
+        password: formData.password,
+        redirect: false,
+      });
+
+      if (result?.error) {
+        throw new Error(result.error);
+      }
+
       if (callbackUrl) {
-        const result = await signIn("credentials", {
-          login: formData.email,
-          password: formData.password,
-          redirect: false,
-        });
-
-        if (result?.error) {
-          throw new Error(result.error);
-        }
-
         router.push(callbackUrl);
       } else {
         setStep(2);
@@ -348,6 +355,15 @@ export default function GetStartedPage() {
                   )}
                 </div>
 
+                <div className="col-span-2">
+                  {errors.submit && (
+                    <div className="bg-red-500/10 border border-red-500/50 rounded-xl p-4 mb-4 animate-pulse">
+                      <p className="text-red-400 text-center font-medium">
+                        {errors.submit}
+                      </p>
+                    </div>
+                  )}
+                </div>
                 <div className="col-span-2 mt-4">
                   <motion.button
                     whileHover={{ scale: 1.02 }}
@@ -355,10 +371,39 @@ export default function GetStartedPage() {
                     className="w-full py-3 px-4 bg-gradient-to-r from-brand-accent to-brand-lavender-dark 
                              text-white rounded-xl font-medium shadow-lg shadow-brand-accent/20
                              hover:shadow-xl hover:shadow-brand-accent/30 transition-shadow
-                             disabled:opacity-50 disabled:cursor-not-allowed"
+                             disabled:opacity-50 disabled:cursor-not-allowed relative"
                     disabled={isLoading}
                   >
-                    {isLoading ? "Creating Account..." : "Create Account"}
+                    {isLoading ? (
+                      <>
+                        <span className="opacity-0">Create Account</span>
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <svg
+                            className="animate-spin h-5 w-5 text-white"
+                            xmlns="http://www.w3.org/2000/svg"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                          >
+                            <circle
+                              className="opacity-25"
+                              cx="12"
+                              cy="12"
+                              r="10"
+                              stroke="currentColor"
+                              strokeWidth="4"
+                            ></circle>
+                            <path
+                              className="opacity-75"
+                              fill="currentColor"
+                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                            ></path>
+                          </svg>
+                          <span className="ml-2">Creating Account...</span>
+                        </div>
+                      </>
+                    ) : (
+                      "Create Account"
+                    )}
                   </motion.button>
                 </div>
               </form>

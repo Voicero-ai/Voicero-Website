@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { hash } from "bcryptjs";
 import { z } from "zod";
 import { query } from "../../../../lib/db";
+import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
 
@@ -69,10 +70,14 @@ export async function POST(req: Request) {
     // Hash password
     const hashedPassword = await hash(validatedData.password, 12);
 
-    // Create user
-    const result = await query(
-      "INSERT INTO User (username, email, password, name) VALUES (?, ?, ?, ?)",
+    // Create user with explicit UUID
+    const userUuid = crypto.randomUUID();
+
+    // Insert with explicit ID
+    await query(
+      "INSERT INTO User (id, username, email, password, name) VALUES (?, ?, ?, ?, ?)",
       [
+        userUuid,
         validatedData.username,
         validatedData.email,
         hashedPassword,
@@ -80,12 +85,10 @@ export async function POST(req: Request) {
       ]
     );
 
-    const userId = (result as any).insertId;
-
     // Get the created user
     const users = (await query(
       "SELECT id, username, email, name, createdAt FROM User WHERE id = ?",
-      [userId]
+      [userUuid]
     )) as User[];
 
     const user = users[0];

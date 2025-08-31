@@ -411,9 +411,7 @@ export default function WebsiteSettings() {
   const [isToggling, setIsToggling] = useState(false);
 
   // Add this state for syncing status
-  const [showPlanModal, setShowPlanModal] = useState(false);
-  const [isPlanLoading, setIsPlanLoading] = useState(false);
-  const [planError, setPlanError] = useState("");
+  // Plan-related state variables removed as they're no longer needed
 
   const [isDeletingContent, setIsDeletingContent] = useState<
     Record<string, boolean>
@@ -899,98 +897,7 @@ export default function WebsiteSettings() {
     }
   }, [cachedData]);
 
-  // Add a useEffect to refresh data when returning from Stripe with upgraded=true parameter
-  useEffect(() => {
-    const upgraded = searchParams.get("upgraded");
-    const canceled = searchParams.get("upgrade_canceled");
-
-    if (websiteId && upgraded === "true") {
-      // Refresh the website data after plan upgrade
-      const refreshData = async () => {
-        setIsLoading(true);
-        try {
-          const res = await fetch(`/api/websites/get?id=${websiteId}`, {
-            method: "GET",
-            headers: {
-              "Cache-Control": "no-cache",
-            },
-          });
-          if (res.ok) {
-            const data = await res.json();
-            console.log("Website data refreshed:", data);
-
-            // Merge new data with existing cached data to preserve any fields that might be missing
-            const mergedData = {
-              ...cachedData,
-              ...data,
-              // Ensure AI feature states are preserved - prioritize user edits, then new data, then cached data, then defaults
-              showVoiceAI:
-                userEditedVoiceAIRef.current !== null
-                  ? userEditedVoiceAIRef.current
-                  : data.showVoiceAI !== undefined
-                  ? data.showVoiceAI
-                  : cachedData?.showVoiceAI ?? false,
-              showTextAI:
-                userEditedTextAIRef.current !== null
-                  ? userEditedTextAIRef.current
-                  : data.showTextAI !== undefined
-                  ? data.showTextAI
-                  : cachedData?.showTextAI ?? false,
-            };
-
-            setWebsiteData(mergedData);
-
-            // If server confirms user's pending edits, clear the flags
-            if (
-              userEditedVoiceAIRef.current !== null &&
-              mergedData.showVoiceAI === userEditedVoiceAIRef.current
-            ) {
-              setUserEditedVoiceAI(null);
-            }
-            if (
-              userEditedTextAIRef.current !== null &&
-              mergedData.showTextAI === userEditedTextAIRef.current
-            ) {
-              setUserEditedTextAI(null);
-            }
-
-            // If server confirms user's pending edits, clear the flags
-            if (
-              userEditedVoiceAI !== null &&
-              mergedData.showVoiceAI === userEditedVoiceAI
-            ) {
-              setUserEditedVoiceAI(null);
-            }
-            if (
-              userEditedTextAI !== null &&
-              mergedData.showTextAI === userEditedTextAI
-            ) {
-              setUserEditedTextAI(null);
-            }
-
-            // Initialize AI feature states
-            setShowVoiceAI(mergedData.showVoiceAI ?? false);
-            setShowTextAI(mergedData.showTextAI ?? false);
-
-            // Close the plan modal if it was open
-            setShowPlanModal(false);
-
-            // Show success message
-            alert("Plan upgraded successfully!");
-          }
-        } catch (error) {
-          console.error("Error refreshing website data:", error);
-        } finally {
-          setIsLoading(false);
-        }
-      };
-
-      refreshData();
-    } else if (canceled === "true") {
-      // Handle canceled upgrade if needed
-      setShowPlanModal(false);
-    }
-  }, [searchParams, websiteId]);
+  // Stripe-related useEffect removed since it's no longer needed
 
   // 2) Handle sync
   const handleSync = async () => {
@@ -1028,35 +935,13 @@ export default function WebsiteSettings() {
     }
   };
 
-  // Add subscription management functions
+  // No subscription management needed anymore
   const handleManageSubscription = async () => {
-    if (!websiteData) return;
-
-    // ALWAYS show the plan modal for Enterprise and Starter plans
-    // regardless of whether it's Shopify or not
-    if (websiteData.plan === "Enterprise" || websiteData.plan === "Starter") {
-      setShowPlanModal(true);
-      return;
-    }
-
-    // If no plan, show subscription modal
-    if (!websiteData.plan) {
-      setShowSubscriptionModal(true);
-    }
+    // Function kept for backwards compatibility but doesn't do anything
+    console.log("Subscription management removed");
   };
 
-  // Add a separate function for Shopify users to access Shopify admin if needed
-  const handleShopifyPricingRedirect = () => {
-    if (!websiteData) return;
-
-    const storeName = websiteData.domain
-      .replace(/^https?:\/\//, "") // Remove http:// or https://
-      .split(".")[0]; // Get the first part of the domain
-
-    // Redirect to Shopify admin pricing page
-    const shopifyPricingUrl = `https://admin.shopify.com/store/${storeName}/apps/voicero-app-shop/app/pricing`;
-    window.open(shopifyPricingUrl, "_blank");
-  };
+  // Shopify pricing redirect removed (not needed anymore)
 
   // Add this function inside WebsiteSettings component
   const handleToggleStatus = async () => {
@@ -1155,62 +1040,14 @@ export default function WebsiteSettings() {
   };
 
   const handlePlanChange = async () => {
-    if (!websiteData) return;
-    setIsPlanLoading(true);
-    setPlanError("");
-    try {
-      const response = await fetch("/api/stripe/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          websiteId: websiteData.id,
-          websiteData: { ...websiteData, plan: "Starter" },
-          successUrl: `${window.location.origin}/app/websites/website?id=${websiteData.id}&upgraded=true`,
-          cancelUrl: `${window.location.origin}/app/websites/website?id=${websiteData.id}&upgrade_canceled=true`,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Failed to change plan");
-      if (data.url) {
-        window.location.href = data.url; // Stripe checkout
-      } else if (data.success) {
-        window.location.href = `${window.location.origin}/app/websites/website?id=${websiteData.id}&upgraded=true`;
-      }
-    } catch (err) {
-      setPlanError(
-        err instanceof Error ? err.message : "Failed to change plan"
-      );
-    } finally {
-      setIsPlanLoading(false);
-    }
+    // Function kept for backwards compatibility
+    console.log("Plan changes removed");
   };
 
-  // Update the handleCancelPlan function to work with all website types
+  // Cancel plan function removed (not needed)
   const handleCancelPlan = async () => {
-    if (!websiteData) return;
-    setIsPlanLoading(true);
-    setPlanError("");
-    try {
-      const response = await fetch("/api/stripe/cancel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ websiteId: websiteData.id }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Failed to cancel plan");
-
-      // Update local state
-      setWebsiteData({ ...websiteData, plan: "", stripeId: undefined });
-      setShowPlanModal(false);
-
-      // Show success message or toast
-    } catch (err) {
-      setPlanError(
-        err instanceof Error ? err.message : "Failed to cancel plan"
-      );
-    } finally {
-      setIsPlanLoading(false);
-    }
+    // Function kept for backwards compatibility
+    console.log("Plan cancellation removed");
   };
 
   // 3) If loading or no data yet, show a loading state
@@ -2048,114 +1885,9 @@ export default function WebsiteSettings() {
     );
   };
 
-  // Subscription Modal Component
+  // Empty subscription modal component (removed)
   const SubscriptionModal = () => {
-    const [isLoading, setIsLoading] = useState(false);
-
-    const handleUpgrade = async () => {
-      if (!websiteData) return;
-
-      setIsLoading(true);
-      try {
-        const response = await fetch("/api/stripe/session", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            websiteId: websiteData.id,
-            plan: "Pro",
-            successUrl: `${window.location.origin}/app/websites/new/complete?session_id={CHECKOUT_SESSION_ID}&id=${websiteData.id}`,
-            cancelUrl: `${window.location.origin}/app/websites/website?id=${websiteData.id}&canceled=true`,
-          }),
-        });
-
-        if (!response.ok) throw new Error("Failed to create checkout session");
-
-        const { url } = await response.json();
-        window.location.href = url;
-      } catch (error) {
-        console.error("Error upgrading plan:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    if (!showSubscriptionModal) return null;
-
-    // Don't show upgrade modal for Pro users
-    if (websiteData?.plan === "Pro") return null;
-
-    return (
-      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-xl max-w-md w-full p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold text-brand-text-primary">
-              Upgrade to Pro
-            </h2>
-            <button
-              onClick={() => setShowSubscriptionModal(false)}
-              className="text-brand-text-secondary hover:text-brand-text-primary"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </button>
-          </div>
-
-          <div className="mb-6">
-            <p className="text-brand-text-secondary mb-4">
-              Upgrade to Pro to unlock:
-            </p>
-            <ul className="space-y-3">
-              <li className="flex items-center gap-2 text-brand-text-secondary">
-                <FaCheck className="w-4 h-4 text-green-500" />
-                <span>50,000 monthly queries</span>
-              </li>
-              <li className="flex items-center gap-2 text-brand-text-secondary">
-                <FaCheck className="w-4 h-4 text-green-500" />
-                <span>Priority support</span>
-              </li>
-              <li className="flex items-center gap-2 text-brand-text-secondary">
-                <FaCheck className="w-4 h-4 text-green-500" />
-                <span>Advanced analytics</span>
-              </li>
-            </ul>
-          </div>
-
-          <div className="space-y-4">
-            <button
-              onClick={handleUpgrade}
-              disabled={isLoading}
-              className="block w-full px-4 py-2 bg-brand-accent text-white 
-                       rounded-lg text-center hover:bg-brand-accent/90 
-                       transition-colors disabled:opacity-50"
-            >
-              {isLoading ? "Processing..." : "Upgrade Now - $40/month"}
-            </button>
-            <button
-              onClick={() => setShowSubscriptionModal(false)}
-              className="block w-full px-4 py-2 border border-brand-accent/20 
-                       text-brand-accent rounded-lg text-center 
-                       hover:bg-brand-accent/5 transition-colors"
-            >
-              Maybe Later
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    return null;
   };
 
   return (
@@ -2171,14 +1903,12 @@ export default function WebsiteSettings() {
             </h1>
             <span
               className={`px-3 py-1 text-sm font-medium rounded-full ${
-                plan === ""
-                  ? "bg-gray-200 text-gray-500"
-                  : status === "active"
+                websiteData.active
                   ? "bg-green-50 text-green-600"
                   : "bg-red-50 text-red-600"
               }`}
             >
-              {plan === "" ? "Inactive Plan" : status}
+              {websiteData.active ? "Active" : "Inactive"}
             </span>
             <a
               href={`${domain}`}
@@ -2192,8 +1922,7 @@ export default function WebsiteSettings() {
           </div>
           <p className="text-brand-text-secondary">
             {domain} •{" "}
-            {type === "Custom" && customType ? `${type} (${customType})` : type}{" "}
-            • {plan ? `${plan} Plan` : "No Active Plan"}
+            {type === "Custom" && customType ? `${type} (${customType})` : type}
           </p>
         </div>
         <div className="flex gap-4 relative">
@@ -2201,20 +1930,18 @@ export default function WebsiteSettings() {
             whileHover={{ scale: !websiteData.lastSync ? 1 : 1.02 }}
             whileTap={{ scale: !websiteData.lastSync ? 1 : 0.98 }}
             onClick={handleToggleStatus}
-            disabled={isToggling || !websiteData.lastSync || plan === ""}
+            disabled={isToggling || !websiteData.lastSync}
             title={
               !websiteData.lastSync
                 ? "Please sync your content before activating"
-                : plan === ""
-                ? "Please upgrade your plan to activate"
                 : ""
             }
             className={`px-4 py-2 rounded-xl flex items-center gap-2 transition-colors ${
-              status === "active"
+              websiteData.active
                 ? "bg-brand-accent/10 text-brand-accent hover:bg-brand-accent/20"
                 : "bg-brand-lavender-dark text-white hover:bg-brand-lavender-dark/90"
             } ${
-              isToggling || !websiteData.lastSync || plan === ""
+              isToggling || !websiteData.lastSync
                 ? "opacity-50 cursor-not-allowed"
                 : ""
             }`}
@@ -2224,10 +1951,26 @@ export default function WebsiteSettings() {
             />
             {isToggling
               ? "Updating..."
-              : status === "active"
+              : websiteData.active
               ? "Deactivate"
               : "Activate"}
           </motion.button>
+
+          {/* Add Sync Content button for Custom type websites */}
+          {type === "Custom" && (
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={handleSync}
+              disabled={isSyncing}
+              className="px-4 py-2 bg-brand-accent text-white rounded-xl flex items-center gap-2 transition-colors hover:bg-brand-accent/90 disabled:opacity-50"
+            >
+              <FaSync
+                className={`w-4 h-4 ${isSyncing ? "animate-spin" : ""}`}
+              />
+              {isSyncing ? "Syncing..." : "Sync Content"}
+            </motion.button>
+          )}
           {/* Actions dropdown */}
           <div className="relative">
             <motion.button
@@ -2265,46 +2008,12 @@ export default function WebsiteSettings() {
                     handleSync();
                     console.log("done sync", { websiteId: websiteData.id });
                   }}
-                  disabled={isSyncing || plan === ""}
+                  disabled={isSyncing}
                   className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 disabled:opacity-50 text-brand-text-primary"
                 >
                   <FaSync className="w-4 h-4" /> Sync Content
                 </button>
-                {(plan === "Starter" || plan === "Enterprise") && (
-                  <button
-                    onClick={() => {
-                      console.log("doing manage-plan", {
-                        websiteId: websiteData.id,
-                      });
-                      setIsActionsOpen(false);
-                      handleManageSubscription();
-                      console.log("done manage-plan", {
-                        websiteId: websiteData.id,
-                      });
-                    }}
-                    className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 text-brand-text-primary"
-                  >
-                    <FaCreditCard className="w-4 h-4" /> Manage Plan
-                  </button>
-                )}
-                {(plan === "Starter" || plan === "Enterprise") &&
-                  websiteData.type?.toLowerCase() === "shopify" && (
-                    <button
-                      onClick={() => {
-                        console.log("doing shopify-admin", {
-                          websiteId: websiteData.id,
-                        });
-                        setIsActionsOpen(false);
-                        handleShopifyPricingRedirect();
-                        console.log("done shopify-admin", {
-                          websiteId: websiteData.id,
-                        });
-                      }}
-                      className="w-full px-3 py-2 text-left hover:bg-brand-lavender-light/10 flex items-center gap-2 text-brand-text-primary"
-                    >
-                      <FaExternalLinkAlt className="w-4 h-4" /> Shopify Admin
-                    </button>
-                  )}
+                {/* Plan management removed */}
                 <button
                   onClick={() => {
                     console.log("doing interface", {
@@ -2372,63 +2081,34 @@ export default function WebsiteSettings() {
               </div>
             )}
           </div>
-          {planError && <div className="text-red-500 text-sm">{planError}</div>}
+          {/* Plan error removed */}
         </div>
       </div>
 
       {/* Usage */}
-      {plan && (
-        <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 p-6">
-          <h2 className="text-xl font-semibold text-brand-text-primary mb-4">
-            Usage
-          </h2>
-          <div className="bg-brand-lavender-light/5 rounded-lg p-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-brand-text-secondary">
-                Monthly Queries
-              </span>
-              <span className="text-sm font-medium text-brand-text-primary">
-                {monthlyQueries.toLocaleString()} /{" "}
-                {queryLimit === 0 ? "Unlimited" : queryLimit.toLocaleString()}
-              </span>
-            </div>
-            {/* Only show progress bar if there's a limit */}
-            {queryLimit > 0 && (
-              <div className="w-full bg-brand-lavender-light/20 rounded-full h-2">
-                <div
-                  className="bg-brand-accent h-2 rounded-full transition-all"
-                  style={{
-                    width: `${(monthlyQueries / queryLimit) * 100}%`,
-                  }}
-                />
-              </div>
-            )}
-            {/* Add Enterprise plan note if on Starter plan */}
-            {plan === "Starter" && (
-              <div className="mt-4 text-sm text-black">
-                <p className="text-black">
-                  <strong>Note:</strong> If you exceed{" "}
-                  {queryLimit.toLocaleString()} queries, you'll automatically be
-                  upgraded to the Enterprise plan at{" "}
-                  <strong className="text-brand-accent">$0.10 per query</strong>{" "}
-                  with unlimited usage.
-                </p>
-              </div>
-            )}
-            {/* Show different note for Enterprise users */}
-            {plan === "Enterprise" && (
-              <div className="mt-4 text-sm text-black">
-                <p className="text-black">
-                  <strong>Enterprise Plan:</strong> You have unlimited queries
-                  at{" "}
-                  <strong className="text-brand-accent">$0.10 per query</strong>{" "}
-                  with no monthly limits.
-                </p>
-              </div>
-            )}
+      <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 p-6">
+        <h2 className="text-xl font-semibold text-brand-text-primary mb-4">
+          Usage
+        </h2>
+        <div className="bg-brand-lavender-light/5 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-brand-text-secondary">
+              Monthly Queries
+            </span>
+            <span className="text-sm font-medium text-brand-text-primary">
+              {monthlyQueries.toLocaleString()} / {queryLimit.toLocaleString()}
+            </span>
+          </div>
+          <div className="w-full bg-brand-lavender-light/20 rounded-full h-2">
+            <div
+              className="bg-brand-accent h-2 rounded-full transition-all"
+              style={{
+                width: `${(monthlyQueries / queryLimit) * 100}%`,
+              }}
+            />
           </div>
         </div>
-      )}
+      </div>
 
       {/* AI Features Section */}
       <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 p-6">
@@ -2779,10 +2459,23 @@ export default function WebsiteSettings() {
                                           )}
                                           {selectedAction === "movement" && (
                                             <span className="text-black">
-                                              {a.actionType === "scroll" && (a.scrollToText || a.sectionId || "(scroll)")}
-                                              {a.actionType === "redirect" && (a.url || "(redirect)")}
-                                              {a.actionType === "click" && (a.buttonText || a.url || "(click)")}
-                                              {a.actionType && !["scroll", "redirect", "click"].includes(a.actionType) && a.actionType}
+                                              {a.actionType === "scroll" &&
+                                                (a.scrollToText ||
+                                                  a.sectionId ||
+                                                  "(scroll)")}
+                                              {a.actionType === "redirect" &&
+                                                (a.url || "(redirect)")}
+                                              {a.actionType === "click" &&
+                                                (a.buttonText ||
+                                                  a.url ||
+                                                  "(click)")}
+                                              {a.actionType &&
+                                                ![
+                                                  "scroll",
+                                                  "redirect",
+                                                  "click",
+                                                ].includes(a.actionType) &&
+                                                a.actionType}
                                             </span>
                                           )}
                                           {selectedAction === "orders" && (
@@ -3040,114 +2733,7 @@ export default function WebsiteSettings() {
         </div>
       </div>
 
-      {/* Plan Management Modal */}
-      {showPlanModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl p-8 max-w-md w-full shadow-xl relative">
-            <button
-              onClick={() => setShowPlanModal(false)}
-              className="absolute top-4 right-4 text-brand-text-secondary hover:text-brand-accent"
-              aria-label="Close"
-            >
-              ×
-            </button>
-            <h2 className="text-xl font-bold mb-4 text-brand-text-primary">
-              {plan === "Starter" || plan === "Enterprise"
-                ? "Manage Your Plan"
-                : "Upgrade Your Plan"}
-            </h2>
-            {planError && (
-              <div className="text-red-500 text-sm mb-2">{planError}</div>
-            )}
-            <div className="space-y-4">
-              {!plan && (
-                <button
-                  onClick={() => handlePlanChange()}
-                  disabled={isPlanLoading}
-                  className="block w-full px-4 py-2 bg-brand-accent text-white rounded-lg border border-brand-accent hover:bg-brand-accent/90 transition-colors disabled:opacity-50"
-                >
-                  Upgrade to Starter ($1/query - 100 queries)
-                </button>
-              )}
-
-              {/* Current Plan Information */}
-              {(plan === "Starter" || plan === "Enterprise") && (
-                <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                  <h3 className="text-lg font-semibold mb-2 text-black">
-                    {plan === "Enterprise" ? "Enterprise Plan" : "Starter Plan"}
-                  </h3>
-                  <p className="text-sm text-brand-text-secondary mb-2">
-                    {plan === "Enterprise"
-                      ? "You're currently on our Enterprise plan with pay-per-usage pricing at $0.10 per query with unlimited usage."
-                      : "You're currently on our Starter plan with 100 monthly queries at $1/query."}
-                  </p>
-
-                  {/* Plan details section */}
-                  <div className="mt-4 text-sm text-brand-text-secondary">
-                    <div className="flex justify-between mb-1">
-                      <span>Plan:</span>
-                      <span className="font-medium text-black">{plan}</span>
-                    </div>
-                    <div className="flex justify-between mb-1">
-                      <span>Monthly Queries:</span>
-                      <span className="font-medium text-black">
-                        {plan === "Enterprise" ? "Unlimited" : "100"}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Pricing:</span>
-                      <span className="font-medium text-black">
-                        {plan === "Enterprise" ? "$0.10 per query" : "$1/query"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Cancel button */}
-              {(plan === "Starter" || plan === "Enterprise") && (
-                <>
-                  <button
-                    onClick={handleCancelPlan}
-                    disabled={isPlanLoading}
-                    className="block w-full px-4 py-2 bg-red-100 text-red-600 rounded-lg border border-red-200 hover:bg-red-200 transition-colors disabled:opacity-50"
-                  >
-                    {isPlanLoading ? "Processing..." : "Cancel Plan"}
-                  </button>
-                  <p className="text-xs text-brand-text-secondary text-center mt-2">
-                    Your plan will be canceled immediately. This action cannot
-                    be undone.
-                  </p>
-                </>
-              )}
-
-              {/* Plan upgrade information */}
-              {plan === "Starter" && (
-                <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                  <h3 className="text-lg font-semibold mb-2 text-black">
-                    Enterprise Plan
-                  </h3>
-                  <p className="text-sm text-brand-text-secondary mb-2">
-                    When you exceed your Starter plan limit of 100 queries,
-                    you'll automatically be upgraded to our Enterprise plan.
-                  </p>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="font-bold text-brand-accent">$0.10</span>
-                    <span className="text-sm text-brand-text-secondary">
-                      per query
-                    </span>
-                  </div>
-                  <ul className="text-sm text-brand-text-secondary list-disc pl-5 space-y-1">
-                    <li>Unlimited queries</li>
-                    <li>Pay only for what you use</li>
-                    <li>No action required - automatic upgrade</li>
-                  </ul>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Plan Management Modal removed */}
     </div>
   );
 }

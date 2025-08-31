@@ -419,12 +419,11 @@ async function fetchWebsiteData(websiteId: string) {
   const websiteRows = (await query(
     `SELECT id, url, name, type, customType, plan, active, monthlyQueries,
             queryLimit, lastSyncedAt, customInstructions, color, botName,
-            customWelcomeMessage, iconBot, iconVoice, iconMessage, clickMessage,
-            removeHighlight, userId, allowAutoCancel, allowAutoReturn,
+            customWelcomeMessage, userId, allowAutoCancel, allowAutoReturn,
             allowAutoExchange, allowAutoClick, allowAutoScroll, allowAutoHighlight,
             allowAutoRedirect, allowAutoGetUserOrders, allowAutoUpdateUserInfo,
             allowAutoFillForm, allowAutoTrackOrder, allowAutoLogout, allowAutoLogin,
-            allowAutoGenerateImage, allowMultiAIReview, showVoiceAI, showTextAI
+            allowAutoGenerateImage, showVoiceAI, showTextAI
      FROM Website WHERE id = ? LIMIT 1`,
     [websiteId]
   )) as any[];
@@ -470,7 +469,6 @@ async function fetchWebsiteData(websiteId: string) {
     allowAutoLogout: !!baseWebsite.allowAutoLogout,
     allowAutoLogin: !!baseWebsite.allowAutoLogin,
     allowAutoGenerateImage: !!baseWebsite.allowAutoGenerateImage,
-    allowMultiAIReview: !!baseWebsite.allowMultiAIReview,
     showVoiceAI: !!baseWebsite.showVoiceAI,
     showTextAI: !!baseWebsite.showTextAI,
     lastSyncedAt: baseWebsite.lastSyncedAt
@@ -530,21 +528,24 @@ async function fetchWebsiteData(websiteId: string) {
       [conv.id]
     )) as any[];
 
-    const messages: Message[] = chatRows.map((m) => ({
-      id: m.id,
-      createdAt: new Date(m.createdAt),
-      content: m.content,
-      type: m.messageType === "user" ? "text" : "ai",
-      threadId: conv.id,
-      role: m.messageType === "user" ? "user" : "assistant",
-      pageUrl: null,
-      scrollToText: null,
-      // Add action data for processing
-      action: m.action,
-      actionType: m.actionType,
-      research: m.research,
-      researchContext: m.researchContext,
-    } as any));
+    const messages: Message[] = chatRows.map(
+      (m) =>
+        ({
+          id: m.id,
+          createdAt: new Date(m.createdAt),
+          content: m.content,
+          type: m.messageType === "user" ? "text" : "ai",
+          threadId: conv.id,
+          role: m.messageType === "user" ? "user" : "assistant",
+          pageUrl: null,
+          scrollToText: null,
+          // Add action data for processing
+          action: m.action,
+          actionType: m.actionType,
+          research: m.research,
+          researchContext: m.researchContext,
+        } as any)
+    );
 
     if (messages.length > 0) {
       console.log(`TextConversation ${conv.id}: ${messages.length} messages`);
@@ -573,21 +574,24 @@ async function fetchWebsiteData(websiteId: string) {
       [conv.id]
     )) as any[];
 
-    const messages: Message[] = chatRows.map((m) => ({
-      id: m.id,
-      createdAt: new Date(m.createdAt),
-      content: m.content,
-      type: m.messageType === "user" ? "voice" : "ai",
-      threadId: conv.id,
-      role: m.messageType === "user" ? "user" : "assistant",
-      pageUrl: null,
-      scrollToText: null,
-      // Add action data for processing
-      action: m.action,
-      actionType: m.actionType,
-      research: m.research,
-      researchContext: m.researchContext,
-    } as any));
+    const messages: Message[] = chatRows.map(
+      (m) =>
+        ({
+          id: m.id,
+          createdAt: new Date(m.createdAt),
+          content: m.content,
+          type: m.messageType === "user" ? "voice" : "ai",
+          threadId: conv.id,
+          role: m.messageType === "user" ? "user" : "assistant",
+          pageUrl: null,
+          scrollToText: null,
+          // Add action data for processing
+          action: m.action,
+          actionType: m.actionType,
+          research: m.research,
+          researchContext: m.researchContext,
+        } as any)
+    );
 
     if (messages.length > 0) {
       console.log(`VoiceConversation ${conv.id}: ${messages.length} messages`);
@@ -872,10 +876,16 @@ function processThreadsAndMessages(aiThreads: Thread[], stats: any) {
             purchases,
             actionsDetails
           );
-        } 
+        }
         // For TextChat/VoiceChat messages (no pageUrl), process actions from action field
         else if (message.pageUrl === null) {
-          console.log(`Processing TextChat/VoiceChat message ${message.id} in thread ${thread.id}: type=${message.type}, role=${message.role}, action=${(message as any).action}, actionType=${(message as any).actionType}`);
+          console.log(
+            `Processing TextChat/VoiceChat message ${message.id} in thread ${
+              thread.id
+            }: type=${message.type}, role=${message.role}, action=${
+              (message as any).action
+            }, actionType=${(message as any).actionType}`
+          );
           processTextVoiceChatActions(
             message,
             thread.id,
@@ -945,37 +955,56 @@ function processTextVoiceChatActions(
   // We need to query the database to get the action information
   // For now, we'll need to extend the Message interface to include action data
   // The action data should be fetched when loading TextChats/VoiceChats in fetchWebsiteData
-  
+
   // Since the action data isn't available in the current Message interface,
   // we'll extract it from the message content or add it to the query
   // For cart actions: add_to_cart, get_cart, delete_from_cart
   // For movement actions: scroll, highlight, navigate, fill_form (in VoiceChats)
   // For order actions: get_order, track_order, return_order, cancel_order, exchange_order (in TextChats)
-  
+
   // We'll need to add action data to the message when fetching from database
   // For now, let's add placeholder processing that we can enhance once we update the fetch logic
   const actionData = (message as any).action; // Will be populated once we update the queries
   const actionType = (message as any).actionType;
-  
+
   // Check if this is a text or voice message to determine which actions to look for
   // Since we can't easily determine if an AI message came from TextChats vs VoiceChats,
   // we'll categorize actions based on the actionType instead
-  const isMovementAction = ["scroll", "highlight", "navigate", "fill_form", "fillForm", "click"].includes(actionType);
-  const isCartAction = ["add_to_cart", "get_cart", "delete_from_cart"].includes(actionType);
-  const isOrderAction = ["get_order", "track_order", "return_order", "cancel_order", "exchange_order"].includes(actionType);
-  
+  const isMovementAction = [
+    "scroll",
+    "highlight",
+    "navigate",
+    "fill_form",
+    "fillForm",
+    "click",
+  ].includes(actionType);
+  const isCartAction = ["add_to_cart", "get_cart", "delete_from_cart"].includes(
+    actionType
+  );
+  const isOrderAction = [
+    "get_order",
+    "track_order",
+    "return_order",
+    "cancel_order",
+    "exchange_order",
+  ].includes(actionType);
+
   // Debug logging
   if (actionData) {
-    console.log(`Found action: ${actionData} (type: ${actionType}) for message ${message.id} in thread ${threadId}`);
+    console.log(
+      `Found action: ${actionData} (type: ${actionType}) for message ${message.id} in thread ${threadId}`
+    );
   }
-  
+
   if (!actionData || !actionType) {
     if (actionData && !actionType) {
-      console.log(`Skipping action with null actionType for message ${message.id}`);
+      console.log(
+        `Skipping action with null actionType for message ${message.id}`
+      );
     }
     return; // No action to process
   }
-  
+
   // Process actions based on their category
   if (isCartAction) {
     // Cart actions
@@ -1001,7 +1030,10 @@ function processTextVoiceChatActions(
         messageId: message.id,
         createdAt: message.createdAt.toISOString(),
         actionType: actionType,
-        scrollToText: actionType === "scroll" ? (message as any).scrollToText || null : null,
+        scrollToText:
+          actionType === "scroll"
+            ? (message as any).scrollToText || null
+            : null,
       });
     }
   } else if (isOrderAction) {
@@ -1920,12 +1952,7 @@ function buildResponseData(
     color: website.color || "#6366F1", // Default color
     botName: website.botName,
     customWelcomeMessage: website.customWelcomeMessage,
-    iconBot: website.iconBot,
-    iconVoice: website.iconVoice,
-    iconMessage: website.iconMessage,
-    clickMessage: website.clickMessage,
     customInstructions: website.customInstructions,
-    removeHighlight: website.removeHighlight,
     allowAutoCancel: website.allowAutoCancel,
     allowAutoReturn: website.allowAutoReturn,
     allowAutoExchange: website.allowAutoExchange,
@@ -2023,9 +2050,11 @@ function buildResponseData(
     movement: [],
     orders: [],
   };
-  
+
   // Debug final action counts
-  console.log(`Final action counts: cart=${base.actionDetails.cart.length}, movement=${base.actionDetails.movement.length}, orders=${base.actionDetails.orders.length}`);
+  console.log(
+    `Final action counts: cart=${base.actionDetails.cart.length}, movement=${base.actionDetails.movement.length}, orders=${base.actionDetails.orders.length}`
+  );
 
   // Embed full messages for each action entry so the frontend can render conversations directly
   try {

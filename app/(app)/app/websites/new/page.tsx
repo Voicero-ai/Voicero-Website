@@ -4,9 +4,7 @@ import React, { useState } from "react";
 import { motion } from "framer-motion";
 import {
   FaWordpress,
-  FaShopify,
   FaKey,
-  FaCheck,
   FaCopy,
   FaCode,
   FaNodeJs,
@@ -22,9 +20,8 @@ import { useRouter } from "next/navigation";
 interface NewWebsiteForm {
   name: string;
   url: string;
-  type: "WordPress" | "Shopify" | "Custom" | "";
+  type: "WordPress" | "Custom" | "";
   customType: string;
-  plan: "Starter" | "";
 }
 
 export default function NewWebsite() {
@@ -36,7 +33,6 @@ export default function NewWebsite() {
     url: "",
     type: "",
     customType: "",
-    plan: "Starter", // Default to Starter plan
   });
   const [generatedKey] = useState<string>(() => {
     const chars =
@@ -78,7 +74,6 @@ export default function NewWebsite() {
         body: JSON.stringify({
           ...form,
           accessKey: generatedKey,
-          plan: "Starter", // Always use Starter plan
         }),
       });
 
@@ -88,27 +83,8 @@ export default function NewWebsite() {
         throw new Error(data.error || "Failed to create website");
       }
 
-      // Always redirect to Stripe for payment
-      const stripeResponse = await fetch("/api/stripe/session", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          websiteData: data.websiteData,
-          successUrl: `${window.location.origin}/app/websites/new/complete?session_id={CHECKOUT_SESSION_ID}`,
-          cancelUrl: `${window.location.origin}/app/websites/new?canceled=true`,
-        }),
-      });
-
-      const stripeData = await stripeResponse.json();
-      if (!stripeResponse.ok) {
-        throw new Error(
-          stripeData.error || "Failed to create checkout session"
-        );
-      }
-
-      window.location.href = stripeData.url;
+      // Redirect to websites page
+      router.push("/app/websites");
     } catch (error) {
       setError(error instanceof Error ? error.message : "Something went wrong");
     } finally {
@@ -237,35 +213,35 @@ export default function NewWebsite() {
 
                 <button
                   type="button"
-                  onClick={() => handleFormChange("type", "Shopify")}
+                  onClick={() => handleFormChange("type", "Custom")}
                   className={`flex items-center gap-3 p-4 rounded-xl border-2 transition-colors
                            ${
-                             form.type === "Shopify"
+                             form.type === "Custom"
                                ? "border-brand-accent bg-brand-accent/5"
                                : "border-brand-lavender-light/20 hover:border-brand-accent/20"
                            }`}
                 >
-                  <FaShopify
+                  <FaCode
                     className={`w-6 h-6 ${
-                      form.type === "Shopify"
+                      form.type === "Custom"
                         ? "text-brand-accent"
                         : "text-brand-text-secondary"
                     }`}
                   />
                   <span
                     className={
-                      form.type === "Shopify"
+                      form.type === "Custom"
                         ? "text-brand-accent"
                         : "text-brand-text-secondary"
                     }
                   >
-                    Shopify
+                    Custom
                   </span>
                 </button>
               </div>
 
-              {/* Custom Code Type Dropdown - Keep this section commented out as in the original code */}
-              {/* {form.type === "Custom" && (
+              {/* Custom Code Type Dropdown */}
+              {form.type === "Custom" && (
                 <div className="mt-4">
                   <label className="block text-sm font-medium text-brand-text-secondary mb-2">
                     Custom Website Technology
@@ -589,7 +565,7 @@ export default function NewWebsite() {
                     </button>
                   </div>
                 </div>
-              )} */}
+              )}
             </div>
 
             {/* Access Key Option */}
@@ -629,70 +605,6 @@ export default function NewWebsite() {
           </div>
         </div>
 
-        {/* Plan Information - Show only Starter Plan */}
-        <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/20 overflow-hidden">
-          <div className="p-6 border-b border-brand-lavender-light/20">
-            <h2 className="text-xl font-semibold text-brand-text-primary">
-              Subscription Plan
-            </h2>
-          </div>
-
-          <div className="p-6">
-            <div className="max-w-md mx-auto">
-              {/* Only Starter Plan */}
-              <div className="p-6 rounded-xl border-2 text-left transition-colors bg-gray-100 border-brand-accent bg-brand-accent/5">
-                <h3 className="text-xl font-semibold text-brand-text-primary mb-2">
-                  Starter Plan
-                </h3>
-                <p className="text-brand-text-secondary mb-4">
-                  Professional AI for your website
-                </p>
-                <p className="text-3xl font-bold text-brand-accent mb-2">
-                  $1
-                  <span className="text-base font-normal text-brand-text-secondary">
-                    /query
-                  </span>
-                </p>
-                <ul className="space-y-2 mb-4">
-                  <li className="flex items-start">
-                    <div className="flex-shrink-0 h-5 w-5 text-brand-accent">
-                      <FaCheck className="h-5 w-5" />
-                    </div>
-                    <span className="ml-2 text-brand-text-secondary">
-                      100 monthly queries
-                    </span>
-                  </li>
-                </ul>
-
-                <p className="mt-4 text-sm text-brand-text-secondary">
-                  By creating a website, you agree to subscribe to the Starter
-                  plan at $1/query.
-                </p>
-              </div>
-
-              {/* Enterprise Plan Information */}
-              <div className="mt-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                <h3 className="text-lg font-semibold mb-2 text-black">
-                  Enterprise Plan
-                </h3>
-                <p className="text-sm text-black mb-2">
-                  When you exceed your Starter plan limit of 1000 queries,
-                  you'll automatically be upgraded to our Enterprise plan.
-                </p>
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="font-bold text-brand-accent">$0.10</span>
-                  <span className="text-sm text-black">per query</span>
-                </div>
-                <ul className="text-sm text-brand-text-secondary list-disc pl-5 space-y-1">
-                  <li>Unlimited queries</li>
-                  <li>Pay only for what you use</li>
-                  <li>No action required - automatic upgrade</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        </div>
-
         {/* Submit Button */}
         <div className="flex justify-end gap-4">
           <motion.button
@@ -715,7 +627,7 @@ export default function NewWebsite() {
                      hover:shadow-xl hover:shadow-brand-accent/30 transition-shadow
                      disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isSubmitting ? "Creating..." : "Create Website ($1/query)"}
+            {isSubmitting ? "Creating..." : "Create Website"}
           </motion.button>
         </div>
       </form>

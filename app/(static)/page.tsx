@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import WebsitePreview from "../../components/WebsitePreview";
+import ShopifySetupForm from "../../components/ShopifySetupForm";
 
 const VoiceroWebsite = () => {
   const [particles, setParticles] = useState<any[]>([]);
@@ -36,31 +37,74 @@ const VoiceroWebsite = () => {
   const containerRef = useRef(null);
 
   // Function to get installation steps for each platform
-  const getInstallationSteps = (platform: string): string[] => {
+  const getInstallationSteps = (platform: string): React.ReactNode[] => {
     switch (platform) {
       case "WordPress Store":
         return [
-          "Coming Soon",
-          "Install on your site by searching for Voicero AI",
-          "Activate AI and click quick connect",
-          "Create an account",
-          "Click sync and then activate",
+          <a
+            key="wp-1"
+            href="https://wordpress.com/plugins/voicero-ai/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-purple-300 hover:text-purple-200 hover:underline"
+          >
+            Go to wordpress.com/plugins/voicero-ai
+          </a>,
+          "Install for free",
+          "Click the Quick Connect Button",
+          "Click the Sync button",
+          "Click the Activate button",
         ];
       case "Shopify Store":
         return [
-          "Install on your site by searching for Voicero AI",
-          "Activate AI and click quick connect",
-          "Create an account",
-          "Click sync and then activate",
-          "Got to App Embeds and Toggle it on",
+          <div key="shopify-instructions" className="mb-4 w-full">
+            <div className="space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="w-full">
+                  <p className="text-gray-300 mb-3">
+                    Fill out the form below with your Shopify store details.
+                  </p>
+                  <div className="mt-4 mb-6">
+                    <ShopifySetupForm />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <span className="bg-purple-500/30 text-purple-300 font-bold rounded-full w-6 h-6 flex items-center justify-center text-xs flex-shrink-0 mt-0.5">
+                  2
+                </span>
+                <p className="text-gray-300">
+                  Wait 1 hour for a response and follow email instructions.
+                </p>
+              </div>
+
+              <div className="flex items-start gap-3">
+                <span className="bg-purple-500/30 text-purple-300 font-bold rounded-full w-6 h-6 flex items-center justify-center text-xs flex-shrink-0 mt-0.5">
+                  3
+                </span>
+                <p className="text-gray-300">
+                  Click the Sync button and then Activate.
+                </p>
+              </div>
+            </div>
+          </div>,
         ];
       case "Custom Store":
         return [
-          "Coming Soon",
-          "Create an account",
-          "Add a website and put in info",
-          "Sync your website",
-          "Copy script and put in main code",
+          <a
+            key="custom-1"
+            href="https://www.voicero.ai/getStarted"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-purple-300 hover:text-purple-200 hover:underline"
+          >
+            Go to voicero.ai/getStarted
+          </a>,
+          "Create account and Verify",
+          "Go to Websites and connect a website",
+          "Fill in your website information",
+          "Follow Sync instructions and Activate",
         ];
       default:
         return [];

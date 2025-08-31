@@ -1,18 +1,18 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../../lib/auth";
-import { query } from '../../../../lib/db';
+import { query } from "../../../../lib/db";
 import { z } from "zod";
+import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
 
 const createWebsiteSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   url: z.string().url("Invalid URL"),
-  type: z.enum(["WordPress", "Shopify", "Custom"]),
+  type: z.enum(["WordPress", "Custom"]),
   customType: z.string().optional().default(""),
   accessKey: z.string(),
-  plan: z.enum(["Starter", "Enterprise"]),
 });
 
 export async function POST(request: Request) {
@@ -47,18 +47,49 @@ export async function POST(request: Request) {
       );
     }
 
-    // Don't create the website yet - just return the validated data
-    // The website will be created after payment confirmation
-    return NextResponse.json({
-      websiteData: {
-        name,
-        url,
-        type,
-        accessKey,
-        userId: session.user.id,
-      },
-      checkoutUrl: true,
-    });
+    // Create website in the database with explicit UUID
+    const customType = body.customType || "";
+    // Generate a UUID for the website
+    const websiteId = crypto.randomUUID();
+
+    try {
+      // First, insert the website into the database with explicit ID
+      // Set active to false (0) by default
+      await query(
+        `INSERT INTO Website (id, userId, name, url, type, customType, active) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [websiteId, session.user.id, name, url, type, customType, false]
+      );
+
+      // Then create AccessKey entry linked to the website
+      const accessKeyId = crypto.randomUUID();
+      await query(
+        `INSERT INTO AccessKey (id, name, \`key\`, websiteId, createdAt) VALUES (?, ?, ?, ?, NOW())`,
+        [accessKeyId, name + " Key", accessKey, websiteId]
+      );
+
+      return NextResponse.json({
+        success: true,
+        websiteId,
+        message: "Website created successfully",
+        websiteData: {
+          id: websiteId,
+          name,
+          url,
+          type,
+          customType,
+          accessKey,
+          userId: session.user.id,
+        },
+      });
+    } catch (dbError: any) {
+      console.error("Database error:", dbError);
+      return NextResponse.json(
+        {
+          error: "Failed to create website in database",
+        },
+        { status: 500 }
+      );
+    }
   } catch (error: any) {
     console.error("Error validating website data:", error);
     return NextResponse.json(
