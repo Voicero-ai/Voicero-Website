@@ -14,6 +14,7 @@ interface Website {
   name: string;
   url: string;
   type: string;
+  customType: string;
   plan: string;
   active: boolean;
   monthlyQueries: number;
@@ -23,6 +24,12 @@ interface Website {
   lastSyncedAt: Date | null;
   customInstructions: string | null;
   color: string | null;
+  aiAssistantId: string | null;
+  aiVoiceAssistantId: string | null;
+  analysis: string | null;
+  lastAnalysedAt: Date | null;
+  customWelcomeMessage: string | null;
+  botName: string | null;
   allowAutoCancel: boolean;
   allowAutoReturn: boolean;
   allowAutoExchange: boolean;
@@ -37,19 +44,12 @@ interface Website {
   allowAutoLogout: boolean;
   allowAutoLogin: boolean;
   allowAutoGenerateImage: boolean;
-  removeHighlight: boolean;
-  customWelcomeMessage: string | null;
-  botName: string | null;
-  iconBot: string | null;
-  iconVoice: string | null;
-  iconMessage: string | null;
-  allowMultiAIReview: boolean;
-  clickMessage: string | null;
+  newAiSynced: boolean;
+  showVoiceAI: boolean;
+  showTextAI: boolean;
   showHome: boolean;
   showNews: boolean;
   showHelp: boolean;
-  showVoiceAI: boolean;
-  showTextAI: boolean;
 }
 
 interface PopUpQuestion {
@@ -61,7 +61,8 @@ interface PopUpQuestion {
 interface VectorDbConfig {
   id: string;
   websiteId: string;
-  namespace: string;
+  MainNamespace: string;
+  QANamespace: string;
 }
 
 interface ShopifyPage {
@@ -370,15 +371,8 @@ export async function GET(request: NextRequest) {
           allowAutoLogout: website.allowAutoLogout,
           allowAutoLogin: website.allowAutoLogin,
           allowAutoGenerateImage: website.allowAutoGenerateImage,
-          removeHighlight: website.removeHighlight,
           customWelcomeMessage: website.customWelcomeMessage,
           botName: website.botName,
-          iconBot: website.iconBot,
-          iconVoice: website.iconVoice,
-          iconMessage: website.iconMessage,
-          allowMultiAIReview: website.allowMultiAIReview,
-          clickMessage: website.clickMessage,
-          // Interface settings
           showHome: Boolean(website.showHome),
           showNews: Boolean(website.showNews),
           showHelp: Boolean(website.showHelp),

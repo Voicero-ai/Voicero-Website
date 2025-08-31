@@ -11,8 +11,17 @@ export async function verifyToken(authHeader: string | null): Promise<boolean> {
 
     console.log("token", token);
 
-    // Use the improved database connection with retry logic
-    // Add a more specific query with a LIMIT to reduce data transfer
+    // First check AccessKey table (unencrypted keys)
+    const accessKeys = await query(
+      "SELECT `key` FROM AccessKey WHERE `key` = ?",
+      [token]
+    );
+
+    if (accessKeys && (accessKeys as any[]).length > 0) {
+      return true;
+    }
+
+    // If not found in AccessKey, check hashKeys table
     const rows = await query("SELECT hashedKey FROM hashKeys LIMIT 100");
 
     // Check the token against all stored hashed keys
@@ -40,6 +49,17 @@ export async function getWebsiteIdFromToken(
 
     const token = authHeader.substring(7);
 
+    // First check AccessKey table (unencrypted keys)
+    const accessKeys = await query(
+      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
+      [token]
+    );
+
+    if (accessKeys && (accessKeys as any[]).length > 0) {
+      return (accessKeys as any[])[0].websiteId;
+    }
+
+    // If not found in AccessKey, check hashKeys table
     const rows = await query(
       "SELECT websiteId, hashedKey FROM hashKeys LIMIT 100"
     );
