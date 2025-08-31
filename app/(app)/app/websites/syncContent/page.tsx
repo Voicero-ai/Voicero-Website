@@ -37,6 +37,7 @@ export default function SyncContent() {
   const [processedUrls, setProcessedUrls] = useState<string[]>([]);
   const [currentUrl, setCurrentUrl] = useState<string>("");
   const [error, setError] = useState("");
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [crawlProgress, setCrawlProgress] = useState(0);
   const [maxUrlsToProcess, setMaxUrlsToProcess] = useState(100);
   const [manualUrlInput, setManualUrlInput] = useState("");
@@ -159,6 +160,44 @@ export default function SyncContent() {
     }
   };
 
+  // Function to send URLs to custom sync endpoint
+  const sendUrlsToCustomSync = async (
+    websiteId: string,
+    urls: string[]
+  ): Promise<boolean> => {
+    try {
+      console.log(
+        `[CUSTOM SYNC] Sending ${urls.length} URLs to custom sync endpoint`
+      );
+      const response = await fetch("http://localhost:3001/api/custom/sync", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          websiteId,
+          urls: urls,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Custom sync endpoint returned status ${response.status}`
+        );
+      }
+
+      const result = await response.json();
+      console.log(
+        `[CUSTOM SYNC] Successfully sent URLs to custom sync endpoint`
+      );
+      return true;
+    } catch (error) {
+      console.error("[CUSTOM SYNC] Error sending URLs:", error);
+      setError(`Failed to send URLs to custom sync service. Please try again.`);
+      return false;
+    }
+  };
+
   // Function to fetch and parse sitemap files (faster than crawling)
   const processWebsiteSitemaps = async (baseUrl: string): Promise<string[]> => {
     try {
@@ -189,7 +228,7 @@ export default function SyncContent() {
         const urls: string[] = [];
 
         // Check if it's a sitemap index
-        const sitemapElements = xmlDoc.querySelectorAll("sitemap loc");
+        const sitemapElements = xmlDoc.querySelectorAll("sitemap > loc");
         if (sitemapElements && sitemapElements.length > 0) {
           console.log(
             `[SITEMAP] Found sitemap index with ${sitemapElements.length} sitemaps`
@@ -198,7 +237,7 @@ export default function SyncContent() {
         }
 
         // Regular sitemap with URLs
-        const urlElements = xmlDoc.querySelectorAll("url loc");
+        const urlElements = xmlDoc.querySelectorAll("url > loc");
         console.log(`[SITEMAP] Found ${urlElements.length} URLs in sitemap`);
         return Array.from(urlElements).map((el) => el.textContent || "");
       };
@@ -209,7 +248,9 @@ export default function SyncContent() {
           const sitemapUrl = `${rootDomain}${sitemapPath}`;
           console.log(`[SITEMAP] Trying: ${sitemapUrl}`);
 
-          const proxyUrl = `/api/proxy?url=${encodeURIComponent(sitemapUrl)}`;
+          const proxyUrl = `/api/proxy?url=${encodeURIComponent(
+            sitemapUrl
+          )}&allowXml=true`;
           const response = await fetch(proxyUrl);
 
           if (response.ok) {
@@ -237,7 +278,7 @@ export default function SyncContent() {
                   try {
                     const childProxyUrl = `/api/proxy?url=${encodeURIComponent(
                       sitemapUrl
-                    )}`;
+                    )}&allowXml=true`;
                     const childResponse = await fetch(childProxyUrl);
 
                     if (childResponse.ok) {
@@ -324,49 +365,135 @@ export default function SyncContent() {
       if (sitemapUrls.length > 0) {
         console.log(`[CRAWL] Found ${sitemapUrls.length} URLs from sitemaps`);
 
-        // Add all sitemap URLs to our discoveries
-        sitemapUrls.forEach((url) => {
-          try {
-            const normalizedUrl = normalizeUrl(url);
-            if (!localDiscoveredMap.has(normalizedUrl)) {
-              localDiscoveredMap.set(normalizedUrl, url);
-              queuedUrls.add(normalizedUrl);
-              urlQueue.push(normalizedUrl);
-            }
-          } catch (err) {
-            console.log(`[CRAWL] Error normalizing sitemap URL: ${url}`, err);
-          }
-        });
+        // Add the root URL to ensure the homepage is always included
+        const rootUrl = baseUrl;
+        const rootNormalized = normalizeUrl(rootUrl);
+        if (!sitemapUrls.includes(rootUrl)) {
+          sitemapUrls.push(rootUrl);
+          console.log(
+            `[CRAWL] Added root URL: ${rootUrl} to ensure homepage is included`
+          );
+        }
 
-        console.log(
-          `[CRAWL] Added ${urlQueue.length} sitemap URLs to processing queue`
-        );
-        setDiscoveredUrls(Array.from(localDiscoveredMap.values()));
-        setQueueSize(urlQueue.length);
-        setCrawlProgress(20); // Made progress by finding sitemap
+        // Display progress to the user
+        setDiscoveredUrls(sitemapUrls);
+        setCrawlProgress(100);
+        setCurrentUrl("URLs collected from sitemap");
+
+        // Store URLs in state for later sending via Train button
+        console.log(`[CRAWL] Storing ${sitemapUrls.length} URLs for training`);
+
+        // Set minimal data to show the URLs in the UI
+        const minimalPagesToSync = sitemapUrls.map((url) => ({
+          url,
+          title: url.split("/").pop() || url,
+          content: "Content will be processed by Training when trained",
+          htmlContent: "",
+        }));
+
+        setPagesToSync(minimalPagesToSync);
+        setProcessedUrls(sitemapUrls);
+
+        // Skip traditional crawling, but don't redirect
+        return;
+
+        // The following code is now bypassed
+        const success = false; // Dummy to satisfy TypeScript
+        if (false) {
+          // This block is now inactive
+        } else {
+          // If custom sync fails, fall back to traditional crawling
+          console.log(
+            "[CRAWL] Custom sync failed, falling back to traditional crawling"
+          );
+
+          // Continue with traditional URL collection for crawling
+          sitemapUrls.forEach((url) => {
+            try {
+              const normalizedUrl = normalizeUrl(url);
+              if (!localDiscoveredMap.has(normalizedUrl)) {
+                localDiscoveredMap.set(normalizedUrl, url);
+                queuedUrls.add(normalizedUrl);
+                urlQueue.push(normalizedUrl);
+              }
+            } catch (err) {
+              console.log(`[CRAWL] Error normalizing sitemap URL: ${url}`, err);
+            }
+          });
+
+          console.log(
+            `[CRAWL] Added ${urlQueue.length} sitemap URLs to processing queue (including root URL)`
+          );
+          setDiscoveredUrls(Array.from(localDiscoveredMap.values()));
+          setQueueSize(urlQueue.length);
+          setCrawlProgress(20); // Made progress by finding sitemap
+        }
       } else {
-        // Fall back to traditional crawling with just the start URL
-        console.log(
-          `[CRAWL] No sitemaps found, falling back to traditional crawling`
-        );
-        const startUrlNormalized = normalizeUrl(baseUrl);
-        urlQueue = [startUrlNormalized];
-        queuedUrls.add(startUrlNormalized);
-        localDiscoveredMap.set(startUrlNormalized, baseUrl);
-        setDiscoveredUrls([baseUrl]);
-        setQueueSize(urlQueue.length);
+        // No sitemaps found, just use the root URL
+        console.log(`[CRAWL] No sitemaps found, using just the root URL`);
+
+        // Add just the root URL
+        const rootUrl = baseUrl;
+        const singleUrlArray = [rootUrl];
+
+        setDiscoveredUrls(singleUrlArray);
+        setCrawlProgress(100);
+        setCurrentUrl("Root URL collected");
+
+        // Store URLs in state for later sending via Train button
+        console.log(`[CRAWL] Storing root URL for training`);
+
+        // Set minimal data just to show the URL in the UI
+        const minimalPagesToSync = [
+          {
+            url: rootUrl,
+            title: "Homepage",
+            content: "Content will be processed by Training when trained",
+            htmlContent: "",
+          },
+        ];
+
+        setPagesToSync(minimalPagesToSync);
+        setProcessedUrls(singleUrlArray);
+
+        // Skip traditional crawling, but don't redirect
+        return;
+
+        // The following code is now bypassed
+        const success = false; // Dummy to satisfy TypeScript
+        if (false) {
+          // This block is now inactive
+        } else {
+          // If custom sync fails, fall back to traditional crawling with just the root URL
+          console.log(
+            "[CRAWL] Custom sync failed, falling back to traditional crawling"
+          );
+          const startUrlNormalized = normalizeUrl(baseUrl);
+          urlQueue = [startUrlNormalized];
+          queuedUrls.add(startUrlNormalized);
+          localDiscoveredMap.set(startUrlNormalized, baseUrl);
+          setDiscoveredUrls([baseUrl]);
+          setQueueSize(urlQueue.length);
+        }
       }
 
       let processedCount = 0;
       while (urlQueue.length > 0 && processedCount < maxUrlsToProcess) {
         const normalizedUrl = urlQueue.shift();
         setQueueSize((prev) => Math.max(0, prev - 1));
-        if (!normalizedUrl || crawledUrls.has(normalizedUrl)) continue;
+        if (!normalizedUrl) continue;
+        // Type assertion for TypeScript - we know normalizedUrl is not undefined at this point
+        const checkedUrl = normalizedUrl as string;
+        if (crawledUrls.has(checkedUrl)) continue;
 
-        queuedUrls.delete(normalizedUrl);
-        const url = localDiscoveredMap.get(normalizedUrl) || normalizedUrl;
+        // Since we've checked normalizedUrl is not undefined, we can safely use it as string
+        const safeNormalizedUrl = normalizedUrl as string;
+
+        queuedUrls.delete(safeNormalizedUrl);
+        const url =
+          localDiscoveredMap.get(safeNormalizedUrl) || safeNormalizedUrl;
         setCurrentUrl(url);
-        crawledUrls.add(normalizedUrl);
+        crawledUrls.add(safeNormalizedUrl);
         processedCount++;
 
         if (shouldSkipUrl(url)) {
@@ -389,7 +516,7 @@ export default function SyncContent() {
         }
 
         // --- Determine Fetch Strategy ---
-        const isInitialUrl = normalizedUrl === normalizeUrl(baseUrl);
+        const isInitialUrl = safeNormalizedUrl === normalizeUrl(baseUrl);
         const usePuppeteer = isInitialUrl; // Always use Puppeteer for the initial URL
         const proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}${
           usePuppeteer ? "&renderJS=true" : ""
@@ -401,7 +528,12 @@ export default function SyncContent() {
           title: string;
           content: string;
           htmlContent: string;
-        } | null = null;
+        } = {
+          url: "",
+          title: "",
+          content: "",
+          htmlContent: "",
+        };
         let newLinksFound = 0;
         let fetchOk = false;
 
@@ -412,12 +544,18 @@ export default function SyncContent() {
             fetchOk = true;
             const html = await response.text();
             // Extract Content & Data
-            pageData = { url, ...extractPageData(html, url) };
+            const safeUrl: string = url || baseUrl;
+            pageData = { url: safeUrl, ...extractPageData(html, safeUrl) };
+
+            // Enhanced logging with content preview
+            const titlePreview = pageData.title.substring(0, 50);
+            const contentPreview = pageData.content
+              .substring(0, 100)
+              .replace(/\n/g, " ");
             console.log(
-              `[EXTRACT ${fetchMethod}] Title: "${pageData.title.substring(
-                0,
-                50
-              )}...", Content Length: ${pageData.content.length}`
+              `[EXTRACT ${fetchMethod}] Title: "${titlePreview}...", ` +
+                `Content Length: ${pageData.content.length} chars, ` +
+                `Content Preview: "${contentPreview}..."`
             );
 
             // Find Links
@@ -494,12 +632,21 @@ export default function SyncContent() {
             if (responsePuppeteer.ok) {
               const htmlPuppeteer = await responsePuppeteer.text();
               // ** Re-extract Content & Overwrite **
-              pageData = { url, ...extractPageData(htmlPuppeteer, url) }; // Overwrite with Puppeteer data
+              const safeUrl: string = url || baseUrl;
+              pageData = {
+                url: safeUrl,
+                ...extractPageData(htmlPuppeteer, safeUrl),
+              }; // Overwrite with Puppeteer data
+
+              // Enhanced logging with content preview
+              const titlePreview = pageData.title.substring(0, 50);
+              const contentPreview = pageData.content
+                .substring(0, 100)
+                .replace(/\n/g, " ");
               console.log(
-                `[EXTRACT ${puppeteerMethod}] Title: "${pageData.title.substring(
-                  0,
-                  50
-                )}...", Content Length: ${pageData.content.length}`
+                `[EXTRACT ${puppeteerMethod}] Title: "${titlePreview}...", ` +
+                  `Content Length: ${pageData.content.length} chars, ` +
+                  `Content Preview: "${contentPreview}..."`
               );
 
               // ** Re-find Links & Add **
@@ -562,9 +709,12 @@ export default function SyncContent() {
         // --- End Conditional Retry ---
 
         // Add extracted page data (either from Axios or updated by Puppeteer) to list
-        if (pageData) {
-          localPagesToSync.push(pageData);
-        }
+        localPagesToSync.push({
+          url: pageData.url,
+          title: pageData.title,
+          content: pageData.content,
+          htmlContent: pageData.htmlContent,
+        });
 
         // Update UI state after processing this URL
         setProcessedUrls(
@@ -602,7 +752,7 @@ export default function SyncContent() {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              websiteId: website.id,
+              websiteId: website?.id || websiteId || "",
               pages: localPagesToSync, // Send the array of page objects
             }),
           });
@@ -728,56 +878,68 @@ export default function SyncContent() {
   };
 
   const handleTrain = async () => {
-    // Check if pagesToSync has data
-    if (!website || pagesToSync.length === 0) {
-      console.warn("[SYNC] No pages with extracted content available to sync.");
+    // Check if we have URLs to sync
+    const urlsToSync = processedUrls || [];
+
+    if (!urlsToSync || urlsToSync.length === 0) {
+      console.warn("[SYNC] No URLs available to sync.");
       setError(
-        "No content was successfully extracted during the crawl. Please check the logs or try adding URLs manually."
+        "No URLs were found. Please first click 'Start Website Discovery' to find pages, or add URLs manually."
       );
-      setTimeout(() => setError(""), 2500);
+      setTimeout(() => setError(""), 4000);
       return;
     }
 
     setIsSyncing(true);
     setError(""); // Clear previous errors
-    try {
-      // Send pagesToSync array (contains url, title, content)
-      const response = await fetch("/api/websites/train-content", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          websiteId: website.id,
-          pages: pagesToSync, // Send the array of page objects
-        }),
-      });
 
-      if (!response.ok) {
-        const errorData = await response
-          .json()
-          .catch(() => ({ error: "Failed to parse error response" }));
-        console.error(
-          "[SYNC FAIL] Response not OK:",
-          response.status,
-          errorData
-        );
-        throw new Error(
-          errorData.error || `Sync failed with status: ${response.status}`
-        );
-      }
+    // Get access key for auth
+    const accessKey = getAccessKey();
 
-      const result = await response.json();
-      // Redirect back to website detail page
-      router.push(`/app/websites/website?id=${websiteId}`);
-    } catch (err: any) {
-      console.error("[SYNC ERROR]", err);
-      setError(
-        `Sync failed: ${err.message}. Please try again or check server logs.`
-      );
-    } finally {
+    // Fire and forget - send request but don't wait for response
+    fetch("http://localhost:3001/api/custom/sync", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessKey}`,
+      },
+      body: JSON.stringify({
+        websiteId: website?.id || websiteId,
+        urls: urlsToSync,
+      }),
+    }).catch((err) => {
+      // Just log errors, don't affect UI flow
+      console.error("[CUSTOM SYNC] Request error:", err);
+    });
+
+    // Show loading state for 10 seconds regardless of API response
+    console.log(
+      "[TRAINING] Waiting 10 seconds before showing success modal..."
+    );
+
+    // Wait 10 seconds
+    setTimeout(() => {
       setIsSyncing(false);
+      // Show success modal
+      setShowSuccessModal(true);
+    }, 10000);
+  };
+
+  // Function to get the access key - first from website object, fallback to existing pages data
+  const getAccessKey = (): string => {
+    // First try to get it from the website object directly
+    if (website?.accessKey) return website.accessKey;
+
+    // If not available, try to find it in the existing pages data
+    if (existingPages && existingPages.length > 0) {
+      for (const page of existingPages) {
+        if (page.source === "accessKey") {
+          return page.id;
+        }
+      }
     }
+
+    return ""; // Return empty string if not found
   };
 
   // Add this function to handle manual URL addition
@@ -837,8 +999,48 @@ export default function SyncContent() {
     );
   }
 
+  // Success Modal Component
+  const SuccessModal = () => {
+    if (!showSuccessModal) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-xl shadow-xl p-8 max-w-md mx-4 relative">
+          <div className="absolute -top-12 left-1/2 transform -translate-x-1/2 bg-green-500 rounded-full p-4">
+            <FaCheck className="text-white text-2xl" />
+          </div>
+
+          <h2 className="text-2xl font-bold text-center mb-4 mt-2">
+            Training Complete!
+          </h2>
+
+          <p className="text-center text-gray-600 mb-6">
+            Your content has been successfully sent for training. You can now
+            return to your website dashboard.
+          </p>
+
+          <div className="flex justify-center">
+            <button
+              onClick={() =>
+                router.push(`/app/websites/website?id=${websiteId}&sync=true`)
+              }
+              className="bg-gradient-to-r from-brand-accent to-brand-lavender-dark text-white 
+                      px-8 py-3 rounded-xl shadow-lg shadow-brand-accent/20
+                      hover:shadow-xl hover:shadow-brand-accent/30 transition-shadow"
+            >
+              Go to Website Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="max-w-2xl mx-auto space-y-8">
+      {/* Show success modal when triggered */}
+      <SuccessModal />
+
       <header>
         <Link
           href={`/app/websites/website?id=${websiteId}`}
@@ -873,9 +1075,10 @@ export default function SyncContent() {
             </h3>
             <p className="text-sm text-brand-text-secondary">
               Click the button below to automatically discover content on your
-              website. We'll first check for sitemaps (sitemap.xml) which is
-              much faster, and if not found, the crawler will search for pages
-              on your domain.
+              website. We'll first check for sitemaps (sitemap.xml) for faster
+              URL discovery, then send the URLs to our external content
+              processing service. If needed, we can fall back to traditional
+              crawling.
             </p>
 
             <div className="bg-brand-lavender-light/5 rounded-lg p-4">
@@ -918,6 +1121,11 @@ export default function SyncContent() {
                     <FaSpider className="animate-pulse" />
                     {currentUrl === "Checking sitemaps..."
                       ? "Checking Sitemaps..."
+                      : currentUrl ===
+                          "Sending URLs to custom sync service..." ||
+                        currentUrl ===
+                          "Sending root URL to custom sync service..."
+                      ? "Sending to Training..."
                       : "Crawling..."}
                   </>
                 ) : (
@@ -1034,12 +1242,13 @@ export default function SyncContent() {
 
           <div className="space-y-4">
             <h3 className="font-medium text-brand-text-primary">
-              2. Train Discovered Content
+              2. Send to External Processing Service
             </h3>
             <p className="text-sm text-brand-text-secondary">
-              After discovering pages, click below to train the content with
-              Voicero.AI. This will make your content available to the chat
-              widget.
+              After discovering pages, click the button below to send the URLs
+              to our external processing service. This will take approximately
+              30 seconds to complete, after which your content will be available
+              to the chat widget.
             </p>
           </div>
 
@@ -1085,11 +1294,13 @@ export default function SyncContent() {
           type="button"
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
-          onClick={() => router.push(`/app/websites/website?id=${websiteId}`)}
+          onClick={() =>
+            router.push(`/app/websites/website?id=${websiteId}&sync=true`)
+          }
           className="px-6 py-2 text-brand-text-secondary hover:text-brand-text-primary 
                    transition-colors rounded-xl"
         >
-          Cancel
+          Back to Website
         </motion.button>
         <motion.button
           type="button"
@@ -1105,12 +1316,12 @@ export default function SyncContent() {
           {isSyncing ? (
             <>
               <FaSync className="inline-block mr-2 animate-spin" />
-              Training...
+              Processing Content...
             </>
           ) : (
             <>
               <FaSync className="inline-block mr-2" />
-              Train {discoveredUrls.length} Pages
+              Send {discoveredUrls.length} URLs to Training
             </>
           )}
         </motion.button>

@@ -131,6 +131,21 @@ export default function Docs() {
             View guide <FaArrowRight className="w-4 h-4" />
           </span>
         </Link>
+        <Link
+          href="/docs/custom"
+          className="group bg-gray-900 rounded-xl shadow-sm border border-gray-800 p-6 
+                   hover:border-gray-700 transition-all hover:shadow-md"
+        >
+          <h3 className="text-xl font-semibold text-white mb-1">Custom</h3>
+          <p className="text-gray-300">Custom integration guide</p>
+          <p className="text-gray-300 mb-4">
+            Follow our step-by-step guide to add AI chat capabilities to your
+            custom website.
+          </p>
+          <span className="text-brand-accent group-hover:gap-2 flex items-center gap-1 transition-all">
+            View guide <FaArrowRight className="w-4 h-4" />
+          </span>
+        </Link>
       </div>
 
       {/* Additional Resources */}

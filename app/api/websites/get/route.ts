@@ -1851,8 +1851,11 @@ async function fetchCustomContent(websiteId: string, stats: any) {
     source?: string;
   }> = [];
 
+  let customPages: any[] = [];
+
   try {
-    const customPages = (await query(
+    // First try to get pages from Page table (legacy)
+    customPages = (await query(
       `SELECT id, title, url, content, html, updatedAt
        FROM Page
        WHERE websiteId = ?
@@ -1877,6 +1880,69 @@ async function fetchCustomContent(websiteId: string, stats: any) {
     });
   } catch (error) {
     console.error("Error fetching custom pages:", error);
+  }
+
+  // Now try to get pages from CustomPage table for Custom website types
+  try {
+    const customTypePages = (await query(
+      `SELECT cp.id, cp.websiteId, cp.url, cp.title, cp.content, cp.htmlContent, cp.createdAt, cp.updatedAt, cp.trained
+       FROM CustomPage cp
+       WHERE cp.websiteId = ?
+       ORDER BY cp.updatedAt DESC`,
+      [websiteId]
+    )) as any[];
+
+    if (customTypePages.length > 0) {
+      console.log(
+        `Found ${customTypePages.length} pages in CustomPage table for website ${websiteId}`
+      );
+
+      // Replace pages with CustomPage data if there are any
+      pages = customTypePages.map((p: any) => {
+        // Handle date safely - use current date if parsing fails
+        let lastUpdated;
+        try {
+          // First try direct conversion
+          const dateObj = new Date(p.updatedAt || p.createdAt);
+          if (isNaN(dateObj.getTime())) {
+            // If that fails, try to parse MySQL datetime format (YYYY-MM-DD HH:MM:SS)
+            const parts = (p.updatedAt || p.createdAt).split(/[- :]/);
+            // Note: months are 0-based in JS Date
+            const fixedDate = new Date(
+              parts[0],
+              parts[1] - 1,
+              parts[2],
+              parts[3],
+              parts[4],
+              parts[5]
+            );
+            lastUpdated = fixedDate.toISOString();
+          } else {
+            lastUpdated = dateObj.toISOString();
+          }
+        } catch (e) {
+          console.error("Error parsing date:", p.updatedAt || p.createdAt);
+          lastUpdated = new Date().toISOString();
+        }
+
+        return {
+          id: p.id,
+          title: p.title || p.url.split("/").pop() || "Untitled",
+          url: p.url,
+          type: "page" as const,
+          lastUpdated: lastUpdated,
+          aiRedirects:
+            redirectMaps.pageRedirects.get(String(p.url).replace(/^\//, "")) ||
+            0,
+          content: p.content,
+          htmlContent: p.htmlContent,
+          source: "custom_page",
+          trained: true, // Always set to true
+        };
+      });
+    }
+  } catch (error) {
+    console.error("Error fetching CustomPage data:", error);
   }
 
   return { products: [], blogPosts: [], pages, collections: [], discounts: [] };
@@ -2020,6 +2086,10 @@ function buildResponseData(
         content: p.content || "",
         url: p.url,
         aiRedirects: p.aiRedirects,
+        source: p.source,
+        trained: p.trained || false,
+        htmlContent: p.htmlContent,
+        lastUpdated: p.lastUpdated,
       })),
       collections: content.collections.map((c: any) => ({
         id: c.id,

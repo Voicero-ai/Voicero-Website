@@ -22,6 +22,7 @@ import {
   FaQuestionCircle,
   FaChartLine,
 } from "react-icons/fa";
+import SetupInstructions from "../../../../../components/SetupInstructions";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 
@@ -944,11 +945,14 @@ export default function WebsiteSettings() {
   // Shopify pricing redirect removed (not needed anymore)
 
   // Add this function inside WebsiteSettings component
+  const syncParam = searchParams.get("sync");
+  const syncFromUrl = syncParam === "true";
+
   const handleToggleStatus = async () => {
     if (!websiteData || isToggling) return;
 
-    // Prevent activation if never synced
-    if (!websiteData.lastSync) {
+    // Prevent activation if never synced and no sync=true in URL
+    if (!websiteData.lastSync && !syncFromUrl) {
       setShowSetupModal(true);
       return;
     }
@@ -1334,6 +1338,11 @@ export default function WebsiteSettings() {
                           ({item.productsCount} products)
                         </span>
                       )}
+                    {item.source === "custom_page" && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-800">
+                        Trained
+                      </span>
+                    )}
                   </div>
                   <p className="text-sm text-brand-text-secondary">
                     {domain}
@@ -1694,7 +1703,17 @@ export default function WebsiteSettings() {
                 <div className="flex items-center gap-4">
                   <span>
                     Last updated:{" "}
-                    {new Date(item.lastUpdated).toLocaleDateString()}
+                    {item.lastUpdated
+                      ? (() => {
+                          try {
+                            return new Date(
+                              item.lastUpdated
+                            ).toLocaleDateString();
+                          } catch (e) {
+                            return "Unknown date";
+                          }
+                        })()
+                      : "Unknown date"}
                   </span>
                   {item.type === "product" && item.price && (
                     <span className="font-medium">${item.price}</span>
@@ -1752,7 +1771,7 @@ export default function WebsiteSettings() {
 
     return (
       <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-xl max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="bg-white rounded-xl max-w-4xl w-full overflow-hidden flex flex-col max-h-[90vh]">
           <div className="flex items-center justify-between p-6 border-b border-gray-100">
             <h2 className="text-xl font-semibold text-brand-text-primary">
               Setup Required
@@ -1803,28 +1822,11 @@ export default function WebsiteSettings() {
             </ol>
 
             {isCustom && (
-              <div className="mt-4 p-4 bg-brand-lavender-light/5 rounded-lg mb-6">
-                <p className="text-sm text-brand-text-secondary mb-2">
-                  <strong>Integration tip:</strong> For{" "}
-                  {websiteData?.customType || "custom"} websites, add the
-                  Voicero script before the closing &lt;/body&gt; tag:
-                </p>
-                <div className="max-h-40 overflow-y-auto">
-                  <pre className="mt-2 p-3 bg-gray-800 text-gray-100 rounded-lg text-xs overflow-x-auto">
-                    {`<script>
-  (function(v,o,i,c,e,r,o){v.VoiceroAI=v.VoiceroAI||{};
-  if(v.VoiceroAI.q)return;v.VoiceroAI.q=[];
-  var a=['init'];
-  for(var i=0;i<a.length;i++){!function(e){
-  v.VoiceroAI[e]=function(){v.VoiceroAI.q.push([e,arguments])}}(a[i])}
-  var t=document.createElement('script');
-  t.src='https://cdn.voicero.ai/loader.js';
-  t.async=!0;document.head.appendChild(t);
-  VoiceroAI.init('${websiteData?.accessKey || "YOUR_ACCESS_KEY"}');
-  })();
-</script>`}
-                  </pre>
-                </div>
+              <div className="mt-4 mb-6">
+                <SetupInstructions
+                  accessKey={websiteData?.accessKey || "YOUR_ACCESS_KEY"}
+                  technology={websiteData?.customType || "Regular HTML"}
+                />
               </div>
             )}
 
@@ -1927,12 +1929,16 @@ export default function WebsiteSettings() {
         </div>
         <div className="flex gap-4 relative">
           <motion.button
-            whileHover={{ scale: !websiteData.lastSync ? 1 : 1.02 }}
-            whileTap={{ scale: !websiteData.lastSync ? 1 : 0.98 }}
+            whileHover={{
+              scale: !websiteData.lastSync && !syncFromUrl ? 1 : 1.02,
+            }}
+            whileTap={{
+              scale: !websiteData.lastSync && !syncFromUrl ? 1 : 0.98,
+            }}
             onClick={handleToggleStatus}
-            disabled={isToggling || !websiteData.lastSync}
+            disabled={isToggling || (!websiteData.lastSync && !syncFromUrl)}
             title={
-              !websiteData.lastSync
+              !websiteData.lastSync && !syncFromUrl
                 ? "Please sync your content before activating"
                 : ""
             }
@@ -1941,7 +1947,7 @@ export default function WebsiteSettings() {
                 ? "bg-brand-accent/10 text-brand-accent hover:bg-brand-accent/20"
                 : "bg-brand-lavender-dark text-white hover:bg-brand-lavender-dark/90"
             } ${
-              isToggling || !websiteData.lastSync
+              isToggling || (!websiteData.lastSync && !syncFromUrl)
                 ? "opacity-50 cursor-not-allowed"
                 : ""
             }`}

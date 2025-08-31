@@ -160,7 +160,11 @@ export async function GET(req: NextRequest) {
     }
 
     // Check content type after fetching
-    if (!contentType.includes("text/html")) {
+    const isSitemap =
+      searchParams.get("allowXml") === "true" || finalUrl.includes("sitemap");
+
+    if (!contentType.includes("text/html") && !isSitemap) {
+      // For regular content requests, we only want HTML
       console.warn(
         `[PROXY] Content type mismatch for ${finalUrl}: ${contentType}`
       );
@@ -168,6 +172,16 @@ export async function GET(req: NextRequest) {
         { error: `Content is not HTML (${contentType})` },
         { status: 415 }
       );
+    }
+
+    // Accept XML content for sitemaps
+    if (
+      isSitemap &&
+      (contentType.includes("application/xml") ||
+        contentType.includes("text/xml"))
+    ) {
+      console.log(`[PROXY] Processing sitemap XML: ${finalUrl}`);
+      // Continue processing for XML sitemaps
     }
 
     // Return the HTML content
