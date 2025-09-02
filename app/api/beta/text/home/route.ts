@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as mysql from "mysql2/promise";
-import { verifyToken, getWebsiteIdFromToken } from '../../../../../lib/token-verifier';
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../../../lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -170,7 +173,7 @@ export async function GET(request: NextRequest) {
       [websiteId]
     );
 
-    const recentBlogPosts = (blogRows as any[]).map((post) => ({
+    let recentBlogPosts = (blogRows as any[]).map((post) => ({
       id: post.id,
       title: post.title,
       content: post.content,
@@ -183,6 +186,48 @@ export async function GET(request: NextRequest) {
       blogTitle: post.blogTitle,
       blogHandle: post.blogHandle,
     }));
+
+    // If no Shopify posts found, check for WordPress posts
+    if (recentBlogPosts.length === 0) {
+      console.log(
+        "doing: No Shopify posts found, checking for WordPress posts"
+      );
+
+      const [wpRows] = await connection.execute(
+        `SELECT 
+          wp.id,
+          wp.title,
+          wp.content,
+          wp.createdAt,
+          wp.slug as handle,
+          wp.hot,
+          wa.name as author
+        FROM WordpressPost wp
+        LEFT JOIN WordpressAuthor wa ON wp.authorId = wa.wpId
+        WHERE wp.websiteId = ? 
+        ORDER BY wp.hot DESC, wp.createdAt DESC 
+        LIMIT 2`,
+        [websiteId]
+      );
+
+      recentBlogPosts = (wpRows as any[]).map((post) => ({
+        id: post.id,
+        title: post.title,
+        content: post.content,
+        image: null,
+        createdAt: post.createdAt,
+        handle: post.handle,
+        blogId: "wordpress-blog",
+        tags: null,
+        hot: post.hot,
+        blogTitle: "Blog",
+        blogHandle: "",
+      }));
+
+      console.log("done: WordPress posts found", {
+        count: recentBlogPosts.length,
+      });
+    }
 
     console.log("found home data", {
       popupCount: popupQuestions.length,
