@@ -41,6 +41,25 @@ export async function POST(request: NextRequest) {
       recent_orders,
     } = customerData;
 
+    // Validate required fields
+    if (!id) {
+      const errorResponse = NextResponse.json(
+        { message: "Customer ID is required", success: false },
+        { status: 400 }
+      );
+      return cors(request, errorResponse);
+    }
+
+    if (!email) {
+      const errorResponse = NextResponse.json(
+        { message: "Email is required", success: false },
+        { status: 400 }
+      );
+      return cors(request, errorResponse);
+    }
+
+    console.log("Processing WordPress customer:", { id, email });
+
     // Store customer in the database
     await db.query(
       `INSERT INTO wordpress_customers 
