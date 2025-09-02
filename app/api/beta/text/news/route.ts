@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as mysql from "mysql2/promise";
-import { verifyToken, getWebsiteIdFromToken } from '../../../../../lib/token-verifier';
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../../../lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -118,7 +121,7 @@ export async function GET(request: NextRequest) {
       [websiteId]
     );
 
-    const blogPosts = (blogRows as any[]).map((post) => ({
+    let blogPosts = (blogRows as any[]).map((post) => ({
       id: post.id,
       shopifyId: post.shopifyId,
       title: post.title,
@@ -140,7 +143,58 @@ export async function GET(request: NextRequest) {
       type: post.type,
     }));
 
-    console.log("found blog posts", { count: blogPosts.length });
+    // If no Shopify posts found, check for WordPress posts
+    if (blogPosts.length === 0) {
+      console.log(
+        "doing: No Shopify posts found, checking for WordPress posts"
+      );
+
+      const [wpRows] = await connection.execute(
+        `SELECT 
+          wp.id,
+          wp.wpId,
+          wp.title,
+          wp.slug as handle,
+          wp.content,
+          wa.name as author,
+          wp.hot,
+          wp.createdAt,
+          wp.updatedAt,
+          wp.link,
+          wp.excerpt as summary
+        FROM WordpressPost wp
+        LEFT JOIN WordpressAuthor wa ON wp.authorId = wa.wpId
+        WHERE wp.websiteId = ? 
+        ORDER BY wp.createdAt DESC`,
+        [websiteId]
+      );
+
+      blogPosts = (wpRows as any[]).map((post) => ({
+        id: post.id,
+        shopifyId: post.wpId || null,
+        title: post.title,
+        handle: post.handle,
+        content: post.content,
+        author: post.author,
+        hot: post.hot,
+        image: null,
+        createdAt: post.createdAt,
+        updatedAt: post.updatedAt,
+        blogId: "wordpress-blog",
+        blogTitle: "Blog",
+        blogHandle: "blog",
+        isPublished: true,
+        publishedAt: post.createdAt,
+        summary: post.summary,
+        tags: null,
+        templateSuffix: null,
+        type: "post",
+      }));
+
+      console.log("done: WordPress posts found", { count: blogPosts.length });
+    } else {
+      console.log("found blog posts", { count: blogPosts.length });
+    }
 
     return NextResponse.json(
       {
