@@ -1,14 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import OpenAI from "openai";
 import { cors } from "../../../../lib/cors";
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
-
-// Create a Prisma Client instance
-const prisma = new PrismaClient();
-// Create a type-unsafe client that will bypass TypeScript's concerns about missing models
-const db = prisma as any;
 
 // Initialize OpenAI
 const openai = new OpenAI({
@@ -80,17 +75,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Find access key record first
-    const accessKeyRecord = await db.accessKey.findFirst({
-      where: {
-        key: accessKey,
-      },
-      include: {
-        website: true,
-      },
-    });
+    // Find access key record first using MySQL query
+    const accessKeyResults = await query(
+      `SELECT ak.*, w.id as websiteId, w.name as websiteName, w.url as websiteUrl 
+       FROM AccessKey ak 
+       JOIN Website w ON ak.websiteId = w.id 
+       WHERE ak.key = ?`,
+      [accessKey]
+    );
 
-    if (!accessKeyRecord || !accessKeyRecord.website) {
+    if (!accessKeyResults || accessKeyResults.length === 0) {
       console.log(`No website found with the provided access key`);
       return cors(
         req,
@@ -98,7 +92,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const website = accessKeyRecord.website;
+    const website = {
+      id: accessKeyResults[0].websiteId,
+      name: accessKeyResults[0].websiteName,
+      url: accessKeyResults[0].websiteUrl,
+    };
     console.log(`Found website: ${website.id}`);
 
     // Parse request body
@@ -134,64 +132,196 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Try to find existing customer record
+    // Try to find existing customer record using direct MySQL query
     let existingCustomer = null;
     let welcomeBackMessage = null;
 
     if (shopifyId) {
-      existingCustomer = await db.shopifyCustomer.findFirst({
-        where: {
-          websiteId: website.id,
-          shopifyId: shopifyId.toString(),
-        },
-        include: {
-          addresses: true,
-          orders: {
-            include: {
-              lineItems: true,
-              fulfillments: true,
-              shippingAddress: true,
-            },
-          },
-          sessions: {
-            include: {
-              threads: {
-                include: {
-                  messages: true,
-                },
-              },
-            },
-          },
-        },
-      });
+      const customerResults = await query(
+        `SELECT * FROM ShopifyCustomer WHERE websiteId = ? AND shopifyId = ?`,
+        [website.id, shopifyId.toString()]
+      );
+
+      if (customerResults && customerResults.length > 0) {
+        existingCustomer = customerResults[0];
+
+        // Get customer addresses
+        const addressesResults = await query(
+          `SELECT * FROM ShopifyCustomerAddress WHERE customerId = ?`,
+          [existingCustomer.id]
+        );
+        existingCustomer.addresses = addressesResults || [];
+
+        // Get customer orders
+        const ordersResults = await query(
+          `SELECT * FROM ShopifyCustomerOrder WHERE customerId = ?`,
+          [existingCustomer.id]
+        );
+
+        if (ordersResults && ordersResults.length > 0) {
+          existingCustomer.orders = [];
+
+          for (const order of ordersResults) {
+            // Get line items for each order
+            const lineItemsResults = await query(
+              `SELECT * FROM ShopifyCustomerOrderLineItem WHERE orderId = ?`,
+              [order.id]
+            );
+            order.lineItems = lineItemsResults || [];
+
+            // Get fulfillments for each order
+            const fulfillmentsResults = await query(
+              `SELECT * FROM ShopifyCustomerOrderFulfillment WHERE orderId = ?`,
+              [order.id]
+            );
+            order.fulfillments = fulfillmentsResults || [];
+
+            // Get shipping address for each order
+            const shippingAddressResults = await query(
+              `SELECT * FROM ShopifyCustomerOrderShippingAddress WHERE orderId = ?`,
+              [order.id]
+            );
+            order.shippingAddress =
+              shippingAddressResults.length > 0
+                ? shippingAddressResults[0]
+                : null;
+
+            existingCustomer.orders.push(order);
+          }
+        } else {
+          existingCustomer.orders = [];
+        }
+
+        // Get customer sessions and associated messages
+        const sessionsResults = await query(
+          `SELECT s.* FROM Session s WHERE s.shopifyCustomerId = ?`,
+          [existingCustomer.id]
+        );
+
+        existingCustomer.sessions = [];
+
+        if (sessionsResults && sessionsResults.length > 0) {
+          for (const session of sessionsResults) {
+            // Get threads for each session
+            const threadsResults = await query(
+              `SELECT t.* FROM Thread t WHERE t.sessionId = ?`,
+              [session.id]
+            );
+
+            session.threads = [];
+
+            if (threadsResults && threadsResults.length > 0) {
+              for (const thread of threadsResults) {
+                // Get messages for each thread
+                const messagesResults = await query(
+                  `SELECT m.* FROM Message m WHERE m.threadId = ?`,
+                  [thread.id]
+                );
+
+                thread.messages = messagesResults || [];
+                session.threads.push(thread);
+              }
+            }
+
+            existingCustomer.sessions.push(session);
+          }
+        }
+      }
     }
 
+    // If no customer found by shopifyId, try with email
     if (!existingCustomer && email) {
-      existingCustomer = await db.shopifyCustomer.findFirst({
-        where: {
-          websiteId: website.id,
-          email: email,
-        },
-        include: {
-          addresses: true,
-          orders: {
-            include: {
-              lineItems: true,
-              fulfillments: true,
-              shippingAddress: true,
-            },
-          },
-          sessions: {
-            include: {
-              threads: {
-                include: {
-                  messages: true,
-                },
-              },
-            },
-          },
-        },
-      });
+      const customerResults = await query(
+        `SELECT * FROM ShopifyCustomer WHERE websiteId = ? AND email = ?`,
+        [website.id, email]
+      );
+
+      if (customerResults && customerResults.length > 0) {
+        existingCustomer = customerResults[0];
+
+        // Fetch the same data as above for email-based customer lookup
+        // Get customer addresses
+        const addressesResults = await query(
+          `SELECT * FROM ShopifyCustomerAddress WHERE customerId = ?`,
+          [existingCustomer.id]
+        );
+        existingCustomer.addresses = addressesResults || [];
+
+        // Get customer orders with line items, fulfillments, and shipping address
+        const ordersResults = await query(
+          `SELECT * FROM ShopifyCustomerOrder WHERE customerId = ?`,
+          [existingCustomer.id]
+        );
+
+        if (ordersResults && ordersResults.length > 0) {
+          existingCustomer.orders = [];
+
+          for (const order of ordersResults) {
+            // Get line items for each order
+            const lineItemsResults = await query(
+              `SELECT * FROM ShopifyCustomerOrderLineItem WHERE orderId = ?`,
+              [order.id]
+            );
+            order.lineItems = lineItemsResults || [];
+
+            // Get fulfillments for each order
+            const fulfillmentsResults = await query(
+              `SELECT * FROM ShopifyCustomerOrderFulfillment WHERE orderId = ?`,
+              [order.id]
+            );
+            order.fulfillments = fulfillmentsResults || [];
+
+            // Get shipping address for each order
+            const shippingAddressResults = await query(
+              `SELECT * FROM ShopifyCustomerOrderShippingAddress WHERE orderId = ?`,
+              [order.id]
+            );
+            order.shippingAddress =
+              shippingAddressResults.length > 0
+                ? shippingAddressResults[0]
+                : null;
+
+            existingCustomer.orders.push(order);
+          }
+        } else {
+          existingCustomer.orders = [];
+        }
+
+        // Get customer sessions and associated threads/messages
+        const sessionsResults = await query(
+          `SELECT s.* FROM Session s WHERE s.shopifyCustomerId = ?`,
+          [existingCustomer.id]
+        );
+
+        existingCustomer.sessions = [];
+
+        if (sessionsResults && sessionsResults.length > 0) {
+          for (const session of sessionsResults) {
+            // Get threads for each session
+            const threadsResults = await query(
+              `SELECT t.* FROM Thread t WHERE t.sessionId = ?`,
+              [session.id]
+            );
+
+            session.threads = [];
+
+            if (threadsResults && threadsResults.length > 0) {
+              for (const thread of threadsResults) {
+                // Get messages for each thread
+                const messagesResults = await query(
+                  `SELECT m.* FROM Message m WHERE m.threadId = ?`,
+                  [thread.id]
+                );
+
+                thread.messages = messagesResults || [];
+                session.threads.push(thread);
+              }
+            }
+
+            existingCustomer.sessions.push(session);
+          }
+        }
+      }
     }
 
     // Extract basic customer fields
@@ -203,7 +333,7 @@ export async function POST(req: NextRequest) {
       phone: customer.phone || "",
       acceptsMarketing:
         customer.acceptsMarketing || customer.accepts_marketing || false,
-      tags: customer.tags || [],
+      tags: JSON.stringify(customer.tags || []),
       ordersCount: customer.orders_count || 0,
       totalSpent: parseFloat(customer.total_spent || "0"),
       customerData: JSON.stringify({
@@ -214,7 +344,7 @@ export async function POST(req: NextRequest) {
       updatedAt: new Date(),
     };
 
-    // Determine customer type based on source (store it in the customerData JSON field)
+    // Determine customer type based on source
     const isWooCommerce = source === "woocommerce";
     const customerType = isWooCommerce ? "woocommerce" : "shopify";
     console.log(`Processing ${customerType} customer`);
@@ -328,9 +458,9 @@ export async function POST(req: NextRequest) {
               ? parseFloat(order.totalPriceV2.amount)
               : null,
             currencyCode: order.totalPriceV2?.currencyCode || "",
-            lineItems: lineItems,
-            fulfillments: fulfillments,
-            shippingAddress: shippingAddress,
+            lineItems,
+            fulfillments,
+            shippingAddress,
           };
 
           orders.push(orderData);
@@ -339,7 +469,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Create or update customer record with nested data
-    let result;
+    let result: any = null;
 
     if (existingCustomer) {
       console.log(`Updating existing customer: ${existingCustomer.id}`);
@@ -434,107 +564,251 @@ export async function POST(req: NextRequest) {
       }
 
       // First clear the defaultAddressId to avoid constraint violations
-      await db.shopifyCustomer.update({
-        where: {
-          id: existingCustomer.id,
-        },
-        data: {
-          defaultAddressId: null,
-        },
-      });
+      await query(
+        `UPDATE ShopifyCustomer SET defaultAddressId = NULL WHERE id = ?`,
+        [existingCustomer.id]
+      );
 
       // Handle address updates - delete old ones first if needed
       if (addresses.length > 0) {
-        await db.shopifyCustomerAddress.deleteMany({
-          where: {
-            customerId: existingCustomer.id,
-          },
-        });
+        await query(`DELETE FROM ShopifyCustomerAddress WHERE customerId = ?`, [
+          existingCustomer.id,
+        ]);
       }
 
       // Update customer record
-      result = await db.shopifyCustomer.update({
-        where: {
-          id: existingCustomer.id,
-        },
-        data: {
-          ...customerData,
-          addresses: {
-            create: addresses,
-          },
-        },
-      });
+      await query(
+        `UPDATE ShopifyCustomer SET
+          shopifyId = ?,
+          email = ?,
+          firstName = ?,
+          lastName = ?,
+          phone = ?,
+          acceptsMarketing = ?,
+          tags = ?,
+          ordersCount = ?,
+          totalSpent = ?,
+          customerData = ?,
+          updatedAt = ?
+         WHERE id = ?`,
+        [
+          customerData.shopifyId,
+          customerData.email,
+          customerData.firstName,
+          customerData.lastName,
+          customerData.phone,
+          customerData.acceptsMarketing ? 1 : 0,
+          customerData.tags,
+          customerData.ordersCount,
+          customerData.totalSpent,
+          customerData.customerData,
+          new Date(),
+          existingCustomer.id,
+        ]
+      );
+
+      // Insert new addresses
+      for (const address of addresses) {
+        await query(
+          `INSERT INTO ShopifyCustomerAddress (
+            customerId, addressId, firstName, lastName, address1, 
+            city, province, zip, country, isDefault
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            existingCustomer.id,
+            address.addressId,
+            address.firstName,
+            address.lastName,
+            address.address1,
+            address.city,
+            address.province,
+            address.zip,
+            address.country,
+            address.isDefault ? 1 : 0,
+          ]
+        );
+      }
 
       // Update orders separately since they have nested relationships
       if (orders.length > 0) {
+        // Get all order IDs
+        const existingOrderResults = await query(
+          `SELECT id FROM ShopifyCustomerOrder WHERE customerId = ?`,
+          [existingCustomer.id]
+        );
+
         // Delete existing orders
-        await db.shopifyCustomerOrder.deleteMany({
-          where: {
-            customerId: existingCustomer.id,
-          },
-        });
+        if (existingOrderResults && existingOrderResults.length > 0) {
+          for (const orderRecord of existingOrderResults) {
+            // Delete line items
+            await query(
+              `DELETE FROM ShopifyCustomerOrderLineItem WHERE orderId = ?`,
+              [orderRecord.id]
+            );
+
+            // Delete fulfillments
+            await query(
+              `DELETE FROM ShopifyCustomerOrderFulfillment WHERE orderId = ?`,
+              [orderRecord.id]
+            );
+
+            // Delete shipping address
+            await query(
+              `DELETE FROM ShopifyCustomerOrderShippingAddress WHERE orderId = ?`,
+              [orderRecord.id]
+            );
+          }
+
+          // Delete the orders themselves
+          await query(`DELETE FROM ShopifyCustomerOrder WHERE customerId = ?`, [
+            existingCustomer.id,
+          ]);
+        }
 
         // Create new orders
         for (const orderData of orders) {
           const { lineItems, fulfillments, shippingAddress, ...orderFields } =
             orderData;
 
-          await db.shopifyCustomerOrder.create({
-            data: {
-              ...orderFields,
-              customerId: existingCustomer.id,
-              lineItems: {
-                create: lineItems,
-              },
-              fulfillments: {
-                create: fulfillments,
-              },
-              shippingAddress: shippingAddress
-                ? {
-                    create: shippingAddress,
-                  }
-                : undefined,
-            },
-          });
+          // Insert order record
+          const [orderResult] = await query(
+            `INSERT INTO ShopifyCustomerOrder (
+              customerId, orderId, orderNumber, processedAt, 
+              fulfillmentStatus, financialStatus, totalAmount, currencyCode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              existingCustomer.id,
+              orderFields.orderId,
+              orderFields.orderNumber,
+              orderFields.processedAt,
+              orderFields.fulfillmentStatus,
+              orderFields.financialStatus,
+              orderFields.totalAmount,
+              orderFields.currencyCode,
+            ]
+          );
+
+          const newOrderId = orderResult.insertId;
+
+          // Insert line items
+          if (lineItems && lineItems.length > 0) {
+            for (const item of lineItems) {
+              await query(
+                `INSERT INTO ShopifyCustomerOrderLineItem (
+                  orderId, title, quantity
+                ) VALUES (?, ?, ?)`,
+                [newOrderId, item.title, item.quantity]
+              );
+            }
+          }
+
+          // Insert fulfillments
+          if (fulfillments && fulfillments.length > 0) {
+            for (const fulfillment of fulfillments) {
+              await query(
+                `INSERT INTO ShopifyCustomerOrderFulfillment (
+                  orderId, trackingCompany, trackingNumbers, trackingUrls
+                ) VALUES (?, ?, ?, ?)`,
+                [
+                  newOrderId,
+                  fulfillment.trackingCompany,
+                  fulfillment.trackingNumbers,
+                  fulfillment.trackingUrls,
+                ]
+              );
+            }
+          }
+
+          // Insert shipping address
+          if (shippingAddress) {
+            await query(
+              `INSERT INTO ShopifyCustomerOrderShippingAddress (
+                orderId, address1, city, province, country, zip
+              ) VALUES (?, ?, ?, ?, ?, ?)`,
+              [
+                newOrderId,
+                shippingAddress.address1,
+                shippingAddress.city,
+                shippingAddress.province,
+                shippingAddress.country,
+                shippingAddress.zip,
+              ]
+            );
+          }
         }
       }
 
       // Check if active session exists for this customer
-      const activeSession = await db.session.findFirst({
-        where: {
-          websiteId: website.id,
-          createdAt: {
-            // Session is recent (last 24h)
-            gte: new Date(Date.now() - 24 * 60 * 60 * 1000),
-          },
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
+      const activeSessionResults = await query(
+        `SELECT * FROM Session 
+         WHERE websiteId = ? 
+         AND createdAt >= ? 
+         ORDER BY createdAt DESC 
+         LIMIT 1`,
+        [website.id, new Date(Date.now() - 24 * 60 * 60 * 1000)]
+      );
 
       // Link customer to recent session if found
-      if (activeSession) {
-        await db.session.update({
-          where: { id: activeSession.id },
-          data: { shopifyCustomerId: result.id },
-        });
+      if (activeSessionResults && activeSessionResults.length > 0) {
+        const activeSession = activeSessionResults[0];
+        await query(`UPDATE Session SET shopifyCustomerId = ? WHERE id = ?`, [
+          existingCustomer.id,
+          activeSession.id,
+        ]);
         console.log(`Linked customer to active session: ${activeSession.id}`);
       }
 
+      result = { id: existingCustomer.id };
       console.log("Customer updated successfully with associated data");
     } else {
       console.log("Creating new customer record");
 
-      // Create customer with addresses
-      result = await db.shopifyCustomer.create({
-        data: {
-          ...customerData,
-          addresses: {
-            create: addresses,
-          },
-        },
-      });
+      // Create customer
+      const [customerResult] = await query(
+        `INSERT INTO ShopifyCustomer (
+          websiteId, shopifyId, email, firstName, lastName, 
+          phone, acceptsMarketing, tags, ordersCount, 
+          totalSpent, customerData, updatedAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          website.id,
+          customerData.shopifyId,
+          customerData.email,
+          customerData.firstName,
+          customerData.lastName,
+          customerData.phone,
+          customerData.acceptsMarketing ? 1 : 0,
+          customerData.tags,
+          customerData.ordersCount,
+          customerData.totalSpent,
+          customerData.customerData,
+          new Date(),
+        ]
+      );
+
+      const newCustomerId = customerResult.insertId;
+
+      // Insert addresses
+      for (const address of addresses) {
+        await query(
+          `INSERT INTO ShopifyCustomerAddress (
+            customerId, addressId, firstName, lastName, address1, 
+            city, province, zip, country, isDefault
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            newCustomerId,
+            address.addressId,
+            address.firstName,
+            address.lastName,
+            address.address1,
+            address.city,
+            address.province,
+            address.zip,
+            address.country,
+            address.isDefault ? 1 : 0,
+          ]
+        );
+      }
 
       // Create orders separately
       if (orders.length > 0) {
@@ -542,66 +816,113 @@ export async function POST(req: NextRequest) {
           const { lineItems, fulfillments, shippingAddress, ...orderFields } =
             orderData;
 
-          await db.shopifyCustomerOrder.create({
-            data: {
-              ...orderFields,
-              customerId: result.id,
-              lineItems: {
-                create: lineItems,
-              },
-              fulfillments: {
-                create: fulfillments,
-              },
-              shippingAddress: shippingAddress
-                ? {
-                    create: shippingAddress,
-                  }
-                : undefined,
-            },
-          });
+          // Insert order record
+          const [orderResult] = await query(
+            `INSERT INTO ShopifyCustomerOrder (
+              customerId, orderId, orderNumber, processedAt, 
+              fulfillmentStatus, financialStatus, totalAmount, currencyCode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              newCustomerId,
+              orderFields.orderId,
+              orderFields.orderNumber,
+              orderFields.processedAt,
+              orderFields.fulfillmentStatus,
+              orderFields.financialStatus,
+              orderFields.totalAmount,
+              orderFields.currencyCode,
+            ]
+          );
+
+          const newOrderId = orderResult.insertId;
+
+          // Insert line items
+          if (lineItems && lineItems.length > 0) {
+            for (const item of lineItems) {
+              await query(
+                `INSERT INTO ShopifyCustomerOrderLineItem (
+                  orderId, title, quantity
+                ) VALUES (?, ?, ?)`,
+                [newOrderId, item.title, item.quantity]
+              );
+            }
+          }
+
+          // Insert fulfillments
+          if (fulfillments && fulfillments.length > 0) {
+            for (const fulfillment of fulfillments) {
+              await query(
+                `INSERT INTO ShopifyCustomerOrderFulfillment (
+                  orderId, trackingCompany, trackingNumbers, trackingUrls
+                ) VALUES (?, ?, ?, ?)`,
+                [
+                  newOrderId,
+                  fulfillment.trackingCompany,
+                  fulfillment.trackingNumbers,
+                  fulfillment.trackingUrls,
+                ]
+              );
+            }
+          }
+
+          // Insert shipping address
+          if (shippingAddress) {
+            await query(
+              `INSERT INTO ShopifyCustomerOrderShippingAddress (
+                orderId, address1, city, province, country, zip
+              ) VALUES (?, ?, ?, ?, ?, ?)`,
+              [
+                newOrderId,
+                shippingAddress.address1,
+                shippingAddress.city,
+                shippingAddress.province,
+                shippingAddress.country,
+                shippingAddress.zip,
+              ]
+            );
+          }
         }
       }
 
       // Check if active session exists and link it
-      const activeSession = await db.session.findFirst({
-        where: {
-          websiteId: website.id,
-          createdAt: {
-            // Session is recent (last 24h)
-            gte: new Date(Date.now() - 24 * 60 * 60 * 1000),
-          },
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
+      const activeSessionResults = await query(
+        `SELECT * FROM Session 
+         WHERE websiteId = ? 
+         AND createdAt >= ? 
+         ORDER BY createdAt DESC 
+         LIMIT 1`,
+        [website.id, new Date(Date.now() - 24 * 60 * 60 * 1000)]
+      );
 
       // Link customer to recent session if found
-      if (activeSession) {
-        await db.session.update({
-          where: { id: activeSession.id },
-          data: { shopifyCustomerId: result.id },
-        });
+      if (activeSessionResults && activeSessionResults.length > 0) {
+        const activeSession = activeSessionResults[0];
+        await query(`UPDATE Session SET shopifyCustomerId = ? WHERE id = ?`, [
+          newCustomerId,
+          activeSession.id,
+        ]);
         console.log(`Linked customer to active session: ${activeSession.id}`);
       }
 
+      result = { id: newCustomerId };
       console.log("New customer created successfully with associated data");
     }
 
     // Update default address reference if needed
     if (addresses.length > 0) {
-      const defaultAddress = await db.shopifyCustomerAddress.findFirst({
-        where: {
-          customerId: result.id,
-          isDefault: true,
-        },
-      });
+      const defaultAddressResults = await query(
+        `SELECT * FROM ShopifyCustomerAddress 
+         WHERE customerId = ? AND isDefault = 1 
+         LIMIT 1`,
+        [result.id]
+      );
 
-      if (defaultAddress) {
-        await db.shopifyCustomer.update({
-          where: { id: result.id },
-          data: { defaultAddressId: defaultAddress.id },
-        });
+      if (defaultAddressResults && defaultAddressResults.length > 0) {
+        const defaultAddress = defaultAddressResults[0];
+        await query(
+          `UPDATE ShopifyCustomer SET defaultAddressId = ? WHERE id = ?`,
+          [defaultAddress.id, result.id]
+        );
       }
     }
 

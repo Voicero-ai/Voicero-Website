@@ -145,38 +145,73 @@ export async function GET(request: NextRequest) {
       );
 
       if (accessToken) {
-        // For backward compatibility, try to find website by access token
-        // Get all access keys and check against bcrypt hashes
-        const accessKeys = (await query(
-          `SELECT ak.key, ak.websiteId, w.* FROM AccessKey ak
-           JOIN Website w ON w.id = ak.websiteId`,
-          []
-        )) as (Website & { key: string; websiteId: string })[];
+        // Special case: If the access token itself is a bcrypt hash
+        if (accessToken.startsWith("$2a$") || accessToken.startsWith("$2b$")) {
+          console.log(
+            "URL param token appears to be a bcrypt hash - checking direct match"
+          );
 
-        // Check each access key against the provided token
-        for (const accessKey of accessKeys) {
-          try {
-            let isValid = false;
+          // Check for direct match in the AccessKey table
+          const directMatches = await query(
+            "SELECT websiteId FROM AccessKey WHERE `key` = ?",
+            [accessToken]
+          );
 
-            // Check if the stored key is a bcrypt hash (starts with $2a$ or $2b$)
-            if (
-              accessKey.key.startsWith("$2a$") ||
-              accessKey.key.startsWith("$2b$")
-            ) {
-              // Compare with bcrypt for hashed keys
-              isValid = await bcrypt.compare(accessToken, accessKey.key);
-            } else {
-              // Direct string comparison for plain text keys (legacy)
-              isValid = accessToken === accessKey.key;
+          if ((directMatches as any[]).length > 0) {
+            console.log("Found direct match for hashed token in URL params");
+            websiteId = (directMatches as any[])[0].websiteId;
+            console.log("Website ID from URL params token:", websiteId);
+          } else {
+            console.log("No direct match found for hashed token in URL params");
+          }
+        }
+
+        // If still no website ID, try the normal comparison flow
+        if (!websiteId) {
+          console.log("Trying normal comparison for URL param token");
+          // For backward compatibility, try to find website by access token
+          // Get all access keys and check against bcrypt hashes
+          const accessKeys = (await query(
+            `SELECT ak.key, ak.websiteId, w.* FROM AccessKey ak
+             JOIN Website w ON w.id = ak.websiteId`,
+            []
+          )) as (Website & { key: string; websiteId: string })[];
+          console.log(
+            `Found ${accessKeys.length} access keys to check against URL param token`
+          );
+
+          // Check each access key against the provided token
+          for (const accessKey of accessKeys) {
+            try {
+              let isValid = false;
+
+              // Check if the stored key is a bcrypt hash (starts with $2a$ or $2b$)
+              if (
+                accessKey.key.startsWith("$2a$") ||
+                accessKey.key.startsWith("$2b$")
+              ) {
+                // Compare with bcrypt for hashed keys
+                console.log(
+                  `Comparing URL param with bcrypt hash: ${accessKey.key.substring(
+                    0,
+                    20
+                  )}...`
+                );
+                isValid = await bcrypt.compare(accessToken, accessKey.key);
+              } else {
+                // Direct string comparison for plain text keys (legacy)
+                isValid = accessToken === accessKey.key;
+              }
+
+              if (isValid) {
+                console.log("Found matching access key for URL param token");
+                websiteId = accessKey.websiteId;
+                break;
+              }
+            } catch (error) {
+              console.error("Error comparing access key:", error);
+              continue;
             }
-
-            if (isValid) {
-              websiteId = accessKey.websiteId;
-              break;
-            }
-          } catch (error) {
-            console.error("Error comparing access key:", error);
-            continue;
           }
         }
       }

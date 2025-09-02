@@ -17,7 +17,6 @@ interface Website {
   id: string;
   url: string;
   type: string;
-  plan: string;
   active: boolean;
   monthlyQueries: number;
   queryLimit: number;
@@ -127,12 +126,7 @@ export default function Websites() {
                       </div>
                       <div className="flex items-center gap-2 text-sm text-brand-text-secondary">
                         {website.name && <span>{website.name} •</span>}
-                        <span>
-                          {website.type} •{" "}
-                          {website.plan
-                            ? `${website.plan} Plan`
-                            : "No Active Plan"}
-                        </span>
+                        <span>{website.type}</span>
                       </div>
                     </div>
                   </div>
@@ -151,7 +145,7 @@ export default function Websites() {
                 </div>
 
                 {/* Usage Stats */}
-                {website.plan && (
+                {
                   <div className="mt-6 bg-brand-lavender-light/5 rounded-lg p-4">
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm text-brand-text-secondary">
@@ -173,7 +167,7 @@ export default function Websites() {
                       />
                     </div>
                   </div>
-                )}
+                }
 
                 {/* Content Summary */}
                 <div className="mt-4 grid grid-cols-3 gap-4">
@@ -203,12 +197,7 @@ export default function Websites() {
 
                 {/* Last Sync Info */}
                 <div className="px-6 py-3 bg-brand-lavender-light/5 text-sm">
-                  {website.plan === "" ? (
-                    <span className="text-red-600 flex items-center gap-2">
-                      <FaTimesCircle className="w-4 h-4" />
-                      No paid plan – you need to upgrade to use AI features.
-                    </span>
-                  ) : website.lastSyncedAt ? (
+                  {website.lastSyncedAt ? (
                     <span className="text-brand-text-secondary">
                       Last synced:{" "}
                       {new Date(website.lastSyncedAt).toLocaleString()}

@@ -111,7 +111,7 @@ async function deleteWebsiteVectors(websiteId: string) {
 /**
  * Rebuild vector embeddings for an entire website's WordPress content.
  * 1. Deletes old vectors (via deleteWebsiteVectors).
- * 2. Fetches WP content from Prisma.
+ * 2. Fetches WP content from sql.
  * 3. Embeds & upserts them to Pinecone.
  * 4. Updates your VectorDbConfig.
  */

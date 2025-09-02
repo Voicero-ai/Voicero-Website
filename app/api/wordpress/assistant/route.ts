@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  PrismaClient,
-  WordpressPage,
-  WordpressPost,
-  WordpressProduct,
-} from "@prisma/client";
 import OpenAI from "openai";
-import { cors } from '../../../../lib/cors';
-import prisma from '../../../../lib/prisma';
-import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
+import { cors } from "../../../../lib/cors";
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../../lib/token-verifier";
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -74,24 +71,40 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Find the website using the website ID
-    const website = await prisma.website.findFirst({
-      where: {
-        id: websiteId,
-      },
-      include: {
-        pages: true,
-        posts: true,
-        products: true,
-      },
-    });
+    // Find the website using direct MySQL query
+    const websiteResults = await query(`SELECT * FROM Website WHERE id = ?`, [
+      websiteId,
+    ]);
 
-    if (!website) {
+    if (!websiteResults || websiteResults.length === 0) {
       return cors(
         request,
         NextResponse.json({ error: "Website not found" }, { status: 404 })
       );
     }
+
+    const website = websiteResults[0];
+
+    // Get pages, posts, and products for this website
+    const pagesResults = await query(
+      `SELECT * FROM WordpressPage WHERE websiteId = ?`,
+      [website.id]
+    );
+
+    const postsResults = await query(
+      `SELECT * FROM WordpressPost WHERE websiteId = ?`,
+      [website.id]
+    );
+
+    const productsResults = await query(
+      `SELECT * FROM WordpressProduct WHERE websiteId = ?`,
+      [website.id]
+    );
+
+    // Add these to our website object
+    website.pages = pagesResults || [];
+    website.posts = postsResults || [];
+    website.products = productsResults || [];
 
     console.log("Found website:", website);
     console.log("Current assistantId:", website.aiAssistantId);
@@ -117,19 +130,17 @@ export async function POST(request: NextRequest) {
       voiceAssistantId = voiceAssistant.id;
     }
 
-    // Update the website record with both assistant IDs
-    const updatedWebsite = await prisma.website.update({
-      where: { id: website.id },
-      data: {
-        aiAssistantId: textAssistantId,
-        aiVoiceAssistantId: voiceAssistantId,
-      },
-      select: {
-        id: true,
-        aiAssistantId: true,
-        aiVoiceAssistantId: true,
-      },
-    });
+    // Update the website record with both assistant IDs using direct MySQL query
+    await query(
+      `UPDATE Website SET aiAssistantId = ?, aiVoiceAssistantId = ? WHERE id = ?`,
+      [textAssistantId, voiceAssistantId, website.id]
+    );
+
+    const updatedWebsite = {
+      id: website.id,
+      aiAssistantId: textAssistantId,
+      aiVoiceAssistantId: voiceAssistantId,
+    };
 
     console.log("Updated website:", updatedWebsite);
 
@@ -143,7 +154,7 @@ export async function POST(request: NextRequest) {
         websiteId: website.id,
         timestamp: new Date(),
         content: {
-          pages: (website.pages || []).map((p: WordpressPage) => ({
+          pages: (website.pages || []).map((p: any) => ({
             id: p.id.toString(),
             vectorId: `page-${(p.title || "")
               .toLowerCase()
@@ -153,7 +164,7 @@ export async function POST(request: NextRequest) {
             title: p.title,
             slug: p.slug,
           })),
-          posts: (website.posts || []).map((p: WordpressPost) => ({
+          posts: (website.posts || []).map((p: any) => ({
             id: p.id.toString(),
             vectorId: `post-${(p.title || "")
               .toLowerCase()
@@ -163,7 +174,7 @@ export async function POST(request: NextRequest) {
             title: p.title,
             slug: p.slug,
           })),
-          products: (website.products || []).map((p: WordpressProduct) => ({
+          products: (website.products || []).map((p: any) => ({
             id: p.id.toString(),
             vectorId: `product-${(p.name || "")
               .toLowerCase()
