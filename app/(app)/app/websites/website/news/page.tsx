@@ -31,21 +31,57 @@ interface ShopifyBlogPost {
   hot: number;
 }
 
-interface ShopifyBlog {
+// Base blog interface with common properties
+interface BaseBlog {
   id: string;
   title: string;
+}
+
+interface ShopifyBlog extends BaseBlog {
   handle: string;
   url: string;
   createdAt: string;
   updatedAt: string;
   blogPosts: ShopifyBlogPost[];
+  content?: never; // Ensure type safety for union
+}
+
+interface WordPressBlog extends BaseBlog {
+  type: string;
+  content: WordPressContent[];
+  updatedAt?: string;
+  blogPosts?: never; // Ensure type safety for union
+}
+
+// Base post interface with common properties
+interface BasePost {
+  id: string;
+  title: string;
+  content: string;
+  excerpt?: string | null;
+  author?: string | null;
+  publishedAt: string;
+  updatedAt: string;
+  url: string;
+  handle: string;
+  hot: number;
+  image?: string | null;
+  tags?: string[] | null;
+  blogId?: string;
+}
+
+interface WordPressContent extends BasePost {
+  slug: string;
+  link: string;
+  createdAt: string;
 }
 
 interface ApiResponse {
   success: boolean;
-  blogs: ShopifyBlog[];
+  blogs: (ShopifyBlog | WordPressBlog)[];
   websiteId: string;
   domain: string;
+  platform: string;
 }
 
 export default function NewsPage() {
@@ -210,6 +246,21 @@ export default function NewsPage() {
   // Get active blog
   const activeBlog = data?.blogs.find((blog) => blog.id === activeBlogId);
 
+  // Debug the active blog
+  useEffect(() => {
+    if (activeBlog) {
+      console.log("Active Blog:", activeBlog);
+      console.log("Has blogPosts:", "blogPosts" in activeBlog);
+      console.log("Has content:", "content" in activeBlog);
+      if ("content" in activeBlog) {
+        console.log("Content length:", activeBlog.content?.length);
+      }
+      if ("blogPosts" in activeBlog) {
+        console.log("BlogPosts length:", activeBlog.blogPosts?.length);
+      }
+    }
+  }, [activeBlog]);
+
   if (!websiteId) {
     return (
       <div className="max-w-4xl mx-auto p-6">
@@ -239,7 +290,8 @@ export default function NewsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-brand-text-primary">
-            Shopify Blog Content
+            {data?.platform === "WordPress" ? "WordPress" : "Shopify"} Blog
+            Content
           </h1>
           {data?.domain && (
             <p className="text-sm text-brand-text-secondary">{data.domain}</p>
@@ -293,7 +345,9 @@ export default function NewsPage() {
                   <div className="font-medium">All Posts</div>
                   <div className="text-xs opacity-80">
                     {data?.blogs.reduce(
-                      (total, blog) => total + blog.blogPosts.length,
+                      (total, blog) =>
+                        total +
+                        (blog.blogPosts?.length || blog.content?.length || 0),
                       0
                     )}{" "}
                     posts
@@ -323,7 +377,11 @@ export default function NewsPage() {
                   <div>
                     <div className="font-medium">{blog.title}</div>
                     <div className="text-xs opacity-80">
-                      {blog.blogPosts.length} posts
+                      {blog.blogPosts?.length || blog.content?.length || 0}{" "}
+                      posts
+                      {"type" in blog &&
+                        blog.type === "posts" &&
+                        " (WordPress)"}
                     </div>
                   </div>
                 </button>
@@ -347,7 +405,8 @@ export default function NewsPage() {
               </div>
 
               {data?.blogs.reduce(
-                (total, blog) => total + blog.blogPosts.length,
+                (total, blog) =>
+                  total + (blog.blogPosts?.length || blog.content?.length || 0),
                 0
               ) === 0 ? (
                 <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/30 p-6">
@@ -358,8 +417,15 @@ export default function NewsPage() {
               ) : (
                 <div className="space-y-6">
                   {data?.blogs
-                    .flatMap((blog) => blog.blogPosts)
-                    .sort((a, b) => {
+                    .flatMap((blog): BasePost[] => {
+                      if ("blogPosts" in blog && blog.blogPosts) {
+                        return blog.blogPosts as unknown as BasePost[];
+                      } else if ("content" in blog && blog.content) {
+                        return blog.content as BasePost[];
+                      }
+                      return [];
+                    })
+                    .sort((a: BasePost, b: BasePost) => {
                       if (a.hot === 1 && b.hot !== 1) return -1;
                       if (a.hot !== 1 && b.hot === 1) return 1;
                       return (
@@ -367,7 +433,7 @@ export default function NewsPage() {
                         new Date(a.publishedAt).getTime()
                       );
                     })
-                    .map((post) => (
+                    .map((post: BasePost) => (
                       <div
                         key={post.id}
                         className={`bg-white rounded-xl shadow-sm border ${
@@ -509,7 +575,7 @@ export default function NewsPage() {
                               dangerouslySetInnerHTML={{
                                 __html: post.content.replace(
                                   /<([a-z][a-z0-9]*)[^>]*>/gi,
-                                  (match, tag) => {
+                                  (match: string, tag: string) => {
                                     if (
                                       [
                                         "p",
@@ -621,14 +687,26 @@ export default function NewsPage() {
                   {activeBlog.title}
                 </h2>
                 <div className="text-sm text-brand-text-secondary flex items-center gap-4">
-                  <span className="flex items-center gap-1">
-                    <FaClock className="opacity-70" />
-                    Updated {formatDate(activeBlog.updatedAt)}
-                  </span>
+                  {activeBlog.updatedAt ? (
+                    <span className="flex items-center gap-1">
+                      <FaClock className="opacity-70" />
+                      Updated {formatDate(activeBlog.updatedAt)}
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1">
+                      <FaClock className="opacity-70" />
+                      {data?.blogs.length}{" "}
+                      {data?.platform === "WordPress"
+                        ? "WordPress Posts"
+                        : "Blog Posts"}
+                    </span>
+                  )}
                 </div>
               </div>
 
-              {activeBlog.blogPosts.length === 0 ? (
+              {("blogPosts" in activeBlog &&
+                activeBlog.blogPosts?.length === 0) ||
+              ("content" in activeBlog && activeBlog.content?.length === 0) ? (
                 <div className="bg-white rounded-xl shadow-sm border border-brand-lavender-light/30 p-6">
                   <p className="text-brand-text-secondary">
                     No posts in this blog.
@@ -636,8 +714,18 @@ export default function NewsPage() {
                 </div>
               ) : (
                 <div className="space-y-6">
-                  {activeBlog.blogPosts
-                    .sort((a, b) => {
+                  {(() => {
+                    // Get the posts array based on blog type
+                    let posts: BasePost[] = [];
+                    if ("blogPosts" in activeBlog && activeBlog.blogPosts) {
+                      posts = activeBlog.blogPosts as unknown as BasePost[];
+                    } else if ("content" in activeBlog && activeBlog.content) {
+                      posts = activeBlog.content as BasePost[];
+                    }
+                    console.log("Posts to display:", posts.length);
+                    return posts;
+                  })()
+                    .sort((a: BasePost, b: BasePost) => {
                       // Sort by hot status first (hot posts at the top)
                       if (a.hot === 1 && b.hot !== 1) return -1;
                       if (a.hot !== 1 && b.hot === 1) return 1;
@@ -647,7 +735,7 @@ export default function NewsPage() {
                         new Date(a.publishedAt).getTime()
                       );
                     })
-                    .map((post) => (
+                    .map((post: BasePost) => (
                       <div
                         key={post.id}
                         className={`bg-white rounded-xl shadow-sm border ${
@@ -784,7 +872,7 @@ export default function NewsPage() {
                               dangerouslySetInnerHTML={{
                                 __html: post.content.replace(
                                   /<([a-z][a-z0-9]*)[^>]*>/gi,
-                                  (match, tag) => {
+                                  (match: string, tag: string) => {
                                     if (
                                       [
                                         "p",
