@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cors } from '../../../lib/cors';
-import { query } from '../../../lib/db';
-import { verifyToken, getWebsiteIdFromToken } from '../../../lib/token-verifier';
+import { cors } from "../../../lib/cors";
+import { query } from "../../../lib/db";
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../lib/token-verifier";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '../../../lib/auth';
+import { authOptions } from "../../../lib/auth";
 export const dynamic = "force-dynamic";
 
 // Define types for our data structures
@@ -31,6 +34,49 @@ interface ShopifyBlogPost {
   author: string | null;
   tags: string[] | null;
   blogId: string;
+}
+
+// WordPress blog interfaces
+interface WordPressBlog {
+  id: string;
+  title: string;
+  type: "posts";
+  content: WordPressContent[];
+}
+
+interface WordPressContent {
+  id: number;
+  wpId: number;
+  title: string;
+  slug: string;
+  content: string;
+  excerpt?: string | null;
+  link: string;
+  author?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  categories?: WordPressCategory[];
+  tags?: WordPressTag[];
+  type: "post";
+  // Additional fields that might be useful for a news/blog API
+  url: string;
+  handle: string;
+  hot: number;
+}
+
+interface WordPressCategory {
+  id: number;
+  wpId: number;
+  name: string;
+  slug: string;
+  description?: string;
+}
+
+interface WordPressTag {
+  id: number;
+  wpId: number;
+  name: string;
+  slug: string;
 }
 
 // Add OPTIONS handler for CORS preflight
@@ -151,46 +197,125 @@ export async function POST(request: NextRequest) {
     }
 
     const website = websites[0];
-    
+
     // Check if this is a Shopify website
-    if (website.type !== 'Shopify') {
+    if (website.type === "Shopify") {
+      // Fetch all ShopifyBlogs for this website
+      const blogs = (await query(
+        `SELECT * FROM ShopifyBlog WHERE websiteId = ? ORDER BY title ASC`,
+        [websiteId]
+      )) as ShopifyBlog[];
+
+      // For each blog, fetch its posts
+      for (const blog of blogs) {
+        const posts = (await query(
+          `SELECT * FROM ShopifyBlogPost WHERE blogId = ? ORDER BY publishedAt DESC`,
+          [blog.id]
+        )) as ShopifyBlogPost[];
+
+        blog.blogPosts = posts;
+      }
+
       return cors(
         request,
-        NextResponse.json({ error: "This website is not a Shopify store" }, { status: 400 })
+        NextResponse.json({
+          success: true,
+          blogs: blogs,
+          websiteId: websiteId,
+          domain: website.domain || website.url,
+          platform: "Shopify",
+        })
+      );
+    } else {
+      // Handle WordPress and other non-Shopify websites
+      console.log("doing: Fetching WordPress content for website:", websiteId);
+
+      const wordpressBlogs: WordPressBlog[] = [];
+
+      // Fetch WordPress Posts
+      const posts = (await query(
+        `SELECT p.*, a.name as authorName 
+         FROM WordpressPost p 
+         LEFT JOIN WordpressAuthor a ON p.authorId = a.wpId 
+         WHERE p.websiteId = ? 
+         ORDER BY p.updatedAt DESC`,
+        [websiteId]
+      )) as any[];
+
+      if (posts.length > 0) {
+        const postsWithRelations = await Promise.all(
+          posts.map(async (post) => {
+            // Fetch categories for this post
+            const categories = (await query(
+              `SELECT c.* FROM WordpressCategory c 
+              JOIN _WordpressCategoryToWordpressPost cp ON c.id = cp.A 
+              WHERE cp.B = ?`,
+              [post.id]
+            )) as WordPressCategory[];
+
+            // Fetch tags for this post
+            const tags = (await query(
+              `SELECT t.* FROM WordpressTag t 
+              JOIN _WordpressPostToWordpressTag pt ON t.id = pt.A 
+              WHERE pt.B = ?`,
+              [post.id]
+            )) as WordPressTag[];
+
+            return {
+              id: post.id,
+              wpId: post.wpId,
+              title: post.title,
+              slug: post.slug,
+              content: post.content,
+              excerpt: post.excerpt,
+              link: post.link,
+              author: post.authorName,
+              createdAt: post.createdAt,
+              updatedAt: post.updatedAt,
+              categories,
+              tags,
+              type: "post" as const,
+              url: `/${post.slug}`,
+              handle: post.slug,
+              hot: parseInt(post.hot) || 0,
+            };
+          })
+        );
+
+        wordpressBlogs.push({
+          id: "posts",
+          title: "Blog Posts",
+          type: "posts",
+          content: postsWithRelations,
+        });
+      }
+
+      console.log("done: WordPress content fetched", {
+        websiteId,
+        blogsCount: wordpressBlogs.length,
+        totalItems: wordpressBlogs.reduce(
+          (sum, blog) => sum + blog.content.length,
+          0
+        ),
+      });
+
+      return cors(
+        request,
+        NextResponse.json({
+          success: true,
+          blogs: wordpressBlogs,
+          websiteId: websiteId,
+          domain: website.domain || website.url,
+          platform: "WordPress",
+        })
       );
     }
-
-    // Fetch all ShopifyBlogs for this website
-    const blogs = (await query(
-      `SELECT * FROM ShopifyBlog WHERE websiteId = ? ORDER BY title ASC`,
-      [websiteId]
-    )) as ShopifyBlog[];
-
-    // For each blog, fetch its posts
-    for (const blog of blogs) {
-      const posts = (await query(
-        `SELECT * FROM ShopifyBlogPost WHERE blogId = ? ORDER BY publishedAt DESC`,
-        [blog.id]
-      )) as ShopifyBlogPost[];
-      
-      blog.blogPosts = posts;
-    }
-
-    return cors(
-      request,
-      NextResponse.json({
-        success: true,
-        blogs: blogs,
-        websiteId: websiteId,
-        domain: website.domain,
-      })
-    );
   } catch (error: any) {
-    console.error("Shopify blogs fetch error:", error);
+    console.error("News content fetch error:", error);
     return cors(
       request,
       NextResponse.json(
-        { error: "Failed to retrieve blogs", details: error.message },
+        { error: "Failed to retrieve news content", details: error.message },
         { status: 500 }
       )
     );

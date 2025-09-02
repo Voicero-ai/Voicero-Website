@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cors } from '../../../../lib/cors';
-import { query } from '../../../../lib/db';
-import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
+import { cors } from "../../../../lib/cors";
+import { query } from "../../../../lib/db";
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../../lib/token-verifier";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '../../../../lib/auth';
+import { authOptions } from "../../../../lib/auth";
 export const dynamic = "force-dynamic";
 
 // Add OPTIONS handler for CORS preflight
@@ -19,6 +22,14 @@ export async function POST(request: NextRequest) {
     // Parse request body
     const body = await request.json();
     const { websiteId, postId, hot } = body;
+
+    console.log("Hot API received:", {
+      websiteId,
+      postId,
+      hot,
+      hotType: typeof hot,
+      body,
+    });
 
     if (!websiteId || !postId) {
       return cors(
@@ -103,7 +114,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Check if this is a Shopify website
+    // Get website type
     const websites = (await query(`SELECT type FROM Website WHERE id = ?`, [
       websiteId,
     ])) as { type: string }[];
@@ -115,71 +126,162 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (websites[0].type !== "Shopify") {
-      return cors(
-        request,
-        NextResponse.json(
-          { error: "This website is not a Shopify store" },
-          { status: 400 }
-        )
-      );
-    }
+    const websiteType = websites[0].type;
 
-    // Verify the post exists
-    const posts = (await query(
-      `SELECT id, hot FROM ShopifyBlogPost WHERE id = ? AND websiteId = ?`,
-      [postId, websiteId]
-    )) as { id: string; hot: number }[];
+    if (websiteType === "Shopify") {
+      // Verify the Shopify post exists
+      const posts = (await query(
+        `SELECT id, hot FROM ShopifyBlogPost WHERE id = ? AND websiteId = ?`,
+        [postId, websiteId]
+      )) as { id: string; hot: number }[];
 
-    if (!posts.length) {
-      return cors(
-        request,
-        NextResponse.json({ error: "Blog post not found" }, { status: 404 })
-      );
-    }
-
-    // Check if we're trying to set a post as hot
-    if (hot === true || hot === 1) {
-      // Count current hot posts
-      const hotPostsCount = (await query(
-        `SELECT COUNT(*) as count FROM ShopifyBlogPost WHERE websiteId = ? AND hot = 1`,
-        [websiteId]
-      )) as { count: number }[];
-
-      // If we already have 2 hot posts and this post isn't already hot, return error
-      if (hotPostsCount[0].count >= 2 && posts[0].hot !== 1) {
+      if (!posts.length) {
         return cors(
           request,
-          NextResponse.json(
-            {
-              error:
-                "Maximum of 2 hot posts allowed. Please un-hot another post first.",
-            },
-            { status: 400 }
-          )
+          NextResponse.json({ error: "Blog post not found" }, { status: 404 })
         );
       }
+
+      // Check if we're trying to set a post as hot
+      if (hot === true || hot === 1) {
+        // Count current hot posts
+        const hotPostsCount = (await query(
+          `SELECT COUNT(*) as count FROM ShopifyBlogPost WHERE websiteId = ? AND hot = 1`,
+          [websiteId]
+        )) as { count: number }[];
+
+        // If we already have 2 hot posts and this post isn't already hot, return error
+        if (hotPostsCount[0].count >= 2 && posts[0].hot !== 1) {
+          return cors(
+            request,
+            NextResponse.json(
+              {
+                error:
+                  "Maximum of 2 hot posts allowed. Please un-hot another post first.",
+              },
+              { status: 400 }
+            )
+          );
+        }
+      }
+
+      // Update the hot status for Shopify
+      await query(`UPDATE ShopifyBlogPost SET hot = ? WHERE id = ?`, [
+        hot ? 1 : 0,
+        postId,
+      ]);
+
+      // Get updated post data
+      const updatedPosts = (await query(
+        `SELECT * FROM ShopifyBlogPost WHERE id = ?`,
+        [postId]
+      )) as any[];
+
+      return cors(
+        request,
+        NextResponse.json({
+          success: true,
+          post: updatedPosts[0],
+        })
+      );
+    } else {
+      // Handle WordPress posts
+      console.log("doing: Setting hot status for WordPress post", {
+        postId,
+        hot,
+      });
+
+      // First check if the WordPress post table has a hot column, if not we need to add it
+      // For now, let's check if the post exists
+      const posts = (await query(
+        `SELECT id FROM WordpressPost WHERE id = ? AND websiteId = ?`,
+        [postId, websiteId]
+      )) as { id: number }[];
+
+      if (!posts.length) {
+        return cors(
+          request,
+          NextResponse.json({ error: "Blog post not found" }, { status: 404 })
+        );
+      }
+
+      // WordPress posts might not have a hot column yet, so let's handle this gracefully
+      try {
+        // First try to check if hot column exists by querying for it
+        const hotCheck = (await query(
+          `SELECT id, hot FROM WordpressPost WHERE id = ? AND websiteId = ? LIMIT 1`,
+          [postId, websiteId]
+        )) as { id: number; hot?: number }[];
+
+        if (hotCheck.length > 0) {
+          // Hot column exists, proceed with hot logic
+          if (hot === true || hot === 1) {
+            // Count current hot posts for WordPress
+            const hotPostsCount = (await query(
+              `SELECT COUNT(*) as count FROM WordpressPost WHERE websiteId = ? AND hot = 1`,
+              [websiteId]
+            )) as { count: number }[];
+
+            // If we already have 2 hot posts and this post isn't already hot, return error
+            if (hotPostsCount[0].count >= 2 && hotCheck[0].hot !== 1) {
+              return cors(
+                request,
+                NextResponse.json(
+                  {
+                    error:
+                      "Maximum of 2 hot posts allowed. Please un-hot another post first.",
+                  },
+                  { status: 400 }
+                )
+              );
+            }
+          }
+
+          // Update the hot status for WordPress
+          await query(`UPDATE WordpressPost SET hot = ? WHERE id = ?`, [
+            hot ? 1 : 0,
+            postId,
+          ]);
+
+          // Get updated post data
+          const updatedPosts = (await query(
+            `SELECT * FROM WordpressPost WHERE id = ?`,
+            [postId]
+          )) as any[];
+
+          console.log("done: WordPress post hot status updated", {
+            postId,
+            hot,
+          });
+
+          return cors(
+            request,
+            NextResponse.json({
+              success: true,
+              post: updatedPosts[0],
+            })
+          );
+        }
+      } catch (error: any) {
+        // Hot column probably doesn't exist for WordPress posts
+        if (error.code === "ER_BAD_FIELD_ERROR") {
+          return cors(
+            request,
+            NextResponse.json(
+              {
+                error:
+                  "Hot functionality not yet available for WordPress posts. Database schema needs to be updated.",
+                details:
+                  "The 'hot' column needs to be added to the WordpressPost table.",
+              },
+              { status: 501 }
+            )
+          );
+        } else {
+          throw error; // Re-throw if it's a different error
+        }
+      }
     }
-
-    // Update the hot status
-    await query(`UPDATE ShopifyBlogPost SET hot = ? WHERE id = ?`, [
-      hot ? 1 : 0,
-      postId,
-    ]);
-
-    // Get updated post data
-    const updatedPosts = (await query(
-      `SELECT * FROM ShopifyBlogPost WHERE id = ?`,
-      [postId]
-    )) as any[];
-
-    return cors(
-      request,
-      NextResponse.json({
-        success: true,
-        post: updatedPosts[0],
-      })
-    );
   } catch (error: any) {
     console.error("Hot toggle error:", error);
     return cors(

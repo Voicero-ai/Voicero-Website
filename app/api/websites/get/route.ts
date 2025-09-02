@@ -1488,6 +1488,7 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
       aiRedirects: redirectMaps.blogRedirects.get(post.slug) || 0,
       content: post.excerpt ?? post.content,
       author: post.authorName ?? "Unknown",
+      hot: parseInt(post.hot) || 0,
     };
   });
 
