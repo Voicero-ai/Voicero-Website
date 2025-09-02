@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import mysql from "mysql2/promise";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
 import { cors } from "@/lib/cors";
+import db from "@/lib/db";
+import { verifyToken, getWebsiteIdFromToken } from "@/lib/token-verifier";
 
 export async function POST(request: NextRequest) {
   // For OPTIONS request, return CORS headers
@@ -11,11 +10,12 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Get session
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.email) {
+    // Auth
+    const authHeader = request.headers.get("authorization");
+    const isTokenValid = await verifyToken(authHeader);
+    if (!isTokenValid) {
       const authResponse = NextResponse.json(
-        { message: "Authentication required" },
+        { error: "Unauthorized - Invalid token" },
         { status: 401 }
       );
       return cors(request, authResponse);
@@ -23,11 +23,6 @@ export async function POST(request: NextRequest) {
 
     // Parse customer data from request
     const customerData = await request.json();
-
-    // Connect to the database
-    const connection = await mysql.createConnection(
-      "mysql://tester:PQPrzTKuIq20yENMgUOr@test-voicero-pitr.cra8awecqziq.us-east-2.rds.amazonaws.com:3306/voicero-test"
-    );
 
     // Prepare data for insertion
     const {
@@ -47,7 +42,7 @@ export async function POST(request: NextRequest) {
     } = customerData;
 
     // Store customer in the database
-    const [result] = await connection.execute(
+    await db.query(
       `INSERT INTO wordpress_customers 
        (customer_id, email, first_name, last_name, username, display_name, date_registered,
        orders_count, total_spent, roles, billing_info, shipping_info, recent_orders)
@@ -79,9 +74,6 @@ export async function POST(request: NextRequest) {
         JSON.stringify(recent_orders || []),
       ]
     );
-
-    // Close the database connection
-    await connection.end();
 
     const response = NextResponse.json({
       message: "WordPress customer data saved successfully",
