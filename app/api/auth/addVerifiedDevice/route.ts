@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { query } from "../../../../lib/db";
+import { v4 as uuidv4 } from "uuid";
 
 export const dynamic = "force-dynamic";
 
@@ -40,12 +41,11 @@ export async function POST(request: Request) {
     }
 
     // Add the device to verified devices
-    const result = await query(
-      "INSERT INTO VerifiedDevice (userId, deviceId) VALUES (?, ?)",
-      [userId, deviceId]
+    const deviceDbId = uuidv4();
+    await query(
+      "INSERT INTO VerifiedDevice (id, userId, deviceId) VALUES (?, ?, ?)",
+      [deviceDbId, userId, deviceId]
     );
-
-    const deviceDbId = (result as any).insertId;
 
     console.log(`Successfully added verified device: ${deviceDbId}`);
     return NextResponse.json({

@@ -1,4 +1,4 @@
-import { query } from '../../../../lib/db';
+import { query } from "../../../../lib/db";
 
 export const dynamic = "force-dynamic";
 
@@ -9,31 +9,23 @@ export async function DELETE(request: Request) {
     const { id } = await request.json();
     console.log(`Deleting website with ID: ${id}`);
 
-    // First check if website has an active subscription
-    const rows = (await query(
-      `SELECT active, plan FROM Website WHERE id = ? LIMIT 1`,
-      [id]
-    )) as { active: number; plan: string | null }[];
+    // Check if website exists
+    const rows = (await query(`SELECT id FROM Website WHERE id = ? LIMIT 1`, [
+      id,
+    ])) as { id: string }[];
     const website = rows.length > 0 ? rows[0] : null;
 
-    // Only allow Free and Beta plans to be deleted
-    if (website?.active) {
-      const plan = website.plan || "";
-      // Case insensitive comparison - allow empty, Free or Beta plans
-      const lowerPlan = plan.toLowerCase();
-      if (lowerPlan !== "" && lowerPlan !== "free" && lowerPlan !== "beta") {
-        return new Response(
-          JSON.stringify({
-            error: "Cannot delete website with active subscription",
-            message:
-              "Please cancel the subscription first before deleting this website.",
-          }),
-          {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
-      }
+    if (!website) {
+      return new Response(
+        JSON.stringify({
+          error: "Website not found",
+          message: "The website you're trying to delete does not exist.",
+        }),
+        {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
     }
 
     try {

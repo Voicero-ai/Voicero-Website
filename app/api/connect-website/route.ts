@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "../../../lib/auth";
-import { cors } from '../../../lib/cors';
+import { cors } from "../../../lib/cors";
 import { query } from "../../../lib/db";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
+import { v4 as uuidv4 } from "uuid";
 
 export const dynamic = "force-dynamic";
 
@@ -76,13 +77,14 @@ export async function POST(request: Request) {
         // Create a new access key
         const newKey = generateAccessKey();
         const hashedKey = await hashAccessKey(newKey);
-        const accessKeyResult = await query(
-          "INSERT INTO AccessKey (`key`, websiteId) VALUES (?, ?)",
-          [hashedKey, website.id]
+        const accessKeyId = uuidv4();
+        await query(
+          "INSERT INTO AccessKey (id, `key`, websiteId) VALUES (?, ?, ?)",
+          [accessKeyId, hashedKey, website.id]
         );
 
         accessKey = {
-          id: (accessKeyResult as any).insertId,
+          id: accessKeyId,
           key: newKey,
           websiteId: website.id,
         };
@@ -109,13 +111,14 @@ export async function POST(request: Request) {
           // Create a new access key
           const newKey = generateAccessKey();
           const hashedKey = await hashAccessKey(newKey);
-          const accessKeyResult = await query(
-            "INSERT INTO AccessKey (`key`, websiteId) VALUES (?, ?)",
-            [hashedKey, website.id]
+          const accessKeyId = uuidv4();
+          await query(
+            "INSERT INTO AccessKey (id, `key`, websiteId) VALUES (?, ?, ?)",
+            [accessKeyId, hashedKey, website.id]
           );
 
           accessKey = {
-            id: (accessKeyResult as any).insertId,
+            id: accessKeyId,
             key: newKey,
             websiteId: website.id,
           };
@@ -123,21 +126,30 @@ export async function POST(request: Request) {
       } else {
         // Create a new website
         const renewsOn = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // Set 30 days from now
-        const websiteResult = await query(
+        const newWebsiteId = uuidv4();
+        await query(
           `INSERT INTO Website 
-            (url, name, userId, type, plan, queryLimit, renewsOn) 
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [siteUrl, websiteName, session.user.id, type, "", 0, renewsOn]
+            (id, url, name, userId, type, plan, queryLimit, renewsOn) 
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            newWebsiteId,
+            siteUrl,
+            websiteName,
+            session.user.id,
+            type,
+            "",
+            0,
+            renewsOn,
+          ]
         );
-
-        const newWebsiteId = (websiteResult as any).insertId;
 
         // Create a new access key
         const newKey = generateAccessKey();
         const hashedKey = await hashAccessKey(newKey);
-        const accessKeyResult = await query(
-          "INSERT INTO AccessKey (`key`, websiteId) VALUES (?, ?)",
-          [hashedKey, newWebsiteId]
+        const accessKeyId = uuidv4();
+        await query(
+          "INSERT INTO AccessKey (id, `key`, websiteId) VALUES (?, ?, ?)",
+          [accessKeyId, hashedKey, newWebsiteId]
         );
 
         website = {
@@ -149,7 +161,7 @@ export async function POST(request: Request) {
         };
 
         accessKey = {
-          id: (accessKeyResult as any).insertId,
+          id: accessKeyId,
           key: newKey,
           websiteId: newWebsiteId,
         };

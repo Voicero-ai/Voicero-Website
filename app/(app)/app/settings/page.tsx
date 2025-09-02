@@ -320,15 +320,6 @@ export default function Settings() {
   const handleDelete = async () => {
     if (!websiteToDelete) return;
 
-    // Check if website has a Pro subscription plan, but allow Beta plans
-    if (websiteToDelete.plan === "Pro") {
-      setShowDeleteModal(false);
-      setShowSubscriptionWarning(true);
-      return;
-    }
-
-    // Special case for Beta plans - allow them to be deleted
-
     setIsDeleting(true);
 
     try {
@@ -728,15 +719,7 @@ export default function Settings() {
                       className="p-2 text-red-500 hover:text-red-600 transition-colors rounded-lg hover:bg-red-50"
                       onClick={() => {
                         setWebsiteToDelete(site);
-                        if (
-                          site.plan === "" ||
-                          site.plan === "Beta" ||
-                          !site.stripeId
-                        ) {
-                          setShowDeleteModal(true);
-                        } else {
-                          setShowSubscriptionWarning(true);
-                        }
+                        setShowDeleteModal(true);
                       }}
                     >
                       <FaTrash className="w-4 h-4" />

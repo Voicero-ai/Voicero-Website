@@ -11,14 +11,27 @@ export async function verifyToken(authHeader: string | null): Promise<boolean> {
 
     console.log("token", token);
 
-    // First check AccessKey table (unencrypted keys)
-    const accessKeys = await query(
-      "SELECT `key` FROM AccessKey WHERE `key` = ?",
-      [token]
-    );
+    // Check AccessKey table (both plain text and hashed keys)
+    const accessKeys = await query("SELECT `key` FROM AccessKey", []);
 
-    if (accessKeys && (accessKeys as any[]).length > 0) {
-      return true;
+    // Check each access key (both plain text and hashed)
+    for (const accessKey of accessKeys as any[]) {
+      // Check if it's a bcrypt hash (starts with $2a$ or $2b$)
+      if (
+        accessKey.key.startsWith("$2a$") ||
+        accessKey.key.startsWith("$2b$")
+      ) {
+        // Compare with bcrypt for hashed keys
+        const isValid = await bcrypt.compare(token, accessKey.key);
+        if (isValid) {
+          return true;
+        }
+      } else {
+        // Direct string comparison for plain text keys
+        if (token === accessKey.key) {
+          return true;
+        }
+      }
     }
 
     // If not found in AccessKey, check hashKeys table
@@ -49,14 +62,30 @@ export async function getWebsiteIdFromToken(
 
     const token = authHeader.substring(7);
 
-    // First check AccessKey table (unencrypted keys)
+    // Check AccessKey table (both plain text and hashed keys)
     const accessKeys = await query(
-      "SELECT websiteId FROM AccessKey WHERE `key` = ?",
-      [token]
+      "SELECT websiteId, `key` FROM AccessKey",
+      []
     );
 
-    if (accessKeys && (accessKeys as any[]).length > 0) {
-      return (accessKeys as any[])[0].websiteId;
+    // Check each access key (both plain text and hashed)
+    for (const accessKey of accessKeys as any[]) {
+      // Check if it's a bcrypt hash (starts with $2a$ or $2b$)
+      if (
+        accessKey.key.startsWith("$2a$") ||
+        accessKey.key.startsWith("$2b$")
+      ) {
+        // Compare with bcrypt for hashed keys
+        const isValid = await bcrypt.compare(token, accessKey.key);
+        if (isValid) {
+          return accessKey.websiteId;
+        }
+      } else {
+        // Direct string comparison for plain text keys
+        if (token === accessKey.key) {
+          return accessKey.websiteId;
+        }
+      }
     }
 
     // If not found in AccessKey, check hashKeys table

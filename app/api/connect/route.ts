@@ -5,6 +5,7 @@ import {
   verifyToken,
   getWebsiteIdFromToken,
 } from "../../../lib/token-verifier";
+import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
 
@@ -145,15 +146,38 @@ export async function GET(request: NextRequest) {
 
       if (accessToken) {
         // For backward compatibility, try to find website by access token
-        const websites = (await query(
-          `SELECT w.* FROM Website w
-           JOIN AccessKey ak ON w.id = ak.websiteId
-           WHERE ak.\`key\` = ?`,
-          [accessToken]
-        )) as Website[];
+        // Get all access keys and check against bcrypt hashes
+        const accessKeys = (await query(
+          `SELECT ak.key, ak.websiteId, w.* FROM AccessKey ak
+           JOIN Website w ON w.id = ak.websiteId`,
+          []
+        )) as (Website & { key: string; websiteId: string })[];
 
-        if (websites.length > 0) {
-          websiteId = websites[0].id;
+        // Check each access key against the provided token
+        for (const accessKey of accessKeys) {
+          try {
+            let isValid = false;
+
+            // Check if the stored key is a bcrypt hash (starts with $2a$ or $2b$)
+            if (
+              accessKey.key.startsWith("$2a$") ||
+              accessKey.key.startsWith("$2b$")
+            ) {
+              // Compare with bcrypt for hashed keys
+              isValid = await bcrypt.compare(accessToken, accessKey.key);
+            } else {
+              // Direct string comparison for plain text keys (legacy)
+              isValid = accessToken === accessKey.key;
+            }
+
+            if (isValid) {
+              websiteId = accessKey.websiteId;
+              break;
+            }
+          } catch (error) {
+            console.error("Error comparing access key:", error);
+            continue;
+          }
         }
       }
     }
@@ -186,6 +210,8 @@ export async function GET(request: NextRequest) {
     }
 
     const website = websites[0];
+
+    console.log("Website lastSyncedAt:", website.lastSyncedAt);
 
     // Get access keys
     const accessKeys = (await query(
@@ -337,6 +363,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Return the website data with type-specific counts and IDs
+    console.log("Sending lastSyncedAt in response:", website.lastSyncedAt);
+
     return cors(
       request,
       NextResponse.json({

@@ -1390,23 +1390,13 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
   const { redirectMaps } = stats;
   const { urlRedirectCounts } = redirectMaps;
 
-  // Fetch WordPress Products with relations
+  // Fetch WordPress Products
   const wpProducts = (await query(
-    `SELECT p.*, wpr.review as reviewText, wpr.rating as reviewRating, wpr.verified as reviewVerified,
-            wc.name as categoryName, wt.name as tagName, wcf.metaKey, wcf.metaValue
-     FROM WordpressProduct p
-     LEFT JOIN WordpressReview wpr ON wpr.productId = p.wpId
-     LEFT JOIN _WordpressProductToWordpressProductCategory wpc ON wpc.A = p.id
-     LEFT JOIN WordpressProductCategory wc ON wc.id = wpc.B
-     LEFT JOIN _WordpressProductToWordpressProductTag wpt ON wpt.A = p.id
-     LEFT JOIN WordpressProductTag wt ON wt.id = wpt.B
-     LEFT JOIN WordpressCustomField wcf ON wcf.wordpressProductId = p.id
-     WHERE p.websiteId = ?
-     ORDER BY p.updatedAt DESC`,
+    `SELECT * FROM WordpressProduct WHERE websiteId = ? ORDER BY updatedAt DESC`,
     [websiteId]
   )) as any[];
 
-  // Fetch WordPress Posts with relations
+  // Fetch WordPress Posts with author relation
   const wpPosts = (await query(
     `SELECT p.*, wa.name as authorName
      FROM WordpressPost p
@@ -1425,79 +1415,114 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
   // Map products
   const products = wpProducts.map((prod: any) => {
     const productUrl = `/products/${prod.slug}`;
+
+    // Handle date safely - WordPress dates might be strings or null
+    let lastUpdated;
+    try {
+      if (prod.updatedAt instanceof Date) {
+        lastUpdated = prod.updatedAt.toISOString();
+      } else if (prod.updatedAt) {
+        // Try to parse as string
+        const date = new Date(prod.updatedAt);
+        if (!isNaN(date.getTime())) {
+          lastUpdated = date.toISOString();
+        } else {
+          lastUpdated = new Date().toISOString();
+        }
+      } else {
+        lastUpdated = new Date().toISOString();
+      }
+    } catch (e) {
+      console.error("Error parsing WordPress product date:", prod.updatedAt, e);
+      lastUpdated = new Date().toISOString();
+    }
+
     return {
       id: String(prod.id),
       title: prod.name,
       url: productUrl,
+      handle: prod.slug,
       type: "product" as const,
-      lastUpdated: prod.updatedAt.toISOString(),
+      lastUpdated: lastUpdated,
       aiRedirects: redirectMaps.productRedirects.get(prod.slug) || 0,
       description: prod.description,
-      price: prod.price,
+      price: prod.price || prod.regularPrice || 0,
       regularPrice: prod.regularPrice,
       salePrice: prod.salePrice,
       stockQuantity: prod.stockQuantity,
-      categories: prod.categories.map((c: any) => ({ id: c.id, name: c.name })),
-      tags: prod.tags.map((t: any) => ({ id: t.id, name: t.name })),
-      reviews: prod.reviews.map((r: any) => ({
-        id: r.id,
-        reviewer: r.reviewer,
-        rating: r.rating,
-        review: r.review,
-        verified: r.verified,
-        date: r.date.toISOString(),
-      })),
-      customFields: prod.customFields.reduce(
-        (acc: Record<string, any>, field: any) => ({
-          ...acc,
-          [field.metaKey]: field.metaValue,
-        }),
-        {}
-      ),
     };
   });
 
   // Map blog posts
   const blogPosts = wpPosts.map((post: any) => {
     const postUrl = `/${post.slug}`;
+
+    // Handle date safely - WordPress dates might be strings or null
+    let lastUpdated;
+    try {
+      if (post.updatedAt instanceof Date) {
+        lastUpdated = post.updatedAt.toISOString();
+      } else if (post.updatedAt) {
+        // Try to parse as string
+        const date = new Date(post.updatedAt);
+        if (!isNaN(date.getTime())) {
+          lastUpdated = date.toISOString();
+        } else {
+          lastUpdated = new Date().toISOString();
+        }
+      } else {
+        lastUpdated = new Date().toISOString();
+      }
+    } catch (e) {
+      console.error("Error parsing WordPress post date:", post.updatedAt, e);
+      lastUpdated = new Date().toISOString();
+    }
+
     return {
       id: String(post.id),
       title: post.title,
       url: postUrl,
+      handle: post.slug,
       type: "post" as const,
-      lastUpdated: post.updatedAt.toISOString(),
+      lastUpdated: lastUpdated,
       aiRedirects: redirectMaps.blogRedirects.get(post.slug) || 0,
       content: post.excerpt ?? post.content,
-      author: post.author?.name ?? "Unknown",
-      categories: post.categories.map((c: any) => ({ id: c.id, name: c.name })),
-      tags: post.tags.map((t: any) => ({ id: t.id, name: t.name })),
-      comments: post.comments.map((c: any) => ({
-        id: c.id,
-        author: c.authorName,
-        content: c.content,
-        date: c.date.toISOString(),
-        status: c.status,
-        parentId: c.parentId,
-      })),
-      customFields: post.customFields.reduce(
-        (acc: Record<string, any>, field: any) => ({
-          ...acc,
-          [field.metaKey]: field.metaValue,
-        }),
-        {}
-      ),
+      author: post.authorName ?? "Unknown",
     };
   });
 
   // Map pages
   const pages = wpPages.map((p: any) => {
     const pageUrl = `/${p.slug}`;
+
+    // Handle date safely - WordPress dates might be strings or null
+    let lastUpdated;
+    try {
+      if (p.updatedAt instanceof Date) {
+        lastUpdated = p.updatedAt.toISOString();
+      } else if (p.updatedAt) {
+        // Try to parse as string
+        const date = new Date(p.updatedAt);
+        if (!isNaN(date.getTime())) {
+          lastUpdated = date.toISOString();
+        } else {
+          lastUpdated = new Date().toISOString();
+        }
+      } else {
+        lastUpdated = new Date().toISOString();
+      }
+    } catch (e) {
+      console.error("Error parsing WordPress page date:", p.updatedAt, e);
+      lastUpdated = new Date().toISOString();
+    }
+
     return {
       id: String(p.id),
       title: p.title,
       url: pageUrl,
+      handle: p.slug,
       type: "page" as const,
-      lastUpdated: p.updatedAt.toISOString(),
+      lastUpdated: lastUpdated,
       aiRedirects: redirectMaps.pageRedirects.get(p.slug) || 0,
       content: p.content,
     };
@@ -1893,10 +1918,6 @@ async function fetchCustomContent(websiteId: string, stats: any) {
     )) as any[];
 
     if (customTypePages.length > 0) {
-      console.log(
-        `Found ${customTypePages.length} pages in CustomPage table for website ${websiteId}`
-      );
-
       // Replace pages with CustomPage data if there are any
       pages = customTypePages.map((p: any) => {
         // Handle date safely - use current date if parsing fails
@@ -2120,11 +2141,6 @@ function buildResponseData(
     movement: [],
     orders: [],
   };
-
-  // Debug final action counts
-  console.log(
-    `Final action counts: cart=${base.actionDetails.cart.length}, movement=${base.actionDetails.movement.length}, orders=${base.actionDetails.orders.length}`
-  );
 
   // Embed full messages for each action entry so the frontend can render conversations directly
   try {
