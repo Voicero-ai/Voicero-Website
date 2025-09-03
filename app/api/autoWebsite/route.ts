@@ -200,7 +200,7 @@ export async function GET(request: NextRequest) {
     const voiceroScript = `
     <script
       src="https://voicero-text-frontend.vercel.app/widget.js"
-      data-token="33f83f3ff4ec25585718df2716c8a81956f8244a50dc92bb87b59cdbf9a80e04" 
+      data-token="PN9BuAJOqj5RXxqEPzTsHQDcZsNzsmdQqWEALriy7BbKROEOymxPxOHmdv7z303A" 
       data-config='{}'
       onload="console.log('VoiceroAI: Text widget loaded successfully')"
       defer

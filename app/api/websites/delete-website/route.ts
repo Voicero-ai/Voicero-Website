@@ -116,6 +116,17 @@ export async function DELETE(request: Request) {
     }
 
     try {
+      // Fourth transaction: Delete Custom website content
+      await query(`DELETE FROM CustomPage WHERE websiteId = ?`, [id]);
+      console.log("Deleted Custom pages");
+      await query(`DELETE FROM Page WHERE websiteId = ?`, [id]);
+      console.log("Deleted legacy Custom pages");
+    } catch (err) {
+      console.error("Error in fourth transaction (Custom content):", err);
+      throw err;
+    }
+
+    try {
       // Final transaction: Delete the website itself
       await query(
         `UPDATE ShopifyCustomer SET defaultAddressId = NULL WHERE websiteId = ?`,

@@ -1073,11 +1073,11 @@ export async function POST(request: NextRequest) {
           "When referring to products, pages, or resources that might have URLs, include them as markdown links.",
           baseUrl
             ? `IMPORTANT: Always follow these URL format conventions:
-            - For pages: ${baseUrl}/pages/[page-name]
+            - For pages: ${baseUrl}/[page-name]
             - For blog articles: ${baseUrl}/blog/[category]/[post-name]
             - For policy pages: ${baseUrl}/policies/[policy-name]
             - For other content: ${baseUrl}/[path-name]`
-            : "IMPORTANT: Always follow these URL format conventions for websites:\\n- For pages: /pages/[page-name]\\n- For blog articles: /blog/[category]/[post-name]\\n- For policy pages: /policies/[policy-name]\\n- For other content: /[path-name]",
+            : "IMPORTANT: Always follow these URL format conventions for websites:\\n- For pages: /[page-name]\\n- For blog articles: /blog/[category]/[post-name]\\n- For policy pages: /policies/[policy-name]\\n- For other content: /[path-name]",
           "If images are available, include them in markdown format using ![alt text](image_url).",
           "When referencing search results, use their URLs and include them as markdown links.",
           "NEVER refer users to external websites - keep them on the original site.",
@@ -1085,7 +1085,7 @@ export async function POST(request: NextRequest) {
           "EXTREMELY IMPORTANT: Your response MUST directly answer the user's specific question. DO NOT provide generic information unless explicitly asked.",
           "NEVER make up information - only use what's provided in the context, search results, or what the user has told you.",
           "CRITICAL: When formatting website links, ALWAYS use appropriate prefixes for URLs based on content type:",
-          "  - Use /pages/ for informational pages",
+          "  - Use root path / for informational pages (no /pages/ prefix needed)",
           "  - Use /blog/ for blog articles",
           "  - Use /policies/ for policy pages",
           "  - Use the root path (/) for other content types",

@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Pinecone } from "@pinecone-database/pinecone";
 import { OpenAIEmbeddings } from "@langchain/openai";
-import { query } from '../../../../lib/db';
-import { verifyToken, getWebsiteIdFromToken } from '../../../../lib/token-verifier';
+import { query } from "../../../../lib/db";
+import {
+  verifyToken,
+  getWebsiteIdFromToken,
+} from "../../../../lib/token-verifier";
 
 export const dynamic = "force-dynamic";
 
@@ -444,10 +447,7 @@ export async function POST(request: Request) {
     const website = websiteRows[0];
 
     if (!website) {
-      return NextResponse.json(
-        { error: "Website not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
 
     // Rebuild embeddings for that website
@@ -529,6 +529,12 @@ export async function DELETE(request: Request) {
       // Delete custom fields
       await query(`DELETE FROM WordpressCustomField WHERE websiteId = ?`, [id]);
       console.log("Deleted WordPress custom fields");
+
+      // Delete Custom website content
+      await query(`DELETE FROM CustomPage WHERE websiteId = ?`, [id]);
+      console.log("Deleted Custom pages");
+      await query(`DELETE FROM Page WHERE websiteId = ?`, [id]);
+      console.log("Deleted legacy Custom pages");
 
       // Finally delete the website (CASCADE removes related rows as defined)
       await query(`DELETE FROM Website WHERE id = ?`, [id]);

@@ -169,7 +169,7 @@ export default function SyncContent() {
       console.log(
         `[CUSTOM SYNC] Sending ${urls.length} URLs to custom sync endpoint`
       );
-      const response = await fetch("http://localhost:3001/api/custom/sync", {
+      const response = await fetch("https://train.voicero.ai/api/custom/sync", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -897,7 +897,7 @@ export default function SyncContent() {
     const accessKey = getAccessKey();
 
     // Fire and forget - send request but don't wait for response
-    fetch("http://localhost:3001/api/custom/sync", {
+    fetch("https://train.voicero.ai/api/custom/sync", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

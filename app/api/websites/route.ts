@@ -78,6 +78,44 @@ export async function GET() {
         website._count.products = productsResult[0]?.count || 0;
         website._count.posts = postsResult[0]?.count || 0;
         website._count.pages = pagesResult[0]?.count || 0;
+      } else if (website.type === "Custom") {
+        // Get Custom website counts - only pages from CustomPage table
+        try {
+          const [customPages, legacyPages] = await Promise.all([
+            query(
+              "SELECT COUNT(*) as count FROM CustomPage WHERE websiteId = ?",
+              [website.id]
+            ),
+            query("SELECT COUNT(*) as count FROM Page WHERE websiteId = ?", [
+              website.id,
+            ]),
+          ]);
+
+          const customPagesResult = customPages as CountResult[];
+          const legacyPagesResult = legacyPages as CountResult[];
+
+          // Use CustomPage count if available, otherwise fall back to legacy Page table
+          const totalPages =
+            (customPagesResult[0]?.count || 0) > 0
+              ? customPagesResult[0]?.count || 0
+              : legacyPagesResult[0]?.count || 0;
+
+          website._count.products = 0; // Custom websites don't have products
+          website._count.posts = 0; // Custom websites don't have blog posts
+          website._count.pages = totalPages;
+          website._count.customPages = customPagesResult[0]?.count || 0;
+          website._count.legacyPages = legacyPagesResult[0]?.count || 0;
+        } catch (error) {
+          console.error(
+            `Error counting Custom website content for ${website.id}:`,
+            error
+          );
+          website._count.products = 0;
+          website._count.posts = 0;
+          website._count.pages = 0;
+          website._count.customPages = 0;
+          website._count.legacyPages = 0;
+        }
       } else {
         // Get Shopify counts
         const [products, blogs, pages] = await Promise.all([
@@ -113,14 +151,20 @@ export async function GET() {
           products:
             website.type === "WordPress"
               ? website._count.products
+              : website.type === "Custom"
+              ? 0 // Custom websites don't have products
               : website._count.shopifyProducts,
           blogPosts:
             website.type === "WordPress"
               ? website._count.posts
+              : website.type === "Custom"
+              ? 0 // Custom websites don't have blog posts
               : website._count.shopifyBlog || 0,
           pages:
             website.type === "WordPress"
               ? website._count.pages
+              : website.type === "Custom"
+              ? website._count.pages // Use the combined count we calculated
               : website._count.shopifyPages,
         },
         status: website.active ? "active" : "inactive",

@@ -207,6 +207,24 @@ export async function GET(request: NextRequest) {
           "Revenue Calc: total products available:",
           allProducts.length
         );
+        console.log(
+          "Revenue Calc: content.products exists:",
+          !!content?.products
+        );
+        console.log(
+          "Revenue Calc: content.products length:",
+          content?.products?.length || 0
+        );
+        if (content?.products?.length > 0) {
+          console.log(
+            "Revenue Calc: Sample products:",
+            content.products.slice(0, 2).map((p) => ({
+              title: p.title,
+              handle: (p as any).handle || extractHandle(p.url, "products"),
+              price: p.price,
+            }))
+          );
+        }
         for (const p of allProducts) {
           const handle: string | undefined =
             p.handle || (p.url ? extractHandle(p.url, "products") : undefined);
@@ -240,30 +258,67 @@ export async function GET(request: NextRequest) {
       let totalAmount = 0;
       const matchedKeys: Array<{ key: string; price: number }> = [];
       const unmatchedKeys: string[] = [];
+
+      // Debug logging - show some sample lookup keys
+      console.log(
+        "Revenue Calc: Sample handleToPrice keys:",
+        Array.from(handleToPrice.keys()).slice(0, 5)
+      );
+      console.log(
+        "Revenue Calc: Sample titleToPrice keys:",
+        Array.from(titleToPrice.keys()).slice(0, 5)
+      );
+      console.log(
+        "Revenue Calc: Total purchases to process:",
+        purchases.raw.length
+      );
+
       for (const entry of Array.from(purchases.byThread.entries())) {
         const set = entry[1];
         for (const rawKey of Array.from(set.values())) {
           let price: number | undefined;
           let key = rawKey || "";
+          console.log(`Revenue Calc: Trying to match key: "${key}"`);
+
           // If it's a URL or path, extract handle
           let handle = key.includes("/") ? extractHandle(key, "products") : key;
           if (handle) {
             price = handleToPrice.get(handle.toLowerCase());
+            console.log(
+              `  - handleToPrice lookup for "${handle.toLowerCase()}": ${price}`
+            );
           }
           // Try by id
           if (price === undefined && key) {
             price = idToPrice.get(String(key));
+            console.log(`  - idToPrice lookup for "${String(key)}": ${price}`);
           }
           // Try by normalized title
           if (price === undefined && key) {
             const norm = key.toLowerCase().replace(/\s+/g, " ").trim();
             price = titleToPrice.get(norm);
+            console.log(`  - titleToPrice lookup for "${norm}": ${price}`);
+          }
+          // Try by slug/handle version of the title (convert spaces to dashes)
+          if (price === undefined && key) {
+            const slugVersion = key.toLowerCase().replace(/\s+/g, "-").trim();
+            price = handleToPrice.get(slugVersion);
+            console.log(
+              `  - handleToPrice slug lookup for "${slugVersion}": ${price}`
+            );
+          }
+          // Try exact match with original key
+          if (price === undefined && key) {
+            price = titleToPrice.get(key);
+            console.log(`  - titleToPrice exact lookup for "${key}": ${price}`);
           }
           if (typeof price === "number") {
             matchedKeys.push({ key, price });
             totalAmount += price;
+            console.log(`  ✓ MATCHED: ${key} → $${price}`);
           } else {
             unmatchedKeys.push(key);
+            console.log(`  ✗ NO MATCH for: ${key}`);
           }
         }
       }
@@ -968,8 +1023,7 @@ function processTextVoiceChatActions(
   const actionType = (message as any).actionType;
 
   // Check if this is a text or voice message to determine which actions to look for
-  // Since we can't easily determine if an AI message came from TextChats vs VoiceChats,
-  // we'll categorize actions based on the actionType instead
+  // We need to check actionData (the action name) not actionType (the action details)
   const isMovementAction = [
     "scroll",
     "highlight",
@@ -977,9 +1031,9 @@ function processTextVoiceChatActions(
     "fill_form",
     "fillForm",
     "click",
-  ].includes(actionType);
+  ].includes(actionData);
   const isCartAction = ["add_to_cart", "get_cart", "delete_from_cart"].includes(
-    actionType
+    actionData
   );
   const isOrderAction = [
     "get_order",
@@ -987,7 +1041,12 @@ function processTextVoiceChatActions(
     "return_order",
     "cancel_order",
     "exchange_order",
-  ].includes(actionType);
+  ].includes(actionData);
+
+  // Also check for voice actions which use different format
+  const isVoiceAction =
+    actionData === "true" &&
+    (actionType === "navigate" || actionType === "click");
 
   // Debug logging
   if (actionData) {
@@ -996,28 +1055,92 @@ function processTextVoiceChatActions(
     );
   }
 
-  if (!actionData || !actionType) {
-    if (actionData && !actionType) {
-      console.log(
-        `Skipping action with null actionType for message ${message.id}`
-      );
-    }
+  if (!actionData) {
     return; // No action to process
+  }
+
+  // Handle cases where actionType is null but we still have an action
+  if (!actionType && actionData) {
+    console.log(
+      `Found action without actionType: ${actionData} for message ${message.id} - will still process`
+    );
   }
 
   // Process actions based on their category
   if (isCartAction) {
     // Cart actions
+    console.log(
+      `✅ CART ACTION DETECTED: ${actionData} for thread ${threadId}`
+    );
     globalStats.totalAiClicks++; // Using clicks as cart interaction counter
+
+    // Track add_to_cart as purchases for revenue calculations
+    if (actionData === "add_to_cart" && purchases && threadId) {
+      console.log("Processing add_to_cart for purchase tracking:", {
+        actionType,
+        actionData,
+        threadId,
+        purchasesExists: !!purchases,
+      });
+      try {
+        // Parse actionType JSON to extract product info
+        let productInfo = null;
+        if (typeof actionType === "string" && actionType !== "add_to_cart") {
+          productInfo = JSON.parse(actionType);
+        } else if ((message as any).actionType) {
+          const rawActionType = (message as any).actionType;
+          if (typeof rawActionType === "string") {
+            try {
+              productInfo = JSON.parse(rawActionType);
+            } catch {
+              // If parsing fails, treat as string
+              productInfo = { product_name: rawActionType };
+            }
+          } else if (typeof rawActionType === "object") {
+            productInfo = rawActionType;
+          }
+        }
+
+        if (productInfo) {
+          globalStats.totalAiPurchases++;
+
+          if (!purchases.byThread.has(threadId)) {
+            purchases.byThread.set(threadId, new Set<string>());
+          }
+          const set = purchases.byThread.get(threadId)!;
+
+          // Use product_name as the key for revenue matching
+          const key =
+            productInfo.product_name || productInfo.productName || "unknown";
+          set.add(key);
+
+          purchases.raw.push({
+            threadId: threadId,
+            productName: key, // Store just the product name, not full JSON
+            handle: key.toLowerCase().replace(/\s+/g, "-"), // Create handle for matching
+            createdAt: message.createdAt.toISOString(),
+          });
+
+          console.log("Purchase tracked from cart action:", {
+            threadId: threadId,
+            key: key,
+            productInfo: productInfo,
+          });
+        }
+      } catch (e) {
+        console.error("Error tracking purchase from cart action:", e);
+      }
+    }
+
     if (actionsDetails && threadId) {
       actionsDetails.cart.push({
         threadId: threadId,
         messageId: message.id,
         createdAt: message.createdAt.toISOString(),
-        actionType: actionType,
+        actionType: actionType || actionData, // Use actionData if actionType is null
       });
     }
-  } else if (isMovementAction) {
+  } else if (isMovementAction || isVoiceAction) {
     // Movement actions (from voice chats)
     if (actionType === "scroll") {
       globalStats.totalAiScrolls++;
@@ -1029,7 +1152,7 @@ function processTextVoiceChatActions(
         threadId: threadId,
         messageId: message.id,
         createdAt: message.createdAt.toISOString(),
-        actionType: actionType,
+        actionType: actionType || "navigate", // Default for voice actions
         scrollToText:
           actionType === "scroll"
             ? (message as any).scrollToText || null
@@ -1038,14 +1161,64 @@ function processTextVoiceChatActions(
     }
   } else if (isOrderAction) {
     // Order actions (from text chats)
+    console.log(
+      `✅ ORDER ACTION DETECTED: ${actionData} for thread ${threadId}`
+    );
     globalStats.totalAiClicks++; // Count as interactions
     if (actionsDetails && threadId) {
       actionsDetails.orders.push({
         threadId: threadId,
         messageId: message.id,
         createdAt: message.createdAt.toISOString(),
-        actionType: actionType,
+        actionType: actionType || actionData, // Use actionData if actionType is null
       });
+    }
+  } else if (actionData && !actionType) {
+    // Handle actions that have actionData but no actionType (like get_order with null actionType)
+    // Try to infer the category based on the action name
+    if (
+      actionData.includes("order") ||
+      [
+        "get_order",
+        "track_order",
+        "return_order",
+        "cancel_order",
+        "exchange_order",
+      ].includes(actionData)
+    ) {
+      globalStats.totalAiClicks++;
+      if (actionsDetails && threadId) {
+        actionsDetails.orders.push({
+          threadId: threadId,
+          messageId: message.id,
+          createdAt: message.createdAt.toISOString(),
+          actionType: actionData,
+        });
+      }
+    } else if (
+      actionData.includes("cart") ||
+      ["add_to_cart", "get_cart", "delete_from_cart"].includes(actionData)
+    ) {
+      globalStats.totalAiClicks++;
+      if (actionsDetails && threadId) {
+        actionsDetails.cart.push({
+          threadId: threadId,
+          messageId: message.id,
+          createdAt: message.createdAt.toISOString(),
+          actionType: actionData,
+        });
+      }
+    } else {
+      // Default to movement for unknown actions
+      globalStats.totalAiClicks++;
+      if (actionsDetails && threadId) {
+        actionsDetails.movement.push({
+          threadId: threadId,
+          messageId: message.id,
+          createdAt: message.createdAt.toISOString(),
+          actionType: actionData,
+        });
+      }
     }
   }
 }
@@ -1529,6 +1702,16 @@ async function fetchWordPressContent(websiteId: string, stats: any) {
     };
   });
 
+  console.log(
+    `WordPress content fetched: ${products.length} products, ${blogPosts.length} posts, ${pages.length} pages`
+  );
+  console.log(
+    "Sample WordPress products:",
+    products
+      .slice(0, 2)
+      .map((p) => ({ title: p.title, handle: p.handle, price: p.price }))
+  );
+
   return { products, blogPosts, pages, collections: [], discounts: [] };
 }
 
@@ -1875,40 +2058,10 @@ async function fetchCustomContent(websiteId: string, stats: any) {
     content: string | null;
     htmlContent?: string | null;
     source?: string;
+    trained?: boolean;
   }> = [];
 
-  let customPages: any[] = [];
-
-  try {
-    // First try to get pages from Page table (legacy)
-    customPages = (await query(
-      `SELECT id, title, url, content, html, updatedAt
-       FROM Page
-       WHERE websiteId = ?
-       ORDER BY updatedAt DESC`,
-      [websiteId]
-    )) as any[];
-
-    pages = customPages.map((p: any) => {
-      const pageUrl = p.url;
-      return {
-        id: p.id,
-        title: p.title,
-        url: pageUrl,
-        type: "page" as const,
-        lastUpdated: new Date(p.updatedAt).toISOString(),
-        aiRedirects:
-          redirectMaps.pageRedirects.get(String(p.url).replace(/^\//, "")) || 0,
-        content: p.content,
-        htmlContent: p.html,
-        source: "custom_crawler",
-      };
-    });
-  } catch (error) {
-    console.error("Error fetching custom pages:", error);
-  }
-
-  // Now try to get pages from CustomPage table for Custom website types
+  // For Custom website types, prioritize CustomPage table
   try {
     const customTypePages = (await query(
       `SELECT cp.id, cp.websiteId, cp.url, cp.title, cp.content, cp.htmlContent, cp.createdAt, cp.updatedAt, cp.trained
@@ -1919,12 +2072,14 @@ async function fetchCustomContent(websiteId: string, stats: any) {
     )) as any[];
 
     if (customTypePages.length > 0) {
-      // Replace pages with CustomPage data if there are any
+      console.log(
+        `Found ${customTypePages.length} pages in CustomPage table for website ${websiteId}`
+      );
+
       pages = customTypePages.map((p: any) => {
         // Handle date safely - use current date if parsing fails
         let lastUpdated;
         try {
-          // First try direct conversion
           const dateObj = new Date(p.updatedAt || p.createdAt);
           if (isNaN(dateObj.getTime())) {
             // If that fails, try to parse MySQL datetime format (YYYY-MM-DD HH:MM:SS)
@@ -1959,14 +2114,56 @@ async function fetchCustomContent(websiteId: string, stats: any) {
           content: p.content,
           htmlContent: p.htmlContent,
           source: "custom_page",
-          trained: true, // Always set to true
+          trained: Boolean(p.trained), // Convert to boolean
         };
       });
+    } else {
+      console.log(
+        `No pages found in CustomPage table for website ${websiteId}, checking legacy Page table`
+      );
+
+      // Fall back to legacy Page table if CustomPage is empty
+      try {
+        const legacyPages = (await query(
+          `SELECT id, title, url, content, html, updatedAt
+           FROM Page
+           WHERE websiteId = ?
+           ORDER BY updatedAt DESC`,
+          [websiteId]
+        )) as any[];
+
+        console.log(
+          `Found ${legacyPages.length} pages in legacy Page table for website ${websiteId}`
+        );
+
+        pages = legacyPages.map((p: any) => {
+          return {
+            id: p.id,
+            title: p.title,
+            url: p.url,
+            type: "page" as const,
+            lastUpdated: new Date(p.updatedAt).toISOString(),
+            aiRedirects:
+              redirectMaps.pageRedirects.get(
+                String(p.url).replace(/^\//, "")
+              ) || 0,
+            content: p.content,
+            htmlContent: p.html,
+            source: "custom_crawler",
+            trained: false, // Legacy pages are not necessarily trained
+          };
+        });
+      } catch (legacyError) {
+        console.error("Error fetching legacy custom pages:", legacyError);
+      }
     }
   } catch (error) {
     console.error("Error fetching CustomPage data:", error);
   }
 
+  console.log(
+    `Returning ${pages.length} total pages for Custom website ${websiteId}`
+  );
   return { products: [], blogPosts: [], pages, collections: [], discounts: [] };
 }
 

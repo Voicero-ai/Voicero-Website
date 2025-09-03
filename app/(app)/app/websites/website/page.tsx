@@ -2102,14 +2102,14 @@ export default function WebsiteSettings() {
               Monthly Queries
             </span>
             <span className="text-sm font-medium text-brand-text-primary">
-              {monthlyQueries.toLocaleString()} / {queryLimit.toLocaleString()}
+              {monthlyQueries.toLocaleString()} / 1,000
             </span>
           </div>
           <div className="w-full bg-brand-lavender-light/20 rounded-full h-2">
             <div
               className="bg-brand-accent h-2 rounded-full transition-all"
               style={{
-                width: `${(monthlyQueries / queryLimit) * 100}%`,
+                width: `${(monthlyQueries / 1000) * 100}%`,
               }}
             />
           </div>

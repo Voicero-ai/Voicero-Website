@@ -1679,15 +1679,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store AI turn
+    // Store AI turn with action details (matching voice route structure)
     await connection.execute(
-      "INSERT INTO TextChats (id, textConversationId, messageType, content, createdAt, responseId, action, actionType) VALUES (UUID(), ?, 'ai', ?, CURRENT_TIMESTAMP(3), ?, ?, ?)",
+      "INSERT INTO TextChats (id, textConversationId, messageType, content, createdAt, responseId, action, actionType, research, researchContext, foundAnswer) VALUES (UUID(), ?, 'ai', ?, CURRENT_TIMESTAMP(3), ?, ?, ?, ?, ?, ?)",
       [
         conversationIdToUse,
         outputText || "No response",
         openaiResponseId || null,
         classifierResult.action || null,
         classifierResult.actionType || null,
+        null, // research - text route doesn't use this classification
+        null, // researchContext - text route doesn't use this classification
+        searchResults && searchResults.length > 0 ? 1 : 0, // foundAnswer - 1 if we found search results, 0 otherwise
       ]
     );
 
