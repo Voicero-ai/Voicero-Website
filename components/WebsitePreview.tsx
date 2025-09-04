@@ -35,45 +35,50 @@ export default function WebsitePreview() {
   };
 
   return (
-    <div className="backdrop-blur-xl bg-white/10 border border-purple-500/30 rounded-3xl p-6 sm:p-8 md:p-10 hover:scale-105 transition-all duration-500">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="p-2 bg-gradient-to-r from-purple-600/30 to-violet-600/30 rounded-lg">
-          <Search className="w-6 h-6 text-purple-300" />
-        </div>
-        <h2 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-white to-purple-200 bg-clip-text text-transparent">
-          See Voicero on Your Website
-        </h2>
+    <div className="space-y-4">
+      <div className="text-center">
+        <p className="text-sm text-gray-300 mb-4">
+          Enter your website URL below to see how Voicero AI would look and
+          function on your site.
+        </p>
+        <p className="text-xs text-gray-400 mb-4">
+          Note: Some websites with complex security policies may not display
+          correctly in the preview. Open in a new tab to see the full website.
+        </p>
       </div>
 
-      <p className="text-base sm:text-lg text-gray-300 mb-2">
-        Enter your website URL below to see how Voicero AI would look and
-        function on your site.
-      </p>
-      <p className="text-sm text-gray-400 mb-6">
-        Note: Some websites with complex security policies may not display
-        correctly in the preview. Open in a new tab to see the full website.
-      </p>
-
       <form onSubmit={handleSubmit} className="mb-6">
-        <div className="flex flex-col sm:flex-row gap-4">
-          <input
-            type="text"
-            value={websiteUrl}
-            onChange={(e) => setWebsiteUrl(e.target.value)}
-            placeholder="Enter your website URL (e.g. mywebsite.com)"
-            className="flex-1 px-4 py-3 bg-white/10 border border-purple-500/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/30 text-white placeholder:text-gray-400"
-            required
-          />
+        <div className="flex flex-col gap-4">
+          <div className="relative">
+            <input
+              type="text"
+              value={websiteUrl}
+              onChange={(e) => setWebsiteUrl(e.target.value)}
+              placeholder="Enter your website URL (e.g. mywebsite.com)"
+              className="w-full px-4 py-4 bg-gradient-to-r from-white/15 to-purple-500/10 border-2 border-purple-400/30 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-400/60 text-white placeholder:text-gray-300 transition-all duration-300 hover:border-purple-400/50"
+              required
+            />
+            <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-purple-500/5 to-violet-500/5 opacity-0 hover:opacity-100 transition-opacity duration-300 pointer-events-none"></div>
+          </div>
           <button
             type="submit"
             disabled={isLoading || !websiteUrl}
-            className={`px-6 py-3 bg-gradient-to-r from-purple-600 to-violet-600 rounded-xl font-medium text-white transition-all duration-300 hover:shadow-lg hover:shadow-purple-500/25 ${
+            className={`w-full px-6 py-4 bg-gradient-to-r from-purple-600 to-violet-600 rounded-xl font-bold text-white transition-all duration-300 shadow-lg shadow-purple-500/25 hover:shadow-purple-500/40 ${
               isLoading || !websiteUrl
                 ? "opacity-70 cursor-not-allowed"
-                : "hover:scale-105"
+                : "hover:scale-105 hover:from-purple-500 hover:to-violet-500"
             }`}
           >
-            {isLoading ? "Loading..." : "Preview Now"}
+            {isLoading ? (
+              <div className="flex items-center justify-center gap-2">
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                <span>Generating Preview...</span>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center gap-2">
+                <span>🚀 Preview My Website</span>
+              </div>
+            )}
           </button>
         </div>
       </form>
