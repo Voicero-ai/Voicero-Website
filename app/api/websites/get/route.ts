@@ -143,208 +143,77 @@ export async function GET(request: NextRequest) {
       validThreads
     );
 
-    // Compute revenue increase from detected purchases and attach AI overview (last 4 weeks)
-    console.time("ai-overview-fetch");
-    const aiOverview = await getWebsiteAIOverview(website.id);
-    console.timeEnd("ai-overview-fetch");
-
-    // Build revenue summary using site content and detected purchases
-    const revenueSummary: RevenueSummary = {
+    // Check for cached AI data first
+    let aiOverview = website.aiOverview
+      ? typeof website.aiOverview === "string"
+        ? JSON.parse(website.aiOverview)
+        : website.aiOverview
+      : null;
+    let revenueSummary: RevenueSummary = website.aiOverviewRevenue || {
       amount: 0,
       currency: "USD",
       breakdown: { threads: 0, percent_of_total_threads: 0, aov: 0 },
     };
+    let cachedGlobalStats = website.cachedGlobalStats;
+    let cachedActionDetails = website.cachedActionDetails;
+    let cachedActionConversations = website.cachedActionConversations;
 
-    try {
-      console.time("revenue-calc");
-      const purchases = (stats as any).purchases as {
-        byThread: Map<string, Set<string>>;
-        raw: Array<{
-          threadId: string;
-          url?: string;
-          handle?: string;
-          productId?: string;
-          productName?: string;
-          createdAt?: string;
-        }>;
-      };
-      console.log("Revenue Calc: raw purchases:", purchases.raw);
+    console.log("Raw cached data from database:", {
+      cachedGlobalStats: !!cachedGlobalStats,
+      cachedActionDetails: !!cachedActionDetails,
+      cachedActionConversations: !!cachedActionConversations,
+      cachedActionConversationsType: typeof cachedActionConversations,
+      cachedActionConversationsOrdersLength:
+        cachedActionConversations?.orders?.length || 0,
+    });
+
+    // Always use cached data - AI generation is handled by cron job
+    console.log(`Using cached AI content for website ${website.id}`);
+    console.log("Cached data check:", {
+      cachedGlobalStats: !!cachedGlobalStats,
+      cachedActionDetails: !!cachedActionDetails,
+      cachedActionConversations: !!cachedActionConversations,
+    });
+
+    if (cachedActionConversations) {
       console.log(
-        "Revenue Calc: byThread sizes:",
-        Array.from(purchases.byThread.entries()).map(([tid, set]) => ({
-          threadId: tid,
-          count: set.size,
-          keys: Array.from(set.values()).slice(0, 5),
-        }))
+        "cachedActionConversations orders length:",
+        cachedActionConversations.orders?.length || 0
       );
+    }
 
-      // Count unique threads using raw entries to avoid any edge cases
-      const threadIdsWithPurchases = Array.from(
-        new Set(purchases.raw.map((p) => p.threadId))
-      );
-      revenueSummary.breakdown.threads = threadIdsWithPurchases.length;
-      revenueSummary.breakdown.percent_of_total_threads =
-        responseData.globalStats.totalTextChats +
-          responseData.globalStats.totalVoiceChats >
-        0
-          ? Math.round(
-              (threadIdsWithPurchases.length /
-                (responseData.globalStats.totalTextChats +
-                  responseData.globalStats.totalVoiceChats)) *
-                100
-            )
-          : 0;
-
-      // Build price lookups from full content data (contains price/variants)
-      const handleToPrice = new Map<string, number>();
-      const idToPrice = new Map<string, number>();
-      const titleToPrice = new Map<string, number>();
-      try {
-        const allProducts: any[] = Array.isArray(content?.products)
-          ? [...(content.products as any[])]
-          : [];
-        console.log(
-          "Revenue Calc: total products available:",
-          allProducts.length
-        );
-        console.log(
-          "Revenue Calc: content.products exists:",
-          !!content?.products
-        );
-        console.log(
-          "Revenue Calc: content.products length:",
-          content?.products?.length || 0
-        );
-        if (content?.products?.length > 0) {
-          console.log(
-            "Revenue Calc: Sample products:",
-            content.products.slice(0, 2).map((p) => ({
-              title: p.title,
-              handle: (p as any).handle || extractHandle(p.url, "products"),
-              price: p.price,
-            }))
-          );
-        }
-        for (const p of allProducts) {
-          const handle: string | undefined =
-            p.handle || (p.url ? extractHandle(p.url, "products") : undefined);
-          const id: string | undefined = p.id ? String(p.id) : undefined;
-          const title: string | undefined = p.title
-            ? String(p.title)
-            : undefined;
-          const price: number | undefined =
-            typeof p.price === "number"
-              ? p.price
-              : typeof p.variants?.[0]?.price === "number"
-              ? p.variants[0].price
-              : undefined;
-          if (typeof price === "number") {
-            if (handle) handleToPrice.set(handle.toLowerCase(), price);
-            if (id) idToPrice.set(id, price);
-            if (title)
-              titleToPrice.set(
-                title.toLowerCase().replace(/\s+/g, " ").trim(),
-                price
-              );
-          }
-        }
-        console.log("Revenue Calc: lookup sizes", {
-          handleToPrice: handleToPrice.size,
-          idToPrice: idToPrice.size,
-          titleToPrice: titleToPrice.size,
-        });
-      } catch {}
-
-      let totalAmount = 0;
-      const matchedKeys: Array<{ key: string; price: number }> = [];
-      const unmatchedKeys: string[] = [];
-
-      // Debug logging - show some sample lookup keys
+    // Use cached data for response
+    if (cachedGlobalStats) {
+      responseData.globalStats = cachedGlobalStats;
+    }
+    if (cachedActionDetails) {
+      responseData.actionDetails = cachedActionDetails;
+    }
+    if (cachedActionConversations) {
+      // Ensure actionConversations is properly set as a direct property
+      (responseData as any).actionConversations = cachedActionConversations;
       console.log(
-        "Revenue Calc: Sample handleToPrice keys:",
-        Array.from(handleToPrice.keys()).slice(0, 5)
+        "Set cached actionConversations with orders length:",
+        cachedActionConversations.orders?.length || 0
       );
-      console.log(
-        "Revenue Calc: Sample titleToPrice keys:",
-        Array.from(titleToPrice.keys()).slice(0, 5)
-      );
-      console.log(
-        "Revenue Calc: Total purchases to process:",
-        purchases.raw.length
-      );
+    }
 
-      for (const entry of Array.from(purchases.byThread.entries())) {
-        const set = entry[1];
-        for (const rawKey of Array.from(set.values())) {
-          let price: number | undefined;
-          let key = rawKey || "";
-          console.log(`Revenue Calc: Trying to match key: "${key}"`);
+    // AI generation removed - handled by cron job only
 
-          // If it's a URL or path, extract handle
-          let handle = key.includes("/") ? extractHandle(key, "products") : key;
-          if (handle) {
-            price = handleToPrice.get(handle.toLowerCase());
-            console.log(
-              `  - handleToPrice lookup for "${handle.toLowerCase()}": ${price}`
-            );
-          }
-          // Try by id
-          if (price === undefined && key) {
-            price = idToPrice.get(String(key));
-            console.log(`  - idToPrice lookup for "${String(key)}": ${price}`);
-          }
-          // Try by normalized title
-          if (price === undefined && key) {
-            const norm = key.toLowerCase().replace(/\s+/g, " ").trim();
-            price = titleToPrice.get(norm);
-            console.log(`  - titleToPrice lookup for "${norm}": ${price}`);
-          }
-          // Try by slug/handle version of the title (convert spaces to dashes)
-          if (price === undefined && key) {
-            const slugVersion = key.toLowerCase().replace(/\s+/g, "-").trim();
-            price = handleToPrice.get(slugVersion);
-            console.log(
-              `  - handleToPrice slug lookup for "${slugVersion}": ${price}`
-            );
-          }
-          // Try exact match with original key
-          if (price === undefined && key) {
-            price = titleToPrice.get(key);
-            console.log(`  - titleToPrice exact lookup for "${key}": ${price}`);
-          }
-          if (typeof price === "number") {
-            matchedKeys.push({ key, price });
-            totalAmount += price;
-            console.log(`  ✓ MATCHED: ${key} → $${price}`);
-          } else {
-            unmatchedKeys.push(key);
-            console.log(`  ✗ NO MATCH for: ${key}`);
-          }
-        }
-      }
-      revenueSummary.amount = Math.round(totalAmount * 100) / 100;
-      revenueSummary.breakdown.aov =
-        threadIdsWithPurchases.length > 0
-          ? Math.round((totalAmount / threadIdsWithPurchases.length) * 100) /
-            100
-          : 0;
-      console.log(
-        "Revenue Calc: matched keys sample:",
-        matchedKeys.slice(0, 10)
-      );
-      console.log(
-        "Revenue Calc: unmatched keys sample:",
-        unmatchedKeys.slice(0, 10)
-      );
-      console.log("Revenue Calc: totalAmount, AOV, threads:", {
-        totalAmount: revenueSummary.amount,
-        aov: revenueSummary.breakdown.aov,
-        threads: revenueSummary.breakdown.threads,
-      });
-      console.timeEnd("revenue-calc");
-    } catch {}
-
-    (responseData as any).aiOverview = aiOverview;
+    // Ensure aiOverview has a proper structure to prevent frontend errors
+    (responseData as any).aiOverview = aiOverview || {
+      period_label: "No data available",
+      total_message_threads: 0,
+      total_revenue_increase: revenueSummary,
+      problem_resolution_rate: {
+        percent: 0,
+        resolved_threads: 0,
+        total_threads: 0,
+      },
+      avg_messages_per_thread: 0,
+      most_common_questions: [],
+      recent_questions_by_topic: [],
+    };
     (responseData as any).aiOverviewRevenue = revenueSummary;
 
     console.timeEnd("website-get-route");
@@ -478,7 +347,9 @@ async function fetchWebsiteData(websiteId: string) {
             allowAutoExchange, allowAutoClick, allowAutoScroll, allowAutoHighlight,
             allowAutoRedirect, allowAutoGetUserOrders, allowAutoUpdateUserInfo,
             allowAutoFillForm, allowAutoTrackOrder, allowAutoLogout, allowAutoLogin,
-            allowAutoGenerateImage, showVoiceAI, showTextAI
+            allowAutoGenerateImage, showVoiceAI, showTextAI, aiOverview,
+            aiOverviewRevenue, cachedGlobalStats, cachedActionDetails,
+            cachedActionConversations, lastAiGenerated
      FROM Website WHERE id = ? LIMIT 1`,
     [websiteId]
   )) as any[];
@@ -528,6 +399,30 @@ async function fetchWebsiteData(websiteId: string) {
     showTextAI: !!baseWebsite.showTextAI,
     lastSyncedAt: baseWebsite.lastSyncedAt
       ? new Date(baseWebsite.lastSyncedAt)
+      : null,
+    lastAiGenerated: baseWebsite.lastAiGenerated
+      ? new Date(baseWebsite.lastAiGenerated)
+      : null,
+    // Parse JSON fields
+    aiOverviewRevenue: baseWebsite.aiOverviewRevenue
+      ? typeof baseWebsite.aiOverviewRevenue === "string"
+        ? JSON.parse(baseWebsite.aiOverviewRevenue)
+        : baseWebsite.aiOverviewRevenue
+      : null,
+    cachedGlobalStats: baseWebsite.cachedGlobalStats
+      ? typeof baseWebsite.cachedGlobalStats === "string"
+        ? JSON.parse(baseWebsite.cachedGlobalStats)
+        : baseWebsite.cachedGlobalStats
+      : null,
+    cachedActionDetails: baseWebsite.cachedActionDetails
+      ? typeof baseWebsite.cachedActionDetails === "string"
+        ? JSON.parse(baseWebsite.cachedActionDetails)
+        : baseWebsite.cachedActionDetails
+      : null,
+    cachedActionConversations: baseWebsite.cachedActionConversations
+      ? typeof baseWebsite.cachedActionConversations === "string"
+        ? JSON.parse(baseWebsite.cachedActionConversations)
+        : baseWebsite.cachedActionConversations
       : null,
     accessKeys,
     popUpQuestions,

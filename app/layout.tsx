@@ -107,11 +107,11 @@ export default async function RootLayout({
         <div className="min-h-screen flex flex-col">
           <main className="flex-grow flex flex-col">
             {children}
-            <Script
+            {/* <Script
               src="https://voicero-text-frontend.vercel.app/widget.js"
               strategy="afterInteractive"
               data-token="q8xGnPF6w5pu7JTGwpFQp5wsfhYzhUDyMf1puHfaGuQQO3tSub5kpA6sCRBs2eRB"
-            />
+            /> */}
           </main>
         </div>
       </body>
