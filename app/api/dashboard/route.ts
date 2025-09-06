@@ -40,15 +40,73 @@ const categorizeMessageAction = (message: {
   const result = { cart: 0, movement: 0, orders: 0 };
 
   // Handle action field from TextChats/VoiceChats first (faster)
-  if (message.actionType) {
-    if (['add_to_cart', 'get_cart', 'delete_from_cart'].includes(message.actionType)) {
+  if (message.action || message.actionType) {
+    const actionData = message.action;
+    const actionType = message.actionType;
+
+    // Check for cart actions
+    const isCartAction =
+      actionData &&
+      ["add_to_cart", "get_cart", "delete_from_cart"].includes(actionData);
+    if (
+      isCartAction ||
+      (actionType &&
+        ["add_to_cart", "get_cart", "delete_from_cart"].includes(actionType))
+    ) {
       result.cart++;
-    } else if (['scroll', 'highlight', 'navigate', 'fill_form', 'fillForm', 'click'].includes(message.actionType)) {
-      result.movement++;
-    } else if (['get_order', 'track_order', 'return_order', 'cancel_order', 'exchange_order'].includes(message.actionType)) {
-      result.orders++;
+
+      // Track add_to_cart as purchases for revenue calculations
+      if (actionData === "add_to_cart") {
+        // This is a purchase action in the context of cart functionality
+      }
+      return result;
     }
-    return result;
+
+    // Handle movement actions - check both actionData and actionType
+    // Voice actions have actionData="true" and actionType="navigate"/"click"/etc
+    const movementActions = [
+      "scroll",
+      "highlight",
+      "navigate",
+      "fill_form",
+      "fillForm",
+      "click",
+    ];
+    if (
+      (actionData && movementActions.includes(actionData)) ||
+      (actionType && movementActions.includes(actionType)) ||
+      (actionData === "true" &&
+        actionType &&
+        movementActions.includes(actionType))
+    ) {
+      result.movement++;
+      return result;
+    }
+
+    // Handle order actions
+    const isOrderAction =
+      actionData &&
+      [
+        "get_order",
+        "track_order",
+        "return_order",
+        "cancel_order",
+        "exchange_order",
+      ].includes(actionData);
+    if (
+      isOrderAction ||
+      (actionType &&
+        [
+          "get_order",
+          "track_order",
+          "return_order",
+          "cancel_order",
+          "exchange_order",
+        ].includes(actionType))
+    ) {
+      result.orders++;
+      return result;
+    }
   }
 
   // Handle structured JSON actions (from AiThreads)
@@ -73,9 +131,11 @@ const categorizeMessageAction = (message: {
       }
     } catch (e) {
       // If JSON parsing fails, try to find action in the content (fallback)
-      if (message.content.includes('"action":"redirect"') ||
-          message.content.includes('"action":"scroll"') ||
-          message.content.includes('"action":"click"')) {
+      if (
+        message.content.includes('"action":"redirect"') ||
+        message.content.includes('"action":"scroll"') ||
+        message.content.includes('"action":"click"')
+      ) {
         result.movement++;
       }
       if (message.content.includes('"action":"purchase"')) {
@@ -136,7 +196,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const websiteIds = websites.map(w => w.id);
+    const websiteIds = websites.map((w) => w.id);
 
     // For each website, get its threads and messages (following websites/get pattern)
     for (const website of websites) {
@@ -181,15 +241,18 @@ export async function GET(request: Request) {
         )) as any[];
 
         if (chatRows.length > 0) {
-          const messages: AiMessage[] = chatRows.map((m) => ({
-            content: m.content,
-            type: m.messageType === "user" ? "text" : "ai",
-            role: m.messageType === "user" ? "user" : "assistant",
-            createdAt: new Date(m.createdAt),
-            pageUrl: null,
-            actionType: m.actionType,
-            action: m.action
-          } as any));
+          const messages: AiMessage[] = chatRows.map(
+            (m) =>
+              ({
+                content: m.content,
+                type: m.messageType === "user" ? "text" : "ai",
+                role: m.messageType === "user" ? "user" : "assistant",
+                createdAt: new Date(m.createdAt),
+                pageUrl: null,
+                actionType: m.actionType,
+                action: m.action,
+              } as any)
+          );
 
           allThreads.push({ id: conv.id, messages });
         }
@@ -214,15 +277,18 @@ export async function GET(request: Request) {
         )) as any[];
 
         if (chatRows.length > 0) {
-          const messages: AiMessage[] = chatRows.map((m) => ({
-            content: m.content,
-            type: m.messageType === "user" ? "voice" : "ai",
-            role: m.messageType === "user" ? "user" : "assistant",
-            createdAt: new Date(m.createdAt),
-            pageUrl: null,
-            actionType: m.actionType,
-            action: m.action
-          } as any));
+          const messages: AiMessage[] = chatRows.map(
+            (m) =>
+              ({
+                content: m.content,
+                type: m.messageType === "user" ? "voice" : "ai",
+                role: m.messageType === "user" ? "user" : "assistant",
+                createdAt: new Date(m.createdAt),
+                pageUrl: null,
+                actionType: m.actionType,
+                action: m.action,
+              } as any)
+          );
 
           allThreads.push({ id: conv.id, messages });
         }
@@ -237,21 +303,25 @@ export async function GET(request: Request) {
         const allMessages = website.aiThreads.flatMap(
           (thread) => thread.messages
         );
-        
+
         // Count conversations (threads), not individual messages
         let voiceConversations = 0;
         let textConversations = 0;
-        
-        website.aiThreads.forEach(thread => {
+
+        website.aiThreads.forEach((thread) => {
           if (thread.messages.length === 0) return;
-          
-          const hasVoiceMessage = thread.messages.some(m => m.type === "voice");
-          const hasTextMessage = thread.messages.some(m => m.type === "text" || (!m.type && m.role === "user"));
-          
+
+          const hasVoiceMessage = thread.messages.some(
+            (m) => m.type === "voice"
+          );
+          const hasTextMessage = thread.messages.some(
+            (m) => m.type === "text" || (!m.type && m.role === "user")
+          );
+
           if (hasVoiceMessage) voiceConversations++;
           if (hasTextMessage) textConversations++;
         });
-        
+
         const totalChats = voiceConversations + textConversations;
 
         const actionCounts = allMessages.reduce(
@@ -261,7 +331,7 @@ export async function GET(request: Request) {
                 content: message.content,
                 pageUrl: message.pageUrl,
                 actionType: (message as any).actionType,
-                action: (message as any).action
+                action: (message as any).action,
               });
               sum.cart += actions.cart;
               sum.movement += actions.movement;
@@ -303,45 +373,15 @@ export async function GET(request: Request) {
       const actionCounts = allMessages.reduce(
         (sum, message) => {
           if (message.role === "assistant") {
-            // Handle structured JSON actions (from AiThreads)
-            if (message.content) {
-              try {
-                const content = message.content.replace(/```json\n|\n```/g, "");
-                const parsed = JSON.parse(content);
-                if (parsed.action) {
-                  switch (parsed.action) {
-                    case "redirect":
-                    case "scroll":
-                    case "click":
-                      sum.movement++;
-                      break;
-                    case "purchase":
-                      sum.cart++;
-                      break;
-                  }
-                }
-              } catch (e) {
-                // If JSON parsing fails, try to find action in the content
-                if (message.content.includes('"action":"redirect"') ||
-                    message.content.includes('"action":"scroll"') ||
-                    message.content.includes('"action":"click"'))
-                  sum.movement++;
-                if (message.content.includes('"action":"purchase"'))
-                  sum.cart++;
-              }
-            }
-            
-            // Handle action field from TextChats/VoiceChats
-            const actionType = (message as any).actionType;
-            if (actionType) {
-              if (['add_to_cart', 'get_cart', 'delete_from_cart'].includes(actionType)) {
-                sum.cart++;
-              } else if (['scroll', 'highlight', 'navigate', 'fill_form', 'fillForm', 'click'].includes(actionType)) {
-                sum.movement++;
-              } else if (['get_order', 'track_order', 'return_order', 'cancel_order', 'exchange_order'].includes(actionType)) {
-                sum.orders++;
-              }
-            }
+            const actions = categorizeMessageAction({
+              content: message.content,
+              pageUrl: message.pageUrl,
+              actionType: (message as any).actionType,
+              action: (message as any).action,
+            });
+            sum.cart += actions.cart;
+            sum.movement += actions.movement;
+            sum.orders += actions.orders;
           }
           return sum;
         },
@@ -376,45 +416,15 @@ export async function GET(request: Request) {
       const actionCounts = dayMessages.reduce(
         (sum, message) => {
           if (message.role === "assistant") {
-            // Handle structured JSON actions (from AiThreads)
-            if (message.content) {
-              try {
-                const content = message.content.replace(/```json\n|\n```/g, "");
-                const parsed = JSON.parse(content);
-                if (parsed.action) {
-                  switch (parsed.action) {
-                    case "redirect":
-                    case "scroll":
-                    case "click":
-                      sum.movement++;
-                      break;
-                    case "purchase":
-                      sum.cart++;
-                      break;
-                  }
-                }
-              } catch (e) {
-                // If JSON parsing fails, try to find action in the content
-                if (message.content.includes('"action":"redirect"') ||
-                    message.content.includes('"action":"scroll"') ||
-                    message.content.includes('"action":"click"'))
-                  sum.movement++;
-                if (message.content.includes('"action":"purchase"'))
-                  sum.cart++;
-              }
-            }
-            
-            // Handle action field from TextChats/VoiceChats
-            const actionType = (message as any).actionType;
-            if (actionType) {
-              if (['add_to_cart', 'get_cart', 'delete_from_cart'].includes(actionType)) {
-                sum.cart++;
-              } else if (['scroll', 'highlight', 'navigate', 'fill_form', 'fillForm', 'click'].includes(actionType)) {
-                sum.movement++;
-              } else if (['get_order', 'track_order', 'return_order', 'cancel_order', 'exchange_order'].includes(actionType)) {
-                sum.orders++;
-              }
-            }
+            const actions = categorizeMessageAction({
+              content: message.content,
+              pageUrl: message.pageUrl,
+              actionType: (message as any).actionType,
+              action: (message as any).action,
+            });
+            sum.cart += actions.cart;
+            sum.movement += actions.movement;
+            sum.orders += actions.orders;
           }
           return sum;
         },
@@ -422,29 +432,31 @@ export async function GET(request: Request) {
       );
 
       // Count conversations by type for Graph 2: Text vs Voice Conversations Per Day
-      const threadsForDay = websites.flatMap(site => 
-        site.aiThreads.filter(thread => 
-          thread.messages.some(message => {
+      const threadsForDay = websites.flatMap((site) =>
+        site.aiThreads.filter((thread) =>
+          thread.messages.some((message) => {
             const messageDate = new Date(message.createdAt);
             return isSameDay(messageDate, start);
           })
         )
       );
-      
+
       let voiceConversationsForDay = 0;
       let textConversationsForDay = 0;
-      
-      threadsForDay.forEach(thread => {
-        const hasVoiceMessage = thread.messages.some(m => m.type === "voice");
-        const hasTextMessage = thread.messages.some(m => m.type === "text" || (!m.type && m.role === "user"));
-        
+
+      threadsForDay.forEach((thread) => {
+        const hasVoiceMessage = thread.messages.some((m) => m.type === "voice");
+        const hasTextMessage = thread.messages.some(
+          (m) => m.type === "text" || (!m.type && m.role === "user")
+        );
+
         if (hasVoiceMessage) voiceConversationsForDay++;
         if (hasTextMessage) textConversationsForDay++;
       });
-      
+
       const conversationCounts = {
         textConversations: textConversationsForDay,
-        voiceConversations: voiceConversationsForDay
+        voiceConversations: voiceConversationsForDay,
       };
 
       return {
