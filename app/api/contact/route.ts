@@ -23,10 +23,13 @@ export async function POST(request: Request) {
       );
     }
 
+    // Generate UUID for the contact submission
+    const contactId = crypto.randomUUID();
+
     // Store contact submission in database using direct SQL
     const contactResult = await query(
-      "INSERT INTO ContactUs (name, email, company, message) VALUES (?, ?, ?, ?)",
-      [name, email, company || null, message]
+      "INSERT INTO ContactUs (id, name, email, company, message) VALUES (?, ?, ?, ?, ?)",
+      [contactId, name, email, company || null, message]
     );
 
     // Send notification email using AWS SES
