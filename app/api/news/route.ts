@@ -44,6 +44,29 @@ interface WordPressBlog {
   content: WordPressContent[];
 }
 
+// Custom blog interfaces
+interface CustomBlog {
+  id: string;
+  title: string;
+  type: "custom";
+  content: CustomContent[];
+}
+
+interface CustomContent {
+  id: number;
+  title: string;
+  content: string;
+  url: string;
+  createdAt: Date;
+  updatedAt: Date;
+  publishedAt: Date;
+  // Additional fields for consistency with other blog types
+  handle: string;
+  hot: number;
+  excerpt?: string | null;
+  author?: string | null;
+}
+
 interface WordPressContent {
   id: number;
   wpId: number;
@@ -198,7 +221,7 @@ export async function POST(request: NextRequest) {
 
     const website = websites[0];
 
-    // Check if this is a Shopify website
+    // Check website type and handle accordingly
     if (website.type === "Shopify") {
       // Fetch all ShopifyBlogs for this website
       const blogs = (await query(
@@ -226,8 +249,8 @@ export async function POST(request: NextRequest) {
           platform: "Shopify",
         })
       );
-    } else {
-      // Handle WordPress and other non-Shopify websites
+    } else if (website.type === "WordPress") {
+      // Handle WordPress websites
       console.log("doing: Fetching WordPress content for website:", websiteId);
 
       const wordpressBlogs: WordPressBlog[] = [];
@@ -307,6 +330,69 @@ export async function POST(request: NextRequest) {
           websiteId: websiteId,
           domain: website.domain || website.url,
           platform: "WordPress",
+        })
+      );
+    } else {
+      // Handle Custom websites - assume Custom if not Shopify or WordPress
+      console.log("doing: Fetching Custom content for website:", websiteId);
+
+      const customBlogs: CustomBlog[] = [];
+
+      try {
+        // Fetch Custom Blogs - check if table exists first
+        const customPosts = (await query(
+          `SELECT * FROM CustomBlogs WHERE websiteId = ? ORDER BY publishedAt DESC`,
+          [websiteId]
+        )) as any[];
+
+        if (customPosts.length > 0) {
+          const postsFormatted = customPosts.map((post) => ({
+            id: post.id,
+            title: post.title,
+            content: post.content,
+            url: post.url,
+            createdAt: post.createdAt,
+            updatedAt: post.updatedAt,
+            publishedAt: post.publishedAt || post.createdAt,
+            handle:
+              post.url.split("/").pop() ||
+              post.title.toLowerCase().replace(/\s+/g, "-"),
+            hot: parseInt(post.hot) || 0,
+            excerpt: post.excerpt || null,
+            author: post.author || null,
+          }));
+
+          customBlogs.push({
+            id: "custom",
+            title: "Custom Blog Posts",
+            type: "custom",
+            content: postsFormatted,
+          });
+        }
+      } catch (error: any) {
+        // CustomBlogs table might not exist yet, that's okay
+        console.log(
+          "CustomBlogs table not found or empty, returning empty results"
+        );
+      }
+
+      console.log("done: Custom content fetched", {
+        websiteId,
+        blogsCount: customBlogs.length,
+        totalItems: customBlogs.reduce(
+          (sum, blog) => sum + blog.content.length,
+          0
+        ),
+      });
+
+      return cors(
+        request,
+        NextResponse.json({
+          success: true,
+          blogs: customBlogs,
+          websiteId: websiteId,
+          domain: website.domain || website.url,
+          platform: "Custom",
         })
       );
     }

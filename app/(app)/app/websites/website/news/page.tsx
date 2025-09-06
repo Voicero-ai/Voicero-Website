@@ -53,6 +53,13 @@ interface WordPressBlog extends BaseBlog {
   blogPosts?: never; // Ensure type safety for union
 }
 
+interface CustomBlog extends BaseBlog {
+  type: string;
+  content: CustomContent[];
+  updatedAt?: string;
+  blogPosts?: never; // Ensure type safety for union
+}
+
 // Base post interface with common properties
 interface BasePost {
   id: string;
@@ -76,9 +83,13 @@ interface WordPressContent extends BasePost {
   createdAt: string;
 }
 
+interface CustomContent extends BasePost {
+  createdAt: string;
+}
+
 interface ApiResponse {
   success: boolean;
-  blogs: (ShopifyBlog | WordPressBlog)[];
+  blogs: (ShopifyBlog | WordPressBlog | CustomBlog)[];
   websiteId: string;
   domain: string;
   platform: string;
@@ -101,6 +112,9 @@ export default function NewsPage() {
   const [isTogglingHot, setIsTogglingHot] = useState<Record<string, boolean>>(
     {}
   );
+  const [showSyncModal, setShowSyncModal] = useState<boolean>(false);
+  const [syncUrl, setSyncUrl] = useState<string>("");
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
   // Toggle post expansion
   const togglePostExpansion = (postId: string) => {
@@ -108,6 +122,43 @@ export default function NewsPage() {
       ...prev,
       [postId]: !prev[postId],
     }));
+  };
+
+  // Sync custom blog content
+  const syncCustomBlogContent = async () => {
+    if (!websiteId || !syncUrl.trim()) return;
+
+    setIsSyncing(true);
+    try {
+      const res = await fetch("/api/custom/sync-blog", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          websiteId,
+          mainUrl: syncUrl.trim(),
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || "Failed to sync blog content");
+      }
+
+      const result = await res.json();
+      alert(`Successfully synced ${result.count || 0} blog posts!`);
+
+      // Close modal and refresh data
+      setShowSyncModal(false);
+      setSyncUrl("");
+      fetchBlogs(true);
+    } catch (e: any) {
+      console.error("Error syncing blog content:", e);
+      alert(e?.message || "Failed to sync blog content");
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   // Toggle hot status
@@ -290,14 +341,29 @@ export default function NewsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-brand-text-primary">
-            {data?.platform === "WordPress" ? "WordPress" : "Shopify"} Blog
-            Content
+            {data?.platform === "WordPress"
+              ? "WordPress"
+              : data?.platform === "Custom"
+              ? "Custom"
+              : "Shopify"}{" "}
+            Blog Content
           </h1>
           {data?.domain && (
             <p className="text-sm text-brand-text-secondary">{data.domain}</p>
           )}
         </div>
         <div className="flex items-center gap-2">
+          {data?.platform === "Custom" && (
+            <button
+              onClick={() => setShowSyncModal(true)}
+              disabled={isSyncing}
+              className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
+              title="Sync Custom Blog Content"
+            >
+              <FaSync className={isSyncing ? "animate-spin" : ""} />
+              {isSyncing ? "Syncing" : "Sync Custom Blog Content"}
+            </button>
+          )}
           <button
             onClick={() => fetchBlogs(true)}
             disabled={isRefreshing}
@@ -985,6 +1051,60 @@ export default function NewsPage() {
             </div>
           )}
         </>
+      )}
+
+      {/* Sync Modal */}
+      {showSyncModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-bold text-brand-text-primary mb-4">
+              Sync Custom Blog Content
+            </h3>
+            <p className="text-sm text-brand-text-secondary mb-4">
+              Enter the main URL where all your blog posts are located. We'll
+              scrape and import your blog content.
+            </p>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-brand-text-primary mb-2">
+                Blog URL
+              </label>
+              <input
+                type="url"
+                value={syncUrl}
+                onChange={(e) => setSyncUrl(e.target.value)}
+                placeholder="https://example.com/blog"
+                className="w-full px-3 py-2 border border-brand-lavender-light/30 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-accent text-black" 
+                disabled={isSyncing}
+              />
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowSyncModal(false);
+                  setSyncUrl("");
+                }}
+                disabled={isSyncing}
+                className="flex-1 px-4 py-2 border border-brand-lavender-light/30 rounded-lg text-brand-text-primary hover:bg-brand-lavender-light/10 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={syncCustomBlogContent}
+                disabled={isSyncing || !syncUrl.trim()}
+                className="flex-1 px-4 py-2 bg-brand-accent text-white rounded-lg hover:bg-brand-accent/90 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isSyncing ? (
+                  <>
+                    <FaSync className="animate-spin" />
+                    Syncing...
+                  </>
+                ) : (
+                  "Sync Content"
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

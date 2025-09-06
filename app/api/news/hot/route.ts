@@ -184,7 +184,7 @@ export async function POST(request: NextRequest) {
           post: updatedPosts[0],
         })
       );
-    } else {
+    } else if (websiteType === "WordPress") {
       // Handle WordPress posts
       console.log("doing: Setting hot status for WordPress post", {
         postId,
@@ -280,6 +280,89 @@ export async function POST(request: NextRequest) {
         } else {
           throw error; // Re-throw if it's a different error
         }
+      }
+    } else {
+      // Handle Custom blog posts
+      console.log("doing: Setting hot status for Custom post", {
+        postId,
+        hot,
+      });
+
+      try {
+        // Check if the Custom post exists
+        const posts = (await query(
+          `SELECT id, hot FROM CustomBlogs WHERE id = ? AND websiteId = ?`,
+          [postId, websiteId]
+        )) as { id: number; hot?: number }[];
+
+        if (!posts.length) {
+          return cors(
+            request,
+            NextResponse.json({ error: "Blog post not found" }, { status: 404 })
+          );
+        }
+
+        // Check if we're trying to set a post as hot
+        if (hot === true || hot === 1) {
+          // Count current hot posts for Custom
+          const hotPostsCount = (await query(
+            `SELECT COUNT(*) as count FROM CustomBlogs WHERE websiteId = ? AND hot = 1`,
+            [websiteId]
+          )) as { count: number }[];
+
+          // If we already have 2 hot posts and this post isn't already hot, return error
+          if (hotPostsCount[0].count >= 2 && posts[0].hot !== 1) {
+            return cors(
+              request,
+              NextResponse.json(
+                {
+                  error:
+                    "Maximum of 2 hot posts allowed. Please un-hot another post first.",
+                },
+                { status: 400 }
+              )
+            );
+          }
+        }
+
+        // Update the hot status for Custom
+        await query(`UPDATE CustomBlogs SET hot = ? WHERE id = ?`, [
+          hot ? 1 : 0,
+          postId,
+        ]);
+
+        // Get updated post data
+        const updatedPosts = (await query(
+          `SELECT * FROM CustomBlogs WHERE id = ?`,
+          [postId]
+        )) as any[];
+
+        console.log("done: Custom post hot status updated", {
+          postId,
+          hot,
+        });
+
+        return cors(
+          request,
+          NextResponse.json({
+            success: true,
+            post: updatedPosts[0],
+          })
+        );
+      } catch (error: any) {
+        // CustomBlogs table might not exist yet
+        return cors(
+          request,
+          NextResponse.json(
+            {
+              error:
+                "Hot functionality not yet available for Custom posts. Database schema needs to be updated.",
+              details:
+                "The CustomBlogs table needs to be created or the 'hot' column needs to be added.",
+            },
+            { status: 501 }
+          )
+        );
       }
     }
   } catch (error: any) {
