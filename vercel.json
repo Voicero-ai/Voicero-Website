@@ -86,7 +86,11 @@
     },
     "app/api/websites/get/route.ts": {
       "maxDuration": 300
+    },
+    "app/api/custom/sync-blog/route.ts": {
+      "maxDuration": 300
     }
+
   },
   "crons": [
     {
