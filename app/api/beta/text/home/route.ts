@@ -259,9 +259,7 @@ export async function GET(request: NextRequest) {
         content: post.content,
         image: null,
         createdAt: post.createdAt,
-        handle:
-          post.url.split("/").pop() ||
-          post.title.toLowerCase().replace(/\s+/g, "-"),
+        handle: post.url,
         blogId: "custom-blog",
         tags: null,
         hot: post.hot,

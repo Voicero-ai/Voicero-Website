@@ -222,9 +222,7 @@ export async function GET(request: NextRequest) {
         id: post.id,
         shopifyId: null,
         title: post.title,
-        handle:
-          post.url.split("/").pop() ||
-          post.title.toLowerCase().replace(/\s+/g, "-"),
+        handle: post.url,
         content: post.content,
         author: post.author,
         hot: post.hot,
