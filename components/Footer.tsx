@@ -31,6 +31,7 @@ const footerLinks = {
   ] as FooterLink[],
   resources: [
     { name: "Documentation", href: "/docs" },
+    { name: "Blog", href: "/blog" },
     { name: "Changelog", href: "/changelog" },
     { name: "Support", href: "/contact" },
     { name: "Login", href: "/app" },
