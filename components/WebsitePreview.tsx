@@ -55,7 +55,7 @@ export default function WebsitePreview() {
               value={websiteUrl}
               onChange={(e) => setWebsiteUrl(e.target.value)}
               placeholder="Enter your website URL (e.g. mywebsite.com)"
-              className="w-full px-4 py-4 bg-gradient-to-r from-white/15 to-purple-500/10 border-2 border-purple-400/30 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-400/60 text-white placeholder:text-gray-300 transition-all duration-300 hover:border-purple-400/50"
+              className="w-full px-4 py-4 bg-gradient-to-r from-white/15 to-purple-500/10 border-2 border-purple-400/30 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-400/60 placeholder:text-gray-300 transition-all duration-300 hover:border-purple-400/50 text-black"
               required
             />
             <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-purple-500/5 to-violet-500/5 opacity-0 hover:opacity-100 transition-opacity duration-300 pointer-events-none"></div>
