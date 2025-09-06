@@ -229,6 +229,51 @@ export async function GET(request: NextRequest) {
       });
     }
 
+    // If still no posts found, check for Custom posts
+    if (recentBlogPosts.length === 0) {
+      console.log(
+        "doing: No Shopify/WordPress posts found, checking for Custom posts"
+      );
+
+      const [customRows] = await connection.execute(
+        `SELECT 
+          cb.id,
+          cb.title,
+          cb.content,
+          cb.url,
+          cb.createdAt,
+          cb.publishedAt,
+          cb.hot,
+          cb.author,
+          cb.excerpt
+        FROM CustomBlogs cb
+        WHERE cb.websiteId = ? 
+        ORDER BY cb.hot DESC, cb.publishedAt DESC, cb.createdAt DESC 
+        LIMIT 2`,
+        [websiteId]
+      );
+
+      recentBlogPosts = (customRows as any[]).map((post) => ({
+        id: post.id,
+        title: post.title,
+        content: post.content,
+        image: null,
+        createdAt: post.createdAt,
+        handle:
+          post.url.split("/").pop() ||
+          post.title.toLowerCase().replace(/\s+/g, "-"),
+        blogId: "custom-blog",
+        tags: null,
+        hot: post.hot,
+        blogTitle: "Custom Blog",
+        blogHandle: "custom",
+      }));
+
+      console.log("done: Custom posts found", {
+        count: recentBlogPosts.length,
+      });
+    }
+
     console.log("found home data", {
       popupCount: popupQuestions.length,
       hasConversation: !!recentConversation,

@@ -165,7 +165,7 @@ export async function GET(request: NextRequest) {
         FROM WordpressPost wp
         LEFT JOIN WordpressAuthor wa ON wp.authorId = wa.wpId
         WHERE wp.websiteId = ? 
-        ORDER BY wp.createdAt DESC`,
+        ORDER BY wp.hot DESC, wp.createdAt DESC`,
         [websiteId]
       );
 
@@ -192,6 +192,57 @@ export async function GET(request: NextRequest) {
       }));
 
       console.log("done: WordPress posts found", { count: blogPosts.length });
+    }
+
+    // If still no posts found, check for Custom posts
+    if (blogPosts.length === 0) {
+      console.log(
+        "doing: No Shopify/WordPress posts found, checking for Custom posts"
+      );
+
+      const [customRows] = await connection.execute(
+        `SELECT 
+          cb.id,
+          cb.title,
+          cb.content,
+          cb.url,
+          cb.author,
+          cb.hot,
+          cb.createdAt,
+          cb.updatedAt,
+          cb.publishedAt,
+          cb.excerpt
+        FROM CustomBlogs cb
+        WHERE cb.websiteId = ? 
+        ORDER BY cb.hot DESC, cb.publishedAt DESC, cb.createdAt DESC`,
+        [websiteId]
+      );
+
+      blogPosts = (customRows as any[]).map((post) => ({
+        id: post.id,
+        shopifyId: null,
+        title: post.title,
+        handle:
+          post.url.split("/").pop() ||
+          post.title.toLowerCase().replace(/\s+/g, "-"),
+        content: post.content,
+        author: post.author,
+        hot: post.hot,
+        image: null,
+        createdAt: post.createdAt,
+        updatedAt: post.updatedAt,
+        blogId: "custom-blog",
+        blogTitle: "Custom Blog",
+        blogHandle: "custom",
+        isPublished: true,
+        publishedAt: post.publishedAt || post.createdAt,
+        summary: post.excerpt,
+        tags: null,
+        templateSuffix: null,
+        type: "custom",
+      }));
+
+      console.log("done: Custom posts found", { count: blogPosts.length });
     } else {
       console.log("found blog posts", { count: blogPosts.length });
     }
