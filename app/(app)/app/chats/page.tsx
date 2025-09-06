@@ -176,7 +176,7 @@ export default function Chats() {
         if (!response.ok) throw new Error("Failed to fetch chat sessions");
 
         const data = await response.json();
-        console.log(data);
+        console.log("data chats: ", data);
         setSessions(data.sessions);
         setHasMore(data.hasMore);
         setTotalCount(data.totalCount);
