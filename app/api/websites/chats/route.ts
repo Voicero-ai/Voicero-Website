@@ -88,6 +88,7 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url);
     const requestedWebsiteId = searchParams.get("websiteId");
+    const search = searchParams.get("search");
     const action = searchParams.get("action") as
       | "click"
       | "scroll"
@@ -162,10 +163,34 @@ export async function GET(req: Request) {
     const textParams = [userId, finalWebsiteId];
     const voiceParams = [userId, finalWebsiteId];
 
+    // Add search filter if provided (minimum 3 characters)
+    let searchFilterQuery = "";
+    let searchValues: string[] = [];
+    if (search && search.length >= 3) {
+      console.log(`doing: Adding search filter for: "${search}"`);
+
+      // For AiThreads - search in AiMessage content
+      searchFilterQuery =
+        " AND EXISTS (SELECT 1 FROM AiMessage am3 WHERE am3.threadId = at.id AND am3.content LIKE ?)";
+      searchValues.push(`%${search}%`);
+      aiThreadQuery += searchFilterQuery;
+      queryParams.push(...searchValues);
+
+      // For TextConversations - search in TextChats content
+      textThreadQuery +=
+        " AND EXISTS (SELECT 1 FROM TextChats tc2 WHERE tc2.textConversationId = tc.id AND tc2.content LIKE ?)";
+      textParams.push(`%${search}%`);
+
+      // For VoiceConversations - search in VoiceChats content
+      voiceThreadQuery +=
+        " AND EXISTS (SELECT 1 FROM VoiceChats vc2 WHERE vc2.voiceConversationId = vc.id AND vc2.content LIKE ?)";
+      voiceParams.push(`%${search}%`);
+    }
+
     // Add action filter if provided
-    let actionFilterQuery = "";
-    let actionValues: string[] = [];
     if (action) {
+      console.log(`doing: Adding action filter for: "${action}"`);
+
       const actionQueries: Record<string, string[]> = {
         click: ['"action":"click'],
         scroll: ['"action":"scroll'],
@@ -176,20 +201,19 @@ export async function GET(req: Request) {
       const actionSearchTerms =
         action === "redirect" ? actionQueries.redirect : actionQueries[action];
 
-      actionFilterQuery =
+      let actionFilterQuery =
         " AND EXISTS (SELECT 1 FROM AiMessage am2 WHERE am2.threadId = at.id AND am2.role = 'assistant' AND (";
 
       const actionConditions: string[] = [];
       actionSearchTerms.forEach((term) => {
         actionConditions.push("am2.content LIKE ?");
-        actionValues.push(`%${term}%`);
+        queryParams.push(`%${term}%`);
       });
 
       actionFilterQuery += actionConditions.join(" OR ");
       actionFilterQuery += "))";
 
       aiThreadQuery += actionFilterQuery;
-      queryParams.push(...actionValues);
 
       // Skip TextConversations and VoiceConversations if filtering by action
       textThreadQuery = "";
