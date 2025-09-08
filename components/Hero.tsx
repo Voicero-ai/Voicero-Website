@@ -26,11 +26,7 @@ export default function Hero() {
           </span>
           <span className="block">confuse your customers</span>
         </h1>
-        <p className="text-lg sm:text-xl md:text-2xl text-gray-300 mb-10 max-w-xl mx-auto">
-          Voicero is a plugin AI chatbot for any website, nearly eliminates
-          customer complaints by handling everything from returns,
-          subscriptions, product recommendations.
-        </p>
+        
         <div className="flex flex-col gap-4 w-full justify-center">
           <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
             <Link

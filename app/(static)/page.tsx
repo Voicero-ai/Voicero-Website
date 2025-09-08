@@ -29,87 +29,15 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import WebsitePreview from "../../components/WebsitePreview";
-import ShopifySetupForm from "../../components/ShopifySetupForm";
+import { FaShopify, FaWordpress, FaRocket } from "react-icons/fa";
+ 
 
 const VoiceroWebsite = () => {
   const [particles, setParticles] = useState<any[]>([]);
-  const [activePlatform, setActivePlatform] = useState<string | null>(null);
+  
   const containerRef = useRef(null);
 
-  // Function to get installation steps for each platform
-  const getInstallationSteps = (platform: string): React.ReactNode[] => {
-    switch (platform) {
-      case "WordPress Store":
-        return [
-          <a
-            key="wp-1"
-            href="https://wordpress.com/plugins/voicero-ai/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-purple-300 hover:text-purple-200 hover:underline"
-          >
-            Go to wordpress.com/plugins/voicero-ai
-          </a>,
-          "Install for free",
-          "Click the Quick Connect Button",
-          "Click the Sync button",
-          "Click the Activate button",
-        ];
-      case "Shopify Store":
-        return [
-          <div key="shopify-instructions" className="mb-4 w-full">
-            <div className="space-y-4">
-              <div className="flex items-start gap-3">
-                <div className="w-full">
-                  <p className="text-gray-300 mb-3">
-                    Fill out the form below with your Shopify store details.
-                  </p>
-                  <div className="mt-4 mb-6">
-                    <ShopifySetupForm />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <span className="bg-purple-500/30 text-purple-300 font-bold rounded-full w-6 h-6 flex items-center justify-center text-xs flex-shrink-0 mt-0.5">
-                  2
-                </span>
-                <p className="text-gray-300">
-                  Wait 1 hour for a response and follow email instructions.
-                </p>
-              </div>
-
-              <div className="flex items-start gap-3">
-                <span className="bg-purple-500/30 text-purple-300 font-bold rounded-full w-6 h-6 flex items-center justify-center text-xs flex-shrink-0 mt-0.5">
-                  3
-                </span>
-                <p className="text-gray-300">
-                  Click the Sync button and then Activate.
-                </p>
-              </div>
-            </div>
-          </div>,
-        ];
-      case "Custom Store":
-        return [
-          <a
-            key="custom-1"
-            href="https://www.voicero.ai/getStarted"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-purple-300 hover:text-purple-200 hover:underline"
-          >
-            Go to voicero.ai/getStarted
-          </a>,
-          "Create account and Verify",
-          "Go to Websites and connect a website",
-          "Fill in your website information",
-          "Follow Sync instructions and Activate",
-        ];
-      default:
-        return [];
-    }
-  };
+  
 
   useEffect(() => {
     const newParticles = Array.from({ length: 50 }, (_, i) => ({
@@ -172,7 +100,7 @@ const VoiceroWebsite = () => {
           <div className="max-w-7xl mx-auto w-full">
             <div className="grid lg:grid-cols-2 gap-8 lg:gap-12 items-start">
               {/* Left Box - Main Content */}
-              <div className="backdrop-blur-xl bg-white/10 border border-purple-500/30 rounded-2xl p-2 sm:p-3 md:p-3 lg:p-4 mb-6 shadow-2xl md:hover:scale-105 transition-all duration-500 flex flex-col justify-between min-h-full">
+              <div className="backdrop-blur-xl bg-white/10 border border-purple-500/30 rounded-2xl p-2 sm:p-3 md:p-3 lg:p-4 mb-6 shadow-2xl md:hover:scale-105 transition-all duration-500 flex flex-col">
                 <div>
                   <div className="inline-flex items-center gap-1 mb-2 px-2 py-1 bg-gradient-to-r from-purple-500/20 to-violet-500/20 rounded-full border border-purple-500/30">
                     <Sparkles className="w-5 h-5 text-purple-400" />
@@ -188,44 +116,80 @@ const VoiceroWebsite = () => {
                       makes you more money
                     </span>
                   </h1>
-
-                  <p className="text-xs sm:text-sm md:text-base lg:text-lg text-gray-300 mb-4 max-w-2xl leading-relaxed">
-                    Voicero is a plugin AI chatbot for any website that nearly
-                    eliminates customer complaints by handling everything from
-                    returns and subscriptions to product recommendations with
-                    intelligent, personalized assistance that feels human.
-                  </p>
-                </div>
-
-                {/* Install for free now section - moved to bottom */}
-                <div className="text-center">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-purple-500/20 to-violet-500/20 rounded-full border border-purple-500/30 mb-3">
-                    <Sparkles className="w-4 h-4 text-purple-400" />
-                    <span className="text-purple-300 font-medium text-xs">
-                      Get Started Today
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <span className="text-xs sm:text-sm text-gray-300 mr-2">
+                      Available on
                     </span>
+                    <Link
+                      href="/docs/shopify"
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-purple-500/30 bg-white/10 hover:bg-white/15 transition-colors text-xs sm:text-sm text-gray-200"
+                    >
+                      <FaShopify className="w-4 h-4 sm:w-5 sm:h-5 text-green-400" />
+                      <span>Shopify</span>
+                    </Link>
+                    <Link
+                      href="/docs/wordpress"
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-purple-500/30 bg-white/10 hover:bg-white/15 transition-colors text-xs sm:text-sm text-gray-200"
+                    >
+                      <FaWordpress className="w-4 h-4 sm:w-5 sm:h-5 text-blue-300" />
+                      <span>WordPress</span>
+                    </Link>
+                    <Link
+                      href="/docs/custom/html"
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-purple-500/30 bg-white/10 hover:bg-white/15 transition-colors text-xs sm:text-sm text-gray-200"
+                    >
+                      <FaRocket className="w-4 h-4 sm:w-5 sm:h-5 text-purple-300" />
+                      <span>Custom</span>
+                    </Link>
                   </div>
-                  <h2 className="text-lg sm:text-xl md:text-2xl font-bold mb-2 bg-gradient-to-r from-white via-purple-200 to-violet-200 bg-clip-text text-transparent">
-                    Install for free now
-                  </h2>
-                  <p className="text-xs sm:text-sm text-gray-300 max-w-2xl mx-auto mb-4">
-                    Ready to get started? Select your platform below and we'll
-                    guide you through the setup in just a few minutes!
-                  </p>
+                  
+                  {/* Install for free now section - moved up under badges */}
+                  <div className="mt-4 text-center">
+                    <div className="h-6 mb-3" aria-hidden="true"></div>
+                    <h2 className="text-lg sm:text-xl md:text-2xl font-bold mb-2 bg-gradient-to-r from-white via-purple-200 to-violet-200 bg-clip-text text-transparent">
+                      Install for free now
+                    </h2>
+                    {/* Arrow pointing down */}
+                    <div className="flex justify-center">
+                      <div className="animate-bounce">
+                        <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                        </svg>
+                      </div>
+                    </div>
+                  </div>
 
-                  {/* Arrow pointing down */}
-                  <div className="flex justify-center">
-                    <div className="animate-bounce">
-                      <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                      </svg>
+                  {/* Platform Selection Buttons */}
+                  <div className="mt-6">
+                    <h3 className="text-center text-sm font-bold text-purple-200 mb-4">
+                      Choose your platform
+                    </h3>
+                    <div className="flex flex-col gap-3">
+                      <Link
+                        href="/docs/wordpress"
+                        className="backdrop-blur-xl border rounded-xl px-4 py-3 hover:shadow-xl transition-all duration-300 flex items-center justify-center bg-gradient-to-r from-white/15 to-purple-500/10 border-purple-400/40 hover:border-purple-400/60 hover:bg-gradient-to-r hover:from-white/20 hover:to-purple-500/15 text-gray-100 font-semibold text-sm"
+                      >
+                        WordPress
+                      </Link>
+                      <Link
+                        href="/docs/shopify"
+                        className="backdrop-blur-xl border rounded-xl px-4 py-3 hover:shadow-xl transition-all duration-300 flex items-center justify-center bg-gradient-to-r from-white/15 to-purple-500/10 border-purple-400/40 hover:border-purple-400/60 hover:bg-gradient-to-r hover:from-white/20 hover:to-purple-500/15 text-gray-100 font-semibold text-sm"
+                      >
+                        Shopify
+                      </Link>
+                      <Link
+                        href="/docs/custom/html"
+                        className="backdrop-blur-xl border rounded-xl px-4 py-3 hover:shadow-xl transition-all duration-300 flex items-center justify-center bg-gradient-to-r from-white/15 to-purple-500/10 border-purple-400/40 hover:border-purple-400/60 hover:bg-gradient-to-r hover:from-white/20 hover:to-purple-500/15 text-gray-100 font-semibold text-sm"
+                      >
+                        Custom Website
+                      </Link>
                     </div>
                   </div>
                 </div>
               </div>
 
               {/* Right Box - Website Preview */}
-              <div className="backdrop-blur-xl bg-gradient-to-br from-purple-900/40 via-violet-900/30 to-indigo-900/40 border border-purple-400/50 rounded-2xl p-2 sm:p-3 md:p-3 lg:p-4 mb-6 shadow-2xl shadow-purple-500/20 md:hover:scale-105 md:hover:shadow-purple-500/30 transition-all duration-500 flex flex-col justify-between min-h-full relative overflow-hidden">
+              <div className="backdrop-blur-xl bg-gradient-to-br from-purple-900/40 via-violet-900/30 to-indigo-900/40 border border-purple-400/50 rounded-2xl p-2 sm:p-3 md:p-3 lg:p-4 mb-6 shadow-2xl shadow-purple-500/20 md:hover:scale-105 md:hover:shadow-purple-500/30 transition-all duration-500 flex flex-col relative overflow-hidden">
                 {/* Animated background elements */}
                 <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-purple-500/20 to-transparent rounded-full blur-2xl animate-pulse"></div>
                 <div className="absolute bottom-0 left-0 w-24 h-24 bg-gradient-to-tr from-violet-500/20 to-transparent rounded-full blur-2xl animate-pulse delay-1000"></div>
@@ -238,15 +202,12 @@ const VoiceroWebsite = () => {
                     </span>
                   </div>
 
-                  <h2 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold mb-2 bg-gradient-to-r from-white via-purple-100 to-violet-100 bg-clip-text text-transparent leading-tight">
+                  <h2 className="text-xl sm:text-3xl md:text-4xl lg:text-5xl font-bold mb-2 bg-gradient-to-r from-white via-purple-200 to-violet-200 bg-clip-text text-transparent leading-tight">
                     Try Voicero AI
                     <br />
-                    <span className="text-purple-300">Right Now</span>
+                    <span className="text-purple-400">without installing on your website</span>
                   </h2>
 
-                  <p className="text-xs sm:text-sm md:text-base lg:text-lg text-gray-200 mb-3 max-w-2xl leading-relaxed">
-                    See how Voicero AI transforms your website with instant, intelligent customer support
-                  </p>
 
                   {/* Enhanced preview section */}
                   <div className="bg-gradient-to-br from-white/10 to-purple-500/10 border border-purple-400/30 rounded-xl p-2 shadow-lg shadow-purple-500/10">
@@ -254,8 +215,8 @@ const VoiceroWebsite = () => {
                       <div className="w-8 h-8 bg-gradient-to-r from-purple-500 to-violet-500 rounded-lg flex items-center justify-center">
                         <Search className="w-4 h-4 text-white" />
                       </div>
-                      <h3 className="text-base font-bold text-purple-200">
-                        Preview Your Website
+                      <h3 className="text-base font-bold text-gray-300">
+                        Copy and paste your website URL in the box below for live demo
                       </h3>
                     </div>
                     
@@ -264,104 +225,14 @@ const VoiceroWebsite = () => {
                     <WebsitePreview />
                   </div>
 
-                  {/* Benefits callout */}
-                  <div className="mt-3 bg-gradient-to-r from-purple-800/30 to-violet-800/30 border border-purple-500/20 rounded-lg p-2">
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="w-6 h-6 bg-gradient-to-r from-green-400 to-emerald-400 rounded-full flex items-center justify-center">
-                        <span className="text-white text-xs font-bold">✓</span>
-                      </div>
-                      <span className="text-green-300 font-semibold text-xs">
-                        Instant Setup • No Installation Required
-                      </span>
-                    </div>
-                    <p className="text-gray-300 text-xs">
-                      See exactly how Voicero AI will look and work on your site in seconds
-                    </p>
-                  </div>
                 </div>
 
-                {/* Blank space to match left box height */}
-                <div className="flex-grow"></div>
+                
               </div>
             </div>
           </div>
         </section>
 
-        {/* Install Options Section - Prominently positioned */}
-        <section className="py-16 px-6 bg-gradient-to-b from-black via-purple-900/10 to-black">
-          <div className="max-w-7xl mx-auto">
-
-            <div className="backdrop-blur-xl bg-white/10 border border-purple-500/30 rounded-3xl p-6 sm:p-8 md:p-10 lg:p-12 shadow-2xl md:hover:scale-105 transition-all duration-500">
-              <div className="flex flex-row gap-3 sm:gap-4 md:gap-5 mb-6 justify-center">
-                {["WordPress Store", "Shopify Store", "Custom Store"].map(
-                  (platform, idx) => (
-                    <div
-                      key={platform}
-                      className={`backdrop-blur-xl border-2 rounded-2xl px-3 py-2 sm:px-4 sm:py-2.5 md:px-5 md:py-3 hover:scale-110 hover:shadow-2xl hover:shadow-purple-500/25 transition-all duration-300 cursor-pointer w-32 h-12 sm:w-36 sm:h-14 md:w-40 md:h-16 flex items-center justify-center relative overflow-hidden group ${
-                        activePlatform === platform
-                          ? "bg-gradient-to-r from-purple-600/30 to-violet-600/30 border-purple-400 shadow-lg shadow-purple-500/20"
-                          : "bg-gradient-to-r from-white/15 to-purple-500/10 border-purple-400/40 hover:border-purple-400/60 hover:bg-gradient-to-r hover:from-white/20 hover:to-purple-500/15"
-                      }`}
-                      onClick={() =>
-                        setActivePlatform(
-                          activePlatform === platform ? null : platform
-                        )
-                      }
-                    >
-                      {/* Subtle glow effect */}
-                      <div className="absolute inset-0 bg-gradient-to-r from-purple-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-
-                      <span className="text-gray-100 font-bold text-sm sm:text-base md:text-lg text-center whitespace-nowrap relative z-10 group-hover:text-white transition-colors duration-300">
-                        {platform}
-                      </span>
-                    </div>
-                  )
-                )}
-              </div>
-
-              {/* Installation Instructions */}
-              {activePlatform ? (
-                <div className="backdrop-blur-xl bg-white/5 border border-purple-500/20 rounded-2xl p-4 sm:p-5 md:p-6 transition-all duration-300">
-                  <h3 className="text-xl sm:text-2xl font-bold text-purple-300 mb-3">
-                    {activePlatform} Installation
-                  </h3>
-                  <div className="space-y-3 text-gray-300 text-sm sm:text-base">
-                    {getInstallationSteps(activePlatform).map(
-                      (step, idx) => (
-                        <div key={idx} className="flex items-start gap-3">
-                          <span className="bg-purple-500/30 text-purple-300 font-bold rounded-full w-6 h-6 flex items-center justify-center text-xs flex-shrink-0 mt-0.5">
-                            {idx + 1}
-                          </span>
-                          <span>{step}</span>
-                        </div>
-                      )
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div className="backdrop-blur-xl bg-white/5 border border-purple-500/20 rounded-2xl p-4 sm:p-5 md:p-6 transition-all duration-300">
-                  <h3 className="text-xl sm:text-2xl font-bold text-purple-300 mb-3">
-                    Select a platform to get started
-                  </h3>
-                  <div className="space-y-3 text-gray-300 text-sm">
-                    <p className="text-gray-300 text-sm">
-                      Voicero AI works seamlessly with WordPress, Shopify,
-                      and custom websites.
-                    </p>
-                    <p className="text-gray-300 text-sm">
-                      Our installation process is quick and straightforward
-                      - you'll be up and running in minutes!
-                    </p>
-                    <p className="text-gray-300 text-sm">
-                      Choose your platform above to see specific
-                      installation instructions.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
 
         {/* Voice AI vs Text AI Section */}
         <section className="py-24 px-6 bg-gradient-to-b from-transparent to-purple-900/10">
@@ -966,7 +837,15 @@ const VoiceroWebsite = () => {
                     <ArrowRight className="w-6 h-6 group-hover:scale-125 transition-transform duration-300" />
                   </button>
                 </Link>
-                <button className="group backdrop-blur-xl bg-white/10 border border-purple-500/20 px-12 py-6 rounded-2xl font-bold text-xl hover:scale-110 hover:bg-white/15 transition-all duration-300 flex items-center gap-3">
+                <button 
+                  onClick={() => {
+                    const topElement = document.getElementById('top');
+                    if (topElement) {
+                      topElement.scrollIntoView({ behavior: 'smooth' });
+                    }
+                  }}
+                  className="group backdrop-blur-xl bg-white/10 border border-purple-500/20 px-12 py-6 rounded-2xl font-bold text-xl hover:scale-110 hover:bg-white/15 transition-all duration-300 flex items-center gap-3"
+                >
                   Use Demo
                   <Play className="w-6 h-6 group-hover:scale-125 transition-transform duration-300" />
                 </button>

@@ -37,10 +37,6 @@ export default function WebsitePreview() {
   return (
     <div className="space-y-4">
       <div className="text-center">
-        <p className="text-sm text-gray-300 mb-4">
-          Enter your website URL below to see how Voicero AI would look and
-          function on your site.
-        </p>
         <p className="text-xs text-gray-400 mb-4">
           Note: Some websites with complex security policies may not display
           correctly in the preview. Open in a new tab to see the full website.
