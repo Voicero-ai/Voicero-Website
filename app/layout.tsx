@@ -5,6 +5,7 @@ import Script from "next/script";
 import { headers } from "next/headers";
 import { WebsiteSchema } from "../components/SEO";
 import { OrganizationSchema } from "../components/SEO";
+import TrackGtag from "../components/TrackGtag";
 
 export const metadata: Metadata = {
   title:
@@ -57,30 +58,17 @@ export default async function RootLayout({
           href="/logos/logoNoBackground.png"
           style={{ borderRadius: "50%" }}
         />
-        {/* Google Tag Manager */}
+        {/* Google tag (gtag.js) */}
         <Script
-          src="https://www.googletagmanager.com/gtag/js?id=AW-16904549407"
+          src="https://www.googletagmanager.com/gtag/js?id=AW-17503203512"
           strategy="afterInteractive"
         />
-        <Script id="google-analytics" strategy="afterInteractive">
+        <Script id="gtag-init" strategy="afterInteractive">
           {`
             window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
+            function gtag(){dataLayer.push(arguments);} 
             gtag('js', new Date());
-            gtag('config', 'AW-16904549407');
-          `}
-        </Script>
-        {/* Google Ads Tag */}
-        <Script
-          src="https://www.googletagmanager.com/gtag/js?id=AW-16904549407"
-          strategy="afterInteractive"
-        />
-        <Script id="google-ads" strategy="afterInteractive">
-          {`
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
-            gtag('js', new Date());
-            gtag('config', 'AW-16904549407');
+            gtag('config', 'AW-17503203512');
           `}
         </Script>
         {/* Structured Data */}
@@ -106,6 +94,7 @@ export default async function RootLayout({
       >
         <div className="min-h-screen flex flex-col">
           <main className="flex-grow flex flex-col">
+            <TrackGtag />
             {children}
             <Script
               src="https://voicero-text-frontend.vercel.app/widget.js"
