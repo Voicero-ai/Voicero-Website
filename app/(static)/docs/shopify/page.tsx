@@ -3,12 +3,18 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { FaArrowLeft } from "react-icons/fa";
+import { trackShopifyConversion } from "../../../../lib/conversion-tracking";
 
 export default function ShopifyGuide() {
   const [shopifyUrl, setShopifyUrl] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
+
+  // Track conversion when the page loads (page view conversion)
+  React.useEffect(() => {
+    trackShopifyConversion(`shopify_pageview_${Date.now()}`);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,8 +24,14 @@ export default function ShopifyGuide() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ shopifyUrl, companyName, email }),
       });
+
+      // Track the Shopify conversion
+      trackShopifyConversion(`shopify_setup_${email}_${Date.now()}`);
+
       setSubmitted(true);
     } catch (err) {
+      // Even if the API call fails, we still track the conversion attempt
+      trackShopifyConversion(`shopify_setup_${email}_${Date.now()}`);
       setSubmitted(true);
     }
   };
@@ -57,7 +69,9 @@ export default function ShopifyGuide() {
                 ) : (
                   <form onSubmit={handleSubmit} className="space-y-3">
                     <div>
-                      <label className="block text-sm text-gray-300 mb-1">Your Shopify URL</label>
+                      <label className="block text-sm text-gray-300 mb-1">
+                        Your Shopify URL
+                      </label>
                       <input
                         type="url"
                         placeholder="example.myshopify.com"
@@ -68,7 +82,9 @@ export default function ShopifyGuide() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-300 mb-1">Company Name</label>
+                      <label className="block text-sm text-gray-300 mb-1">
+                        Company Name
+                      </label>
                       <input
                         type="text"
                         placeholder="Your company name"
@@ -79,7 +95,9 @@ export default function ShopifyGuide() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-300 mb-1">Email Address</label>
+                      <label className="block text-sm text-gray-300 mb-1">
+                        Email Address
+                      </label>
                       <input
                         type="email"
                         placeholder="you@example.com"
@@ -117,7 +135,9 @@ export default function ShopifyGuide() {
               <span className="bg-purple-500/30 text-purple-300 font-bold rounded-full w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center text-xs sm:text-sm flex-shrink-0 mt-0.5">
                 3
               </span>
-              <p className="text-gray-300">Click the Sync button and then Activate.</p>
+              <p className="text-gray-300">
+                Click the Sync button and then Activate.
+              </p>
             </div>
           </div>
         </div>

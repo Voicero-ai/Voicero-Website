@@ -30,14 +30,12 @@ import {
 import Link from "next/link";
 import WebsitePreview from "../../components/WebsitePreview";
 import { FaShopify, FaWordpress, FaRocket } from "react-icons/fa";
- 
+import { trackShopifyConversion } from "../../lib/conversion-tracking";
 
 const VoiceroWebsite = () => {
   const [particles, setParticles] = useState<any[]>([]);
-  
-  const containerRef = useRef(null);
 
-  
+  const containerRef = useRef(null);
 
   useEffect(() => {
     const newParticles = Array.from({ length: 50 }, (_, i) => ({
@@ -122,6 +120,11 @@ const VoiceroWebsite = () => {
                     </span>
                     <Link
                       href="/docs/shopify"
+                      onClick={() =>
+                        trackShopifyConversion(
+                          `shopify_click_badge_${Date.now()}`
+                        )
+                      }
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-purple-500/30 bg-white/10 hover:bg-white/15 transition-colors text-xs sm:text-sm text-gray-200"
                     >
                       <FaShopify className="w-4 h-4 sm:w-5 sm:h-5 text-green-400" />
@@ -142,7 +145,7 @@ const VoiceroWebsite = () => {
                       <span>Custom</span>
                     </Link>
                   </div>
-                  
+
                   {/* Install for free now section - moved up under badges */}
                   <div className="mt-4 text-center">
                     <div className="h-6 mb-3" aria-hidden="true"></div>
@@ -152,8 +155,18 @@ const VoiceroWebsite = () => {
                     {/* Arrow pointing down */}
                     <div className="flex justify-center">
                       <div className="animate-bounce">
-                        <svg className="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                        <svg
+                          className="w-6 h-6 text-purple-400"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M19 14l-7 7m0 0l-7-7m7 7V3"
+                          />
                         </svg>
                       </div>
                     </div>
@@ -173,6 +186,11 @@ const VoiceroWebsite = () => {
                       </Link>
                       <Link
                         href="/docs/shopify"
+                        onClick={() =>
+                          trackShopifyConversion(
+                            `shopify_click_button_${Date.now()}`
+                          )
+                        }
                         className="backdrop-blur-xl border rounded-xl px-4 py-3 hover:shadow-xl transition-all duration-300 flex items-center justify-center bg-gradient-to-r from-white/15 to-purple-500/10 border-purple-400/40 hover:border-purple-400/60 hover:bg-gradient-to-r hover:from-white/20 hover:to-purple-500/15 text-gray-100 font-semibold text-sm"
                       >
                         Shopify
@@ -193,7 +211,7 @@ const VoiceroWebsite = () => {
                 {/* Animated background elements */}
                 <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-purple-500/20 to-transparent rounded-full blur-2xl animate-pulse"></div>
                 <div className="absolute bottom-0 left-0 w-24 h-24 bg-gradient-to-tr from-violet-500/20 to-transparent rounded-full blur-2xl animate-pulse delay-1000"></div>
-                
+
                 <div className="relative z-10">
                   <div className="inline-flex items-center gap-1 mb-2 px-2 py-1 bg-gradient-to-r from-purple-500/30 to-violet-500/30 rounded-full border border-purple-400/50 shadow-lg shadow-purple-500/20">
                     <div className="w-5 h-5 bg-gradient-to-r from-purple-400 to-violet-400 rounded-full animate-pulse"></div>
@@ -205,9 +223,10 @@ const VoiceroWebsite = () => {
                   <h2 className="text-xl sm:text-3xl md:text-4xl lg:text-5xl font-bold mb-2 bg-gradient-to-r from-white via-purple-200 to-violet-200 bg-clip-text text-transparent leading-tight">
                     Try Voicero AI
                     <br />
-                    <span className="text-purple-400">without installing on your website</span>
+                    <span className="text-purple-400">
+                      without installing on your website
+                    </span>
                   </h2>
-
 
                   {/* Enhanced preview section */}
                   <div className="bg-gradient-to-br from-white/10 to-purple-500/10 border border-purple-400/30 rounded-xl p-2 shadow-lg shadow-purple-500/10">
@@ -216,23 +235,18 @@ const VoiceroWebsite = () => {
                         <Search className="w-4 h-4 text-white" />
                       </div>
                       <h3 className="text-base font-bold text-gray-300">
-                        Copy and paste your website URL in the box below for live demo
+                        Copy and paste your website URL in the box below for
+                        live demo
                       </h3>
                     </div>
-                    
-
 
                     <WebsitePreview />
                   </div>
-
                 </div>
-
-                
               </div>
             </div>
           </div>
         </section>
-
 
         {/* Voice AI vs Text AI Section */}
         <section className="py-24 px-6 bg-gradient-to-b from-transparent to-purple-900/10">
@@ -837,11 +851,11 @@ const VoiceroWebsite = () => {
                     <ArrowRight className="w-6 h-6 group-hover:scale-125 transition-transform duration-300" />
                   </button>
                 </Link>
-                <button 
+                <button
                   onClick={() => {
-                    const topElement = document.getElementById('top');
+                    const topElement = document.getElementById("top");
                     if (topElement) {
-                      topElement.scrollIntoView({ behavior: 'smooth' });
+                      topElement.scrollIntoView({ behavior: "smooth" });
                     }
                   }}
                   className="group backdrop-blur-xl bg-white/10 border border-purple-500/20 px-12 py-6 rounded-2xl font-bold text-xl hover:scale-110 hover:bg-white/15 transition-all duration-300 flex items-center gap-3"
