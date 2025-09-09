@@ -56,7 +56,7 @@ export default function CustomDocs() {
       <div className="grid md:grid-cols-2 gap-6">
         {/* Regular HTML */}
         <Link
-          href="/docs/custom/install"
+          href="/docs/custom/html"
           className="group bg-gray-900 rounded-xl shadow-sm border border-gray-800 p-6 
                    hover:border-gray-700 transition-all hover:shadow-md"
         >
