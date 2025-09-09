@@ -21,6 +21,38 @@ export const trackShopifyConversion = (
   }
 };
 
+export const trackWordPressConversion = (
+  transactionId?: string,
+  value: number = 1.0
+) => {
+  if (typeof window !== "undefined" && typeof window.gtag === "function") {
+    window.gtag("event", "conversion", {
+      send_to: "AW-17503203512/Gxi3CLym0ZcbELjhlppB",
+      value: value,
+      currency: "USD",
+      transaction_id:
+        transactionId ||
+        `wordpress_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    });
+  }
+};
+
+export const trackCustomConversion = (
+  transactionId?: string,
+  value: number = 1.0
+) => {
+  if (typeof window !== "undefined" && typeof window.gtag === "function") {
+    window.gtag("event", "conversion", {
+      send_to: "AW-17503203512/DilNCNmr0ZcbELjhlppB",
+      value: value,
+      currency: "USD",
+      transaction_id:
+        transactionId ||
+        `custom_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    });
+  }
+};
+
 export const trackGeneralConversion = (
   conversionLabel: string,
   transactionId?: string,

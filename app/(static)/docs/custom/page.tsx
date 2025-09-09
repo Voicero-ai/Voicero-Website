@@ -2,6 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
+import { trackCustomConversion } from "../../../../lib/conversion-tracking";
 import {
   FaCode,
   FaReact,
@@ -17,6 +18,11 @@ import {
 import { SiNextdotjs, SiExpress, SiJquery, SiDotnet } from "react-icons/si";
 
 export default function CustomDocs() {
+  // Track conversion when the page loads (page view conversion)
+  React.useEffect(() => {
+    trackCustomConversion(`custom_pageview_${Date.now()}`);
+  }, []);
+
   return (
     <div className="max-w-4xl mx-auto space-y-8 pt-20 bg-black min-h-screen pb-12">
       {/* Header with back button */}

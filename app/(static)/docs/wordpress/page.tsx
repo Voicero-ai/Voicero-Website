@@ -3,8 +3,14 @@
 import React from "react";
 import Link from "next/link";
 import { FaArrowLeft } from "react-icons/fa";
+import { trackWordPressConversion } from "../../../../lib/conversion-tracking";
 
 export default function WordPressGuide() {
+  // Track conversion when the page loads (page view conversion)
+  React.useEffect(() => {
+    trackWordPressConversion(`wordpress_pageview_${Date.now()}`);
+  }, []);
+
   const steps = [
     {
       label: (

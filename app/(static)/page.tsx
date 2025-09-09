@@ -30,7 +30,11 @@ import {
 import Link from "next/link";
 import WebsitePreview from "../../components/WebsitePreview";
 import { FaShopify, FaWordpress, FaRocket } from "react-icons/fa";
-import { trackShopifyConversion } from "../../lib/conversion-tracking";
+import {
+  trackShopifyConversion,
+  trackWordPressConversion,
+  trackCustomConversion,
+} from "../../lib/conversion-tracking";
 
 const VoiceroWebsite = () => {
   const [particles, setParticles] = useState<any[]>([]);
@@ -132,6 +136,11 @@ const VoiceroWebsite = () => {
                     </Link>
                     <Link
                       href="/docs/wordpress"
+                      onClick={() =>
+                        trackWordPressConversion(
+                          `wordpress_click_badge_${Date.now()}`
+                        )
+                      }
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-purple-500/30 bg-white/10 hover:bg-white/15 transition-colors text-xs sm:text-sm text-gray-200"
                     >
                       <FaWordpress className="w-4 h-4 sm:w-5 sm:h-5 text-blue-300" />
@@ -139,6 +148,11 @@ const VoiceroWebsite = () => {
                     </Link>
                     <Link
                       href="/docs/custom/html"
+                      onClick={() =>
+                        trackCustomConversion(
+                          `custom_click_badge_${Date.now()}`
+                        )
+                      }
                       className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-purple-500/30 bg-white/10 hover:bg-white/15 transition-colors text-xs sm:text-sm text-gray-200"
                     >
                       <FaRocket className="w-4 h-4 sm:w-5 sm:h-5 text-purple-300" />
@@ -180,6 +194,11 @@ const VoiceroWebsite = () => {
                     <div className="flex flex-col gap-3">
                       <Link
                         href="/docs/wordpress"
+                        onClick={() =>
+                          trackWordPressConversion(
+                            `wordpress_click_button_${Date.now()}`
+                          )
+                        }
                         className="backdrop-blur-xl border rounded-xl px-4 py-3 hover:shadow-xl transition-all duration-300 flex items-center justify-center bg-gradient-to-r from-white/15 to-purple-500/10 border-purple-400/40 hover:border-purple-400/60 hover:bg-gradient-to-r hover:from-white/20 hover:to-purple-500/15 text-gray-100 font-semibold text-sm"
                       >
                         WordPress
@@ -197,6 +216,11 @@ const VoiceroWebsite = () => {
                       </Link>
                       <Link
                         href="/docs/custom/html"
+                        onClick={() =>
+                          trackCustomConversion(
+                            `custom_click_button_${Date.now()}`
+                          )
+                        }
                         className="backdrop-blur-xl border rounded-xl px-4 py-3 hover:shadow-xl transition-all duration-300 flex items-center justify-center bg-gradient-to-r from-white/15 to-purple-500/10 border-purple-400/40 hover:border-purple-400/60 hover:bg-gradient-to-r hover:from-white/20 hover:to-purple-500/15 text-gray-100 font-semibold text-sm"
                       >
                         Custom Website
