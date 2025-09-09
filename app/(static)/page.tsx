@@ -215,7 +215,7 @@ const VoiceroWebsite = () => {
                         Shopify
                       </Link>
                       <Link
-                        href="/docs/custom/html"
+                        href="/docs/custom/install"
                         onClick={() =>
                           trackCustomConversion(
                             `custom_click_button_${Date.now()}`
