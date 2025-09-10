@@ -6,6 +6,7 @@ import { headers } from "next/headers";
 import { WebsiteSchema } from "../components/SEO";
 import { OrganizationSchema } from "../components/SEO";
 import TrackGtag from "../components/TrackGtag";
+import { Analytics } from "@vercel/analytics/next";
 
 export const metadata: Metadata = {
   title:
@@ -103,6 +104,7 @@ export default async function RootLayout({
             />
           </main>
         </div>
+        <Analytics />
       </body>
     </html>
   );
